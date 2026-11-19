@@ -8,10 +8,8 @@
 // full buildings. While inside, the camera switches to close mode,
 // police/gangs don't update, and the player is clamped to the room.
 
-import { dist2, FOOD_SHOPS } from './config.js';
+import { dist2 } from './config.js';
 import { showToast } from './state.js';
-import { openFoodMenu } from './food.js';
-import { outfitMenuText } from './outfit.js';
 
 // Door points (just outside the shop buildings, on standable ground).
 // Pizza/Burger doors sit 5 m north of their food-shop points so the
@@ -92,55 +90,6 @@ export function clampToRoom(game) {
   if (p.x > ROOM.x + hw) p.x = ROOM.x + hw;
   if (p.z < ROOM.z - hd) p.z = ROOM.z - hd;
   if (p.z > ROOM.z + hd) p.z = ROOM.z + hd;
-}
-
-// Per-frame: clamp the player to the room while inside.
-export function stepInteriors(game, dt) {
-  clampToRoom(game);
-}
-
-// True while the player is inside an interior room.
-export function isInside(game) {
-  return !!game.interiors.inside;
-}
-
-// E at a door: enter it (outside) or leave it (inside, at the room
-// door point). Returns true if a door was used.
-export function tryInteriorDoor(game) {
-  const p = game.state.player;
-  if (game.interiors.inside) {
-    const dp = roomDoorPoint();
-    if (Math.hypot(p.x - dp.x, p.z - dp.z) < 3) {
-      return exitInterior(game);
-    }
-    return false;
-  }
-  const door = nearestDoor(game, p.x, p.z, 4);
-  if (door) return enterInterior(game, door);
-  return false;
-}
-
-// E at the counter inside a room: open that shop's menu.
-export function tryInteriorCounter(game) {
-  if (!game.interiors.inside) return false;
-  const p = game.state.player;
-  const cp = counterPoint();
-  if (Math.hypot(p.x - cp.x, p.z - cp.z) > 3) return false;
-  const it = game.interiors.inside;
-  if (it.kind === 'food') {
-    const shop = FOOD_SHOPS.find((s) => s.name === it.shop);
-    if (shop) {
-      openFoodMenu(game, shop);
-      return true;
-    }
-    return false;
-  }
-  if (it.kind === 'outfit') {
-    game.outfit.menuOpen = true;
-    showToast(game.state, 'Outfit Shop — 1 hair · 2 shirt · 3 pants · 4 shoes. ' + outfitMenuText(game), 5);
-    return true;
-  }
-  return false;
 }
 
 // Draw the interior room (only when inside): floor, walls, counter,

@@ -7,11 +7,6 @@
 
 // ---------- small maths ----------
 
-// Pick element i of an array, wrapping around.
-export function pick(arr, i) {
-  return arr[((i % arr.length) + arr.length) % arr.length];
-}
-
 export function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
@@ -186,14 +181,6 @@ export const COL = {
     [0.2, 0.4, 0.95],
     [0.85, 0.2, 0.2],
   ],
-  pants: [
-    [0.25, 0.35, 0.6],
-    [0.15, 0.15, 0.18],
-    [0.92, 0.92, 0.9],
-    [0.3, 0.3, 0.35],
-  ],
-  gangKings: [0.95, 0.75, 0.15],
-  gangSharks: [0.1, 0.7, 0.7],
 };
 
 // ---------- story ----------
@@ -353,21 +340,21 @@ export const STATIONS = [
     ],
   },
   {
-    name: 'PALM', freq: '102.3', genre: 'Tropical House',
+    name: 'PALM 102.3', freq: '102.3', genre: 'Tropical House',
     songs: [
       { title: 'Coconut Radio', notes: [0, 2, 4, 5, 7, 5, 4, 2] },
       { title: 'Beachfront', notes: [7, 5, 4, 2, 0, 2, 4, 5] },
     ],
   },
   {
-    name: 'NEON', freq: '89.1', genre: 'Electro',
+    name: 'NEON 89.1', freq: '89.1', genre: 'Electro',
     songs: [
       { title: 'Night Circuit', notes: [0, 0, 3, 0, 5, 0, 7, 5] },
       { title: 'Chrome Hearts', notes: [9, 7, 5, 7, 9, 7, 5, 4] },
     ],
   },
   {
-    name: 'CORAL', freq: '105.5', genre: 'Chill',
+    name: 'CORAL 105.5', freq: '105.5', genre: 'Chill',
     songs: [
       { title: 'Slow Tide', notes: [4, 2, 0, 2, 4, 5, 4, 2] },
       { title: 'Harbour Moon', notes: [2, 4, 5, 4, 2, 0, 2, 4] },
@@ -381,42 +368,6 @@ export const GANGS = {
   kings: { name: 'Bay Kings', colour: [0.95, 0.75, 0.15], turf: { x: 0, z: -100, hx: 160, hz: 140 } },
   sharks: { name: 'Harbour Sharks', colour: [0.1, 0.7, 0.7], turf: { x: 320, z: -100, hx: 90, hz: 110 } },
 };
-
-// ---------- shared spots (garage, activities, props) ----------
-
-// Side-job markers: E at a marker starts that job.
-export const SIDE_MARKERS = [
-  { kind: 'taxi', x: 0, z: 50 },
-  { kind: 'courier', x: -150, z: -106 },
-  { kind: 'trial', x: 100, z: -350 },
-  { kind: 'turf', x: -100, z: -100 },
-  { kind: 'gangrun', x: 100, z: 150 },
-];
-
-// The garage door (north face of the garage building).
-export const GARAGE_DOOR = { x: 150, z: -128 };
-
-// Fishing spot on the pier.
-export const FISHING_SPOT = { x: -330, z: 100 };
-
-// Vending machines + ATMs.
-export const VENDING_MACHINES = [
-  { x: -40, z: -60 },
-  { x: 40, z: 40 },
-  { x: 100, z: 120 },
-];
-export const ATMS = [
-  { x: -20, z: 20 },
-  { x: 80, z: -40 },
-];
-
-// The CC0 barrel model (Barrel_01, Poly Haven) sits on the dock.
-export const BARREL_SPOTS = [
-  [311, -80, 0.3],
-  [312, -65, 1.2],
-  [311, -130, 2.1],
-];
-export const BARREL_COLOR = [0.65, 0.12, 0.08];
 
 // City districts, for the HUD location name.
 export function districtAt(x, z) {

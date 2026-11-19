@@ -15,7 +15,7 @@
 // outside the hospital building, at least 30 units from every
 // building collider — never inside a building.
 
-import { makeRng, COL, FOOD_SHOPS } from './config.js';
+import { makeRng, COL } from './config.js';
 import { BoxBatch } from './render.js';
 import { INTERIOR_DOORS } from './interiors.js';
 
@@ -31,19 +31,6 @@ export function isOnRoad(x, z) {
   // Highway ring.
   if (Math.abs(Math.abs(x) - 350) < 9 || Math.abs(Math.abs(z) - 350) < 9) return true;
   return false;
-}
-
-// Is (x, z) on a road? (city argument kept for a uniform signature.)
-export function isRoadAt(city, x, z) {
-  return isOnRoad(x, z);
-}
-
-// Is (x, z) in the water (the harbour basin or the ocean west of
-// the beach)?
-export function isWaterAt(city, x, z) {
-  const b = city.harbourBasin;
-  if (x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1) return true;
-  return x < -340;
 }
 
 // Fractional position inside a 100-unit block, 0..100.
@@ -268,25 +255,6 @@ export function generateCity(seed) {
   for (let i = 0; i < 12; i++) {
     city.waves.push({ x: -360 - rng() * 30, z: -300 + rng() * 600, phase: rng() * Math.PI * 2 });
   }
-
-  // ---- derived lists the systems read ----
-  // Roads as {vertical, coord} (the grid lines).
-  city.roads = [];
-  for (const l of ROAD_LINES) {
-    city.roads.push({ vertical: true, coord: l });
-    city.roads.push({ vertical: false, coord: l });
-  }
-  // Traffic lights (alias of city.lights, the name the systems use).
-  city.trafficLights = city.lights;
-  // Chat spots: downtown sidewalk points where peds gather in pairs.
-  city.chatSpots = [
-    { x: -40, z: 30 }, { x: 40, z: -30 }, { x: 20, z: 60 }, { x: -20, z: -60 },
-    { x: 60, z: 30 }, { x: -60, z: -30 }, { x: 0, z: 80 }, { x: 80, z: 0 },
-  ];
-  // Food shops (same points as the food system).
-  city.foodShops = FOOD_SHOPS.map((s) => ({ ...s }));
-  // Circle-vs-building test, as a method the systems call.
-  city.collidesCircle = (x, z, r) => collideCircle(city, x, z, r) !== null;
 
   // ---- static geometry batch (built once, drawn every frame) ----
   city.staticBatch = buildStaticBatch(city, rng);
@@ -563,7 +531,6 @@ export function randomSidewalkPoint(city, rng) {
     if (fx < 12 || fx > 88) continue;
     if (fz < 12 || fz > 88) continue;
     if (x < -300 || x > 300) continue;
-    if (isOnRoad(x, z)) continue; // also excludes the highway ring
     if (!clearSpot(city, x, z, 1)) continue;
     return { x, z };
   }
