@@ -6,146 +6,112 @@
 <title>Solmar Bay — 3D voxel open world</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #0e1420;
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; }
-  #wrap { position: relative; width: 100%; height: 100%; }
-  #game { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-  .panel { background: rgba(10, 16, 28, 0.72); border: 1px solid rgba(255,255,255,0.14);
-    border-radius: 10px; padding: 8px 12px; backdrop-filter: blur(2px); }
-  #topleft { position: absolute; top: 12px; left: 12px; display: flex; flex-direction: column; gap: 6px; }
-  #cash { font-size: 26px; font-weight: 800; color: #4ae08a; }
-  .bar { width: 190px; height: 12px; background: rgba(255,255,255,0.18); border-radius: 6px; overflow: hidden; }
-  .bar > div { height: 100%; transition: width 0.15s; }
-  #health-fill { background: #ff5a5a; width: 100%; }
-  #armor-fill { background: #5a9aff; width: 0%; }
-  .bar-label { font-size: 11px; letter-spacing: 1px; opacity: 0.8; }
-  #stars { font-size: 24px; letter-spacing: 3px; }
-  #topright { position: absolute; top: 12px; right: 12px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
-  #minimap { width: 180px; height: 180px; border-radius: 10px; border: 2px solid rgba(255,255,255,0.35); background: #2c4a22; }
-  #bottomleft { position: absolute; left: 12px; bottom: 12px; max-width: 420px; }
-  #chapter-label { font-size: 12px; letter-spacing: 2px; text-transform: uppercase; color: #ffd23a; margin-bottom: 2px; }
-  #objective { font-size: 15px; line-height: 1.35; }
-  #bottomright { position: absolute; right: 12px; bottom: 12px; text-align: right; }
-  #speed { font-size: 26px; font-weight: 800; }
-  #weapon { font-size: 15px; font-weight: 700; }
-  #ammo, #bombs { font-size: 13px; opacity: 0.9; }
-  #crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    font-size: 22px; font-weight: 700; color: rgba(255,255,255,0.9);
-    text-shadow: 0 0 4px #000; pointer-events: none; display: none; }
-  #toast { position: absolute; left: 50%; top: 22%; transform: translateX(-50%);
-    font-size: 22px; font-weight: 800; color: #ffd23a; text-shadow: 0 2px 6px #000;
-    opacity: 0; transition: opacity 0.2s; pointer-events: none; white-space: nowrap; }
-  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
-  .overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
-    background: rgba(5, 8, 16, 0.72); z-index: 10; }
-  .card { background: rgba(14, 22, 40, 0.96); border: 1px solid rgba(255,255,255,0.16);
-    border-radius: 14px; padding: 28px 34px; max-width: 620px; width: 92%; text-align: center;
-    box-shadow: 0 12px 60px rgba(0,0,0,0.6); }
-  .card h1 { font-size: 44px; letter-spacing: 2px; color: #ffd23a; margin-bottom: 4px; }
-  .card h2 { font-size: 26px; color: #ffd23a; margin-bottom: 10px; }
-  .card p { font-size: 15px; line-height: 1.55; opacity: 0.92; margin-bottom: 12px; }
-  .controls { text-align: left; font-size: 13.5px; line-height: 1.75; margin: 10px auto 16px;
-    display: inline-block; background: rgba(255,255,255,0.06); border-radius: 8px; padding: 10px 16px; }
-  .controls b { color: #ffd23a; }
-  button { background: #ffd23a; color: #1a1405; border: none; border-radius: 8px;
-    padding: 11px 22px; font-size: 16px; font-weight: 800; cursor: pointer; margin: 4px; }
-  button:hover { background: #ffe06a; }
-  button.ghost { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.4); }
-  #menu-save-info { font-size: 13px; opacity: 0.75; margin-bottom: 8px; }
-  #busted-reason, #complete-stats { font-size: 15px; margin-bottom: 14px; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1210; font-family: system-ui, sans-serif; color: #fff; }
+  #game { display: block; width: 100vw; height: 100vh; }
+  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
+  #hud-top { position: absolute; top: 12px; left: 14px; font-size: 20px; text-shadow: 0 2px 4px #000; line-height: 1.5; }
+  #hud-cash { font-size: 26px; font-weight: 800; color: #7dff8a; }
+  .bar { width: 220px; height: 12px; background: rgba(0,0,0,.55); border: 1px solid #fff3; border-radius: 6px; overflow: hidden; margin: 3px 0; }
+  .bar > div { height: 100%; }
+  #hud-health-bar { background: #3ddc5a; width: 100%; }
+  #hud-armour-bar { background: #4aa8ff; width: 0%; }
+  #hud-stars { color: #ffd21f; font-size: 24px; letter-spacing: 2px; }
+  #hud-objective { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); font-size: 18px; background: rgba(0,0,0,.5); padding: 6px 14px; border-radius: 8px; }
+  #hud-bottom { position: absolute; bottom: 12px; left: 14px; font-size: 18px; text-shadow: 0 2px 4px #000; line-height: 1.5; }
+  #minimap { position: absolute; top: 12px; right: 14px; width: 200px; height: 200px; border: 2px solid rgba(255,255,255,.6); border-radius: 6px; background: #1d3320; }
+  #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 22px; color: rgba(255,255,255,.85); text-shadow: 0 0 4px #000; }
+  #hud-toast { position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%); font-size: 20px; background: rgba(0,0,0,.65); padding: 8px 18px; border-radius: 8px; display: none; }
+  #hud-rel { position: absolute; bottom: 130px; left: 14px; color: #ff6b9d; font-size: 18px; text-shadow: 0 2px 4px #000; }
+  #hud-event { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); color: #ff9ff3; font-size: 18px; font-weight: 700; text-shadow: 0 2px 4px #000; }
+  .menu-box { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(10,10,16,.88); border: 1px solid #ffffff33; border-radius: 12px; padding: 18px 22px; max-width: 520px; max-height: 88vh; overflow-y: auto; font-size: 15px; line-height: 1.5; }
+  .menu-box h1 { font-size: 30px; margin-bottom: 4px; }
+  .menu-box h2 { font-size: 20px; margin-bottom: 8px; }
+  .menu-box p { margin-bottom: 10px; color: #ddd; }
+  .menu-box button { pointer-events: auto; display: inline-block; margin: 4px 6px 4px 0; padding: 10px 18px; font-size: 16px; font-weight: 700; border: none; border-radius: 8px; background: #ffb02e; color: #221100; cursor: pointer; }
+  .menu-box button:hover { background: #ffc95e; }
+  .menu-box button.secondary { background: #3a3f4a; color: #fff; }
+  .overlay { position: fixed; inset: 0; z-index: 10; display: none; background: rgba(0,0,0,.35); }
+  #food-menu, #outfit-menu { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(10,10,16,.92); border: 1px solid #ffffff33; border-radius: 10px; padding: 14px 18px; font-size: 16px; line-height: 1.7; display: none; z-index: 8; }
+  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 6; }
+  kbd { background: #333; border-radius: 4px; padding: 1px 6px; font-family: inherit; }
 </style>
 </head>
 <body>
-<div id="wrap">
-  <canvas id="game"></canvas>
-  <div id="flash"></div>
-
-  <div id="topleft">
-    <div class="panel"><div id="cash">$150</div></div>
-    <div class="panel">
-      <div class="bar-label">HEALTH</div>
-      <div class="bar"><div id="health-fill"></div></div>
-      <div class="bar-label" style="margin-top:4px">ARMOUR</div>
-      <div class="bar"><div id="armor-fill"></div></div>
-      <div id="stars">☆☆☆☆☆</div>
-    </div>
+<canvas id="game"></canvas>
+<div id="flash"></div>
+<div id="hud">
+  <div id="hud-top">
+    <div id="hud-cash">$150</div>
+    <div class="bar"><div id="hud-health-bar"></div></div>
+    <div class="bar"><div id="hud-armour-bar"></div></div>
+    <div id="hud-stars">☆☆☆☆☆</div>
+    <div id="hud-health-text" style="display:none">100</div>
   </div>
-
-  <div id="topright">
-    <canvas id="minimap" width="180" height="180"></canvas>
-  </div>
-
-  <div id="bottomleft">
-    <div class="panel">
-      <div id="chapter-label">Chapter 1 of 5</div>
-      <div id="objective">Steal a car and drive to the garage.</div>
-    </div>
-  </div>
-
-  <div id="bottomright">
-    <div class="panel">
-      <div id="speed">0 km/h</div>
-      <div id="weapon">Pistol</div>
-      <div><span id="ammo">∞</span> &nbsp; <span id="bombs">💣 3</span></div>
-    </div>
-  </div>
-
+  <div id="hud-objective">Start a new game.</div>
+  <div id="hud-event"></div>
+  <canvas id="minimap" width="200" height="200"></canvas>
   <div id="crosshair">+</div>
-  <div id="toast"></div>
-
-  <div class="overlay" id="menu-screen">
-    <div class="card">
-      <h1>SOLMAR BAY</h1>
-      <p>An original 3D voxel open-world crime game. Sun, sea, and five chapters of trouble.
-      Steal cars, lose the cops, run the harbour heist — and try not to get busted.</p>
-      <div class="controls">
-        <b>WASD</b> move / drive &nbsp;·&nbsp; <b>Mouse drag</b> orbit camera &nbsp;·&nbsp; <b>Wheel</b> zoom<br>
-        <b>Shift</b> run &nbsp;·&nbsp; <b>E</b> enter / exit car, bike, boat, plane &nbsp;·&nbsp; <b>F</b> punch<br>
-        <b>Click</b> shoot &nbsp;·&nbsp; <b>1 / 2 / 3</b> pistol / SMG / shotgun &nbsp;·&nbsp; <b>G</b> throw bomb<br>
-        <b>Space</b> handbrake (driving) / parachute (falling) &nbsp;·&nbsp; <b>Plane:</b> W/S throttle, arrows pitch<br>
-        <b>Esc</b> pause &nbsp;·&nbsp; <b>M</b> mute
-      </div>
-      <div id="menu-save-info"></div>
-      <button id="btn-new">New Game</button>
-      <button id="btn-continue" class="ghost">Continue</button>
-    </div>
+  <div id="hud-bottom">
+    <div id="hud-weapon">pistol ∞ 💣 3</div>
+    <div id="hud-speed">0 km/h</div>
   </div>
+  <div id="hud-rel"></div>
+  <div id="hud-toast"></div>
+  <div id="food-menu"><b>Food — press 1/2/3 to buy, Esc to leave</b><div id="food-items"></div></div>
+  <div id="outfit-menu"><b>Outfit shop — 1 hair, 2 shirt, 3 pants, 4 shoes. Esc to leave</b><div id="outfit-items"></div></div>
+</div>
 
-  <div class="overlay" id="pause-screen">
-    <div class="card">
-      <h2>Paused</h2>
-      <p>Take a breath. The cops are waiting.</p>
-      <button id="btn-resume">Resume</button>
-      <button id="btn-menu-quit" class="ghost">Save &amp; Quit to Menu</button>
-    </div>
-  </div>
-
-  <div class="overlay" id="busted-screen">
-    <div class="card">
-      <h2>BUSTED!</h2>
-      <p id="busted-reason"></p>
-      <p>You wake up at the hospital. The story continues — the chapter restarts.</p>
-      <button id="btn-busted">Respawn</button>
-    </div>
-  </div>
-
-  <div class="overlay" id="chapter-screen">
-    <div class="card">
-      <h2 id="chapter-title">Chapter 1 — First Wheels</h2>
-      <p id="chapter-text"></p>
-      <button id="btn-chapter">Start</button>
-    </div>
-  </div>
-
-  <div class="overlay" id="complete-screen">
-    <div class="card">
-      <h2>STORY COMPLETE</h2>
-      <p>You pulled off the Big One. Solmar Bay is yours now.</p>
-      <p id="complete-stats"></p>
-      <button id="btn-roam">Keep Playing (Free Roam)</button>
-    </div>
+<div class="overlay" id="overlay-menu">
+  <div class="menu-box">
+    <h1>Solmar Bay</h1>
+    <h2>3D voxel open world</h2>
+    <p>A sun-soaked coastal city, Vice City style: downtown towers, a crowded beach, the harbour, the airport — and two rival gangs fighting over it. Steal cars, run the story, or just live in the city.</p>
+    <p id="menu-save-info">No save yet — start a new game.</p>
+    <button id="btn-new">New Game</button>
+    <button id="btn-continue" class="secondary">Continue</button>
+    <p><b>Controls</b><br>
+    <kbd>W A S D</kbd> move / drive &nbsp; <kbd>Shift</kbd> run &nbsp; <kbd>Mouse drag</kbd> orbit camera &nbsp; <kbd>Wheel</kbd> zoom<br>
+    <kbd>E</kbd> enter car / interact &nbsp; <kbd>F</kbd> punch &nbsp; <kbd>Click</kbd> shoot &nbsp; <kbd>G</kbd> throw bomb<br>
+    <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> weapons &nbsp; <kbd>Space</kbd> handbrake / parachute &nbsp; <kbd>Esc</kbd> pause &nbsp; <kbd>M</kbd> mute</p>
+    <p><b>Things to do:</b> 5 story chapters, taxi fares, courier runs, time trials, gang jobs, firefighter shifts, food shops, dating, cats to carry, outfit shop, shooting range, swim challenge, driving course, street races, beach parties, the loop train and the rooftop elevator.</p>
   </div>
 </div>
+
+<div class="overlay" id="overlay-pause">
+  <div class="menu-box">
+    <h2>Paused</h2>
+    <p>Take a breath. The city will wait.</p>
+    <button id="btn-resume">Resume</button>
+    <button id="btn-menu-quit" class="secondary">Save &amp; quit to menu</button>
+  </div>
+</div>
+
+<div class="overlay" id="overlay-chapter">
+  <div class="menu-box">
+    <h2 id="chapter-title">Chapter 1 — First Wheels</h2>
+    <p id="chapter-text"></p>
+    <button id="btn-chapter">Start</button>
+  </div>
+</div>
+
+<div class="overlay" id="overlay-busted">
+  <div class="menu-box">
+    <h2>Busted!</h2>
+    <p id="busted-reason"></p>
+    <p>You wake up at the hospital, 20% lighter.</p>
+    <button id="btn-busted">Respawn</button>
+  </div>
+</div>
+
+<div class="overlay" id="overlay-complete">
+  <div class="menu-box">
+    <h2>Story complete!</h2>
+    <p>Solmar Bay is yours.</p>
+    <p id="complete-stats"></p>
+    <button id="btn-roam">Keep roaming</button>
+  </div>
+</div>
+
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
