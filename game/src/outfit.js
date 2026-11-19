@@ -5,6 +5,18 @@
 
 import { OUTFIT } from './config.js';
 import { showToast } from './state.js';
+import { showMenu } from './hud.js';
+
+export function showOutfitMenu(game) {
+  const o = game.player.outfit;
+  const parts = ['hair', 'shirt', 'pants', 'shoes'];
+  const lines = parts.map((part, i) => {
+    const opts = OUTFIT[part];
+    const cur = opts[o[part]];
+    return (i + 1) + '. ' + part + ': ' + cur.name + (cur.price ? ' ($' + cur.price + ')' : ' (owned)');
+  }).join('<br>');
+  showMenu(game.hud, 'Outfit Shop', lines, 'Press 1-4 to cycle a part, Esc to close. Cash: $' + game.state.cash);
+}
 
 export function createOutfit() {
   return {

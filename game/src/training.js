@@ -5,7 +5,8 @@
 // slalom checkpoints for cash.
 
 import { dist2, clamp } from './config.js';
-import { addCash, showToast } from './state.js';
+import { addCash, addRespect, showToast } from './state.js';
+import { checkRespectUnlocks } from './missions.js';
 
 export function createTraining() {
   return {
@@ -53,6 +54,8 @@ export function hitTarget(game, target, damage) {
     tr.rangeActive = false;
     tr.accuracyBonus = Math.min(10, tr.accuracyBonus + 2);
     addCash(game.state, 100);
+    addRespect(game.state, 10);
+    checkRespectUnlocks(game);
     showToast(game.state, 'Range cleared! +$100, accuracy up.', 3);
   }
 }
@@ -84,6 +87,8 @@ export function updateTraining(game, dt) {
       tr.swimChallenge.active = false;
       const bonus = Math.max(30, 150 - Math.floor(tr.swimChallenge.t));
       addCash(game.state, bonus);
+      addRespect(game.state, 10);
+      checkRespectUnlocks(game);
       showToast(game.state, 'Swim challenge done! +$' + bonus, 3);
     }
   }
@@ -97,6 +102,8 @@ export function updateTraining(game, dt) {
       if (tr.course.step >= 4) {
         tr.course.active = false;
         addCash(game.state, 200);
+        addRespect(game.state, 10);
+        checkRespectUnlocks(game);
         showToast(game.state, 'Course complete! +$200', 3);
         if (game.audio) game.audio.play('win');
       }

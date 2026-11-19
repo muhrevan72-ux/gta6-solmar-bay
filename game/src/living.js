@@ -246,5 +246,17 @@ export function livingBoxes(game) {
   const el = living.elevator;
   boxes.push({ x: 50, y: el.y + 0.4, z: 76, sx: 6, sy: 0.8, sz: 6, c: [0.7, 0.85, 0.95], a: 0.85 });
   boxes.push({ x: 50, y: 36, z: 76, sx: 0.5, sy: 72, sz: 0.5, c: [0.6, 0.6, 0.65] });
+  // animated ocean wave crests (graphics pass): pale foam boxes on
+  // the water surface that drift east and bob with game.waterT, in
+  // phase with the water plane's own bob (main.js shifts it by
+  // sin(waterT * 0.8) * 0.15). 12 crests, cheap and capped.
+  const wt = game.waterT || 0;
+  for (let i = 0; i < 12; i++) {
+    const baseZ = -360 + i * 62;
+    const drift = ((wt * 3 + i * 37) % 60) - 30;
+    const x = -362 + drift;
+    const bob = Math.sin(wt * 0.8 + i * 1.3) * 0.15;
+    boxes.push({ x, y: 0.5 + bob, z: baseZ, sx: 10, sy: 0.25, sz: 1.6, c: [0.85, 0.95, 1], a: 0.55 });
+  }
   return boxes;
 }

@@ -5,6 +5,12 @@
 
 import { FOOD_MENU, FOOD_SHOPS, clamp, dist2 } from './config.js';
 import { showToast } from './state.js';
+import { showMenu } from './hud.js';
+
+export function showFoodMenu(game, shop) {
+  const lines = FOOD_MENU.map((m, i) => (i + 1) + '. ' + m.name + ' — $' + m.price + ' (+' + m.heal + ' HP' + (m.armour ? ', +' + m.armour + ' armour' : '') + ')').join('<br>');
+  showMenu(game.hud, shop.name, lines, 'Press 1-3 to buy, Esc to close. Cash: $' + game.state.cash);
+}
 
 export function createFood() {
   return {

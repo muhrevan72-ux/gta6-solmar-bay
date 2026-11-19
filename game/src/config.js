@@ -46,6 +46,19 @@ export const TUNE = {
   pickupRadius: 2.2,
   cashDropMin: 10,
   cashDropMax: 50,
+  // weather + day/night (feature pass 6)
+  dayLengthSec: 720, // real seconds per game day
+  weatherMinSec: 90, // seconds between weather changes (min)
+  weatherMaxSec: 180, // seconds between weather changes (max)
+  rainDrops: 100, // max visible rain drops (perf cap)
+  // garage + side activities (feature pass 6)
+  repaintPrice: 50,
+  snackPrice: 3,
+  snackHeal: 15,
+  fishMin: 5, // fishing reward ($)
+  fishMax: 15,
+  fishTime: 3, // seconds to catch a fish
+  atmStep: 50, // ATM deposit / withdraw chunk ($)
 };
 
 export const COL = {
@@ -132,17 +145,28 @@ export const SIDE_JOBS = [
 ];
 
 // Food shops: name, menu prices, heal values.
+// Points sit at the shop FRONTS (just outside the shop building,
+// on standable ground) — the old points sat inside the downtown
+// towers, so 3 of 5 menus could never be reached on foot (closest
+// approach 8m vs the 5m menu radius). Same pattern as the interior
+// doors: the front is the south face of the shop's building.
 export const FOOD_MENU = [
   { name: 'Snack', price: 5, heal: 10, armour: 0 },
   { name: 'Meal', price: 10, heal: 25, armour: 0 },
   { name: 'Feast', price: 15, heal: 100, armour: 25 },
 ];
 export const FOOD_SHOPS = [
-  { name: 'Pizza Palace', x: -60, z: -40, colour: [0.9, 0.3, 0.2] },
-  { name: 'Burger Barn', x: 60, z: -40, colour: [0.95, 0.6, 0.1] },
-  { name: "Clucky's Chicken", x: -40, z: 60, colour: [0.95, 0.8, 0.2] },
+  // Pizza/Burger sit 5m south of their interior doors so the 5m
+  // food radius and the 4m door radius do not overlap at the point
+  // itself — at the door, E enters the shop (E at the counter inside
+  // opens the same menu); at the street point, E buys food without
+  // going in. The old points sat inside the shop buildings and were
+  // unreachable on foot (closest approach 7.1m).
+  { name: 'Pizza Palace', x: -60, z: -27, colour: [0.9, 0.3, 0.2] },
+  { name: 'Burger Barn', x: 60, z: -23, colour: [0.95, 0.6, 0.1] },
+  { name: "Clucky's Chicken", x: -40, z: 70, colour: [0.95, 0.8, 0.2] },
   { name: 'Donut Dock', x: 40, z: 120, colour: [0.95, 0.5, 0.7] },
-  { name: 'Taco Tide', x: 120, z: 40, colour: [0.4, 0.8, 0.3] },
+  { name: 'Taco Tide', x: 120, z: 68, colour: [0.4, 0.8, 0.3] },
 ];
 
 // Outfit shop options. Each part cycles through these; buying costs cash.
@@ -170,6 +194,32 @@ export const OUTFIT = {
     { name: 'Red runners', price: 35, colour: [0.9, 0.15, 0.2] },
   ],
 };
+
+// Respect levels and unlocks (graphics pass): respect grows with
+// missions (+50) and side jobs (+25), fares (+10), fires (+15) and
+// training (+10). Unlocks spawn once, tracked in state.flags.
+export const RESPECT = {
+  levels: [
+    { min: 0, name: 'Nobody' },
+    { min: 100, name: 'Hustler' },
+    { min: 250, name: 'Shot Caller' },
+    { min: 500, name: 'Kingpin' },
+    { min: 1000, name: 'Legend' },
+  ],
+  unlocks: [
+    { min: 100, flag: 'smgUnlocked', label: 'SMG at the shooting range' },
+    { min: 250, flag: 'shotgunUnlocked', label: 'Shotgun at the harbour' },
+    { min: 500, flag: 'sportsCarSpawned', label: 'Solmar Comet sports car at the garage' },
+  ],
+};
+
+// Original car model names (nothing from Rockstar). Assigned in
+// makeVehicle so the HUD can show the car you are driving.
+export const CAR_NAMES = [
+  'Solmar Comet', 'Bay Runner', 'Harbour Hawk', 'Sunset Cruiser',
+  'Palm GT', 'Tide Runner', 'Vice Sprint', 'Coral Coupe',
+  'Neon Sting', 'Dune Drifter', 'Marina GT', 'Coconut Cruiser',
+];
 
 // Crime table — wanted stars per crime, GTA-style. Every crime site
 // in the game must call commitCrime with one of these keys.

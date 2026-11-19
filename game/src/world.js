@@ -31,6 +31,7 @@ export function buildCity() {
     half: CITY_HALF,
     buildings: [],
     boxes: [], // static opaque boxes for the renderer
+    neon: [], // neon sign boxes (drawn dynamically, they glow at sunset/night)
     waterBoxes: [],
     trees: [],
     lamps: [],
@@ -87,6 +88,11 @@ export function buildCity() {
   }
   function addBox(x, y, z, sx, sy, sz, c, a) {
     city.boxes.push({ x, y, z, sx, sy, sz, c, a });
+  }
+  // Neon signs live outside the static buffer so the weather system
+  // can brighten them at sunset and night (golden-hour look).
+  function addNeon(x, y, z, sx, sy, sz, c) {
+    city.neon.push({ x, y, z, sx, sy, sz, c: [...c] });
   }
 
   // ---- ground: grass base, sand beach, asphalt roads ----
@@ -150,10 +156,10 @@ export function buildCity() {
         // mid blocks: two shops / low buildings with awnings
         const h = 8 + rng() * 8;
         addBuilding(bx - 16, bz, 32, 34, h, COL.buildings[Math.floor(rng() * COL.buildings.length)], 'shop');
-        addBox(bx - 16, h + 0.4, bz + 18, 24, 0.8, 6, COL.neon[Math.floor(rng() * COL.neon.length)]);
+        addNeon(bx - 16, h + 0.4, bz + 18, 24, 0.8, 6, COL.neon[Math.floor(rng() * COL.neon.length)]);
         const h2 = 8 + rng() * 8;
         addBuilding(bx + 18, bz + 6, 30, 30, h2, COL.buildings[Math.floor(rng() * COL.buildings.length)], 'shop');
-        addBox(bx + 18, h2 + 0.4, bz + 22, 22, 0.8, 6, COL.neon[Math.floor(rng() * COL.neon.length)]);
+        addNeon(bx + 18, h2 + 0.4, bz + 22, 22, 0.8, 6, COL.neon[Math.floor(rng() * COL.neon.length)]);
       }
     }
   }
@@ -179,6 +185,15 @@ export function buildCity() {
 
   // ---- window bands + neon + rooftops on towers ----
   for (const b of city.buildings) {
+    if (b.kind === 'shop') {
+      // awning + sign board on the south face (the shop front),
+      // plus a rooftop AC unit — the vertical slice for mid blocks
+      const ac = COL.neon[Math.floor(rng() * COL.neon.length)];
+      addBox(b.x, 3.2, b.z + b.sz / 2 + 1, b.sx * 0.7, 0.5, 2, ac);
+      addBox(b.x, 4.6, b.z + b.sz / 2 + 0.2, b.sx * 0.5, 1.2, 0.4, [0.95, 0.95, 0.9]);
+      addBox(b.x - b.sx / 4, b.h + 0.8, b.z, 5, 1.6, 5, [0.5, 0.5, 0.52]);
+      continue;
+    }
     if (b.kind !== 'tower' && b.kind !== 'police' && b.kind !== 'hospital') continue;
     const floors = Math.max(1, Math.floor(b.h / 4));
     for (let f = 1; f <= floors; f++) {
@@ -191,10 +206,15 @@ export function buildCity() {
     // rooftop details
     addBox(b.x - b.sx / 4, b.h + 1, b.z, 6, 2, 6, [0.5, 0.5, 0.52]);
     addBox(b.x + b.sx / 4, b.h + 2, b.z - b.sz / 4, 1, 4, 1, [0.3, 0.3, 0.32]);
+    // tall towers get a second AC unit + a water tank
+    if (b.h > 35) {
+      addBox(b.x + b.sx / 4, b.h + 1, b.z + b.sz / 4, 5, 2, 5, [0.55, 0.55, 0.58]);
+      addBox(b.x, b.h + 2.5, b.z - b.sz / 4, 3, 5, 3, [0.6, 0.5, 0.35]);
+    }
     // neon sign on most downtown towers
     if (b.kind === 'tower' && Math.abs(b.x) <= 200 && Math.abs(b.z) <= 200 && rng() < 0.85) {
       const nc = COL.neon[Math.floor(rng() * COL.neon.length)];
-      addBox(b.x, b.h - 2, b.z + b.sz / 2 + 0.4, Math.min(24, b.sx * 0.6), 2.4, 0.6, nc);
+      addNeon(b.x, b.h - 2, b.z + b.sz / 2 + 0.4, Math.min(24, b.sx * 0.6), 2.4, 0.6, nc);
     }
   }
 
@@ -240,6 +260,14 @@ export function buildCity() {
       city.lamps.push({ x: ix + 8, z: iz + 8 });
     }
   }
+  // trash cans at downtown intersections (graphics pass)
+  for (const ix of [-100, 0, 100]) {
+    for (const iz of [-100, 0, 100]) {
+      addBox(ix - 8, 0.8, iz - 8, 1.2, 1.6, 1.2, [0.25, 0.28, 0.3]);
+      addBox(ix - 8, 1.7, iz - 8, 1.3, 0.25, 1.3, [0.35, 0.38, 0.4]);
+      city.props.push({ kind: 'trash', x: ix - 8, z: iz - 8 });
+    }
+  }
   // beach umbrellas + towels
   for (let i = 0; i < 14; i++) {
     const z = -300 + i * 44 + rng() * 20;
@@ -249,6 +277,32 @@ export function buildCity() {
     addBox(-342, 0.3, z + 8, 5, 0.5, 2.5, [0.95, 0.6, 0.5]);
     city.props.push({ kind: 'umbrella', x: -350, z });
   }
+
+  // ---- benches along sidewalks (peds sit on them) ----
+  city.benches = [];
+  const benchSpots = [
+    { x: -91, z: -60, heading: -Math.PI / 2 },
+    { x: 109, z: -60, heading: Math.PI / 2 },
+    { x: -91, z: 140, heading: -Math.PI / 2 },
+    { x: 109, z: 140, heading: Math.PI / 2 },
+    { x: -91, z: -160, heading: -Math.PI / 2 },
+    { x: 109, z: 60, heading: Math.PI / 2 },
+    { x: -191, z: 20, heading: -Math.PI / 2 },
+    { x: 191, z: -20, heading: Math.PI / 2 },
+  ];
+  for (const b of benchSpots) {
+    city.benches.push({ ...b });
+    addBox(b.x, 0.5, b.z, 3, 0.5, 1.2, [0.55, 0.4, 0.25]);
+    addBox(b.x, 1.0, b.z - 0.5, 3, 0.9, 0.3, [0.55, 0.4, 0.25]);
+  }
+
+  // ---- wooden pier at the beach (fishing spot at its shore end) ----
+  addBox(-345, 0.5, 100, 30, 0.4, 6, [0.6, 0.45, 0.28]);
+  for (const px of [-358, -348, -338]) {
+    addBox(px, 0.2, 96, 0.8, 1.2, 0.8, [0.45, 0.32, 0.2]);
+    addBox(px, 0.2, 104, 0.8, 1.2, 0.8, [0.45, 0.32, 0.2]);
+  }
+  addBox(-358, 1.2, 100, 2, 0.5, 6, [0.7, 0.55, 0.35]);
 
   // ---- traffic lights at 24 inner intersections ----
   let lightIndex = 0;

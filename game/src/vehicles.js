@@ -4,13 +4,13 @@
 // steering, body roll included. Stealing wires through the crime
 // table via game.police.commitCrime.
 
-import { TUNE, COL, clamp, lerp, angleLerp, dist2 } from './config.js';
+import { TUNE, COL, CAR_NAMES, clamp, lerp, angleLerp, dist2 } from './config.js';
 import { collideCircle, inWater, lightState } from './world.js';
 
 let nextId = 1;
 
 export function makeVehicle(type, x, z, heading, colour) {
-  return {
+  const veh = {
     id: nextId++,
     type, // car | bike | boat | plane | taxi | fire | police
     x, z, y: 0,
@@ -31,6 +31,21 @@ export function makeVehicle(type, x, z, heading, colour) {
     altitude: 0,
     pitch: 0,
   };
+  // model name for the HUD car panel (original names from config)
+  veh.name = vehicleName(type);
+  return veh;
+}
+
+// Original model names per type (config.CAR_NAMES for cars).
+function vehicleName(type) {
+  if (type === 'car') return CAR_NAMES[Math.floor(Math.random() * CAR_NAMES.length)];
+  if (type === 'taxi') return 'Taxi Cab';
+  if (type === 'fire') return 'Fire Truck';
+  if (type === 'police') return 'Police Cruiser';
+  if (type === 'bike') return 'Street Bike';
+  if (type === 'boat') return 'Speedboat';
+  if (type === 'plane') return 'Skyhawk';
+  return 'Car';
 }
 
 export function createVehicles(city) {
@@ -135,7 +150,7 @@ export function nearestVehicle(vehicles, x, z, maxDist) {
   let best = null;
   let bestD = maxDist * maxDist;
   for (const v of vehicles.list) {
-    if (v.wrecked) continue;
+    if (v.wrecked || v.stored) continue;
     const d = dist2(x, z, v.x, v.z);
     if (d < bestD) {
       bestD = d;
@@ -273,6 +288,9 @@ export function updateDriven(game, dt) {
 
   // damage smoke flag
   if (veh.damage > 60) veh.smoking = true;
+  // wheel spin (graphics pass): the spin stripe in vehicleBoxes
+  // orbits the wheel by this angle; radius 0.35 units
+  veh.wheelSpin = (veh.wheelSpin || 0) + (veh.speed || 0) * dt / 0.35;
 }
 
 function approachZero(v, step) {
@@ -313,6 +331,7 @@ export function updateVehicles(game, dt) {
     const fixed = collideCircle(city, nx, nz, 2.2);
     veh.x = fixed.x;
     veh.z = fixed.z;
+    veh.wheelSpin = (veh.wheelSpin || 0) + (veh.speed || 0) * dt / 0.35;
     if (distToNode < 3) {
       const came = veh.node;
       veh.node = veh.nextNode;
@@ -329,51 +348,91 @@ export function damageVehicle(veh, amount) {
   }
 }
 
-// Voxel boxes for one vehicle, in world space.
+// Voxel boxes for one vehicle, in world space. Every part is
+// rotated to the vehicle's heading (graphics pass): the body and
+// cabin face where the car points, the 4 wheels sit at the corners
+// with a spin stripe that orbits the hub as the car rolls,
+// headlights/taillights mark front/back, and thin door panels break
+// up the slab sides. A dark blob shadow grounds the car.
 export function vehicleBoxes(veh) {
   const boxes = [];
   const c = veh.colour;
   const dark = [0.12, 0.12, 0.14];
   const glass = [0.5, 0.75, 0.9];
+  const yaw = veh.heading;
+  // local (dx, dz) offset (right, forward) rotated by the heading
+  const at = (dx, dz) => {
+    const s = Math.sin(yaw);
+    const cc = Math.cos(yaw);
+    return { x: veh.x + dx * cc + dz * s, z: veh.z - dx * s + dz * cc };
+  };
+  const put = (dx, y, dz, sx, sy, sz, col, alpha) => {
+    const p = at(dx, dz);
+    boxes.push({ x: p.x, y, z: p.z, sx, sy, sz, c: col, yaw, a: alpha });
+  };
+  const shadow = (sx, sz) => {
+    boxes.push({ x: veh.x, y: 0.06, z: veh.z, sx, sy: 0.05, sz, c: [0, 0, 0], yaw, a: 0.22 });
+  };
   if (veh.type === 'bike') {
-    boxes.push({ x: veh.x, y: 0.7, z: veh.z, sx: 0.7, sy: 0.7, sz: 2.4, c });
-    boxes.push({ x: veh.x, y: 1.25, z: veh.z - 0.3, sx: 0.6, sy: 0.5, sz: 0.8, c: dark });
-    boxes.push({ x: veh.x, y: 0.45, z: veh.z + 1.0, sx: 0.5, sy: 0.9, sz: 0.3, c: dark });
-    boxes.push({ x: veh.x, y: 0.45, z: veh.z - 1.0, sx: 0.5, sy: 0.9, sz: 0.3, c: dark });
+    put(0, 0.7, 0, 0.7, 0.7, 2.4, c);
+    put(0, 1.25, -0.3, 0.6, 0.5, 0.8, dark);
+    put(0, 0.45, 1.0, 0.5, 0.9, 0.3, dark);
+    put(0, 0.45, -1.0, 0.5, 0.9, 0.3, dark);
+    shadow(1.2, 2.8);
     return boxes;
   }
   if (veh.type === 'boat') {
-    boxes.push({ x: veh.x, y: 0.6, z: veh.z, sx: 2.6, sy: 1.0, sz: 6, c });
-    boxes.push({ x: veh.x, y: 1.4, z: veh.z - 1, sx: 2.0, sy: 0.9, sz: 2.4, c: [0.9, 0.9, 0.92] });
+    put(0, 0.6, 0, 2.6, 1.0, 6, c);
+    put(0, 1.4, -1, 2.0, 0.9, 2.4, [0.9, 0.9, 0.92]);
     return boxes;
   }
   if (veh.type === 'plane') {
-    boxes.push({ x: veh.x, y: 1.0 + veh.y, z: veh.z, sx: 2.2, sy: 1.6, sz: 12, c });
-    boxes.push({ x: veh.x, y: 1.0 + veh.y, z: veh.z, sx: 16, sy: 0.4, sz: 2.4, c });
-    boxes.push({ x: veh.x, y: 1.6 + veh.y, z: veh.z - 4.5, sx: 4, sy: 1.2, sz: 1.6, c: [0.9, 0.3, 0.2] });
-    boxes.push({ x: veh.x, y: 0.8 + veh.y, z: veh.z + 5, sx: 1.2, sy: 1.0, sz: 1.4, c: glass });
+    const y = veh.y || 0;
+    put(0, 1.0 + y, 0, 2.2, 1.6, 12, c);
+    put(0, 1.0 + y, 0, 16, 0.4, 2.4, c);
+    put(0, 1.6 + y, -4.5, 4, 1.2, 1.6, [0.9, 0.3, 0.2]);
+    put(0, 0.8 + y, 5, 1.2, 1.0, 1.4, glass);
     return boxes;
   }
   // cars / taxi / fire / police share the car body
   const body = veh.type === 'fire' ? [0.9, 0.15, 0.1] : veh.type === 'police' ? [0.1, 0.15, 0.25] : veh.type === 'taxi' ? [0.95, 0.8, 0.1] : c;
   const y = veh.y || 0;
-  boxes.push({ x: veh.x, y: y + 0.7, z: veh.z, sx: 2.4, sy: 1.1, sz: 4.6, c: body });
-  boxes.push({ x: veh.x, y: y + 1.6, z: veh.z - 0.3, sx: 2.0, sy: 0.9, sz: 2.4, c: glass });
-  boxes.push({ x: veh.x, y: y + 0.4, z: veh.z + 1.9, sx: 0.7, sy: 0.8, sz: 0.7, c: dark });
-  boxes.push({ x: veh.x, y: y + 0.4, z: veh.z - 1.9, sx: 0.7, sy: 0.8, sz: 0.7, c: dark });
+  put(0, y + 0.7, 0, 2.4, 1.1, 4.6, body);
+  put(0, y + 1.6, -0.3, 2.0, 0.9, 2.4, glass);
+  // doors: thin darker panels on both sides
+  const doorCol = [body[0] * 0.55, body[1] * 0.55, body[2] * 0.55];
+  put(-1.22, y + 0.9, 0, 0.08, 0.7, 1.6, doorCol);
+  put(1.22, y + 0.9, 0, 0.08, 0.7, 1.6, doorCol);
+  // headlights (front) + taillights (rear)
+  put(-0.7, y + 0.7, 2.32, 0.4, 0.25, 0.15, [1, 0.95, 0.7]);
+  put(0.7, y + 0.7, 2.32, 0.4, 0.25, 0.15, [1, 0.95, 0.7]);
+  put(-0.7, y + 0.7, -2.32, 0.4, 0.25, 0.15, [0.9, 0.1, 0.1]);
+  put(0.7, y + 0.7, -2.32, 0.4, 0.25, 0.15, [0.9, 0.1, 0.1]);
+  // 4 wheels at the corners + a spin stripe on each hub
+  const spin = veh.wheelSpin || 0;
+  const stripeDy = Math.cos(spin) * 0.18;
+  const stripeDz = Math.sin(spin) * 0.18;
+  for (const wx of [-1.05, 1.05]) {
+    for (const wz of [1.5, -1.5]) {
+      put(wx, y + 0.4, wz, 0.35, 0.7, 0.9, dark);
+      const side = wx < 0 ? -1 : 1;
+      put(wx + side * 0.23, y + 0.4 + stripeDy, wz + stripeDz, 0.1, 0.4, 0.12, [0.8, 0.8, 0.8]);
+    }
+  }
   if (veh.type === 'police') {
-    boxes.push({ x: veh.x, y: y + 2.3, z: veh.z - 0.3, sx: 1.2, sy: 0.35, sz: 0.8, c: [0.9, 0.1, 0.1] });
-    boxes.push({ x: veh.x, y: y + 2.3, z: veh.z + 0.6, sx: 1.2, sy: 0.35, sz: 0.8, c: [0.1, 0.3, 0.9] });
+    put(0, y + 2.3, -0.3, 1.2, 0.35, 0.8, [0.9, 0.1, 0.1]);
+    put(0, y + 2.3, 0.6, 1.2, 0.35, 0.8, [0.1, 0.3, 0.9]);
   }
   if (veh.type === 'taxi') {
-    boxes.push({ x: veh.x, y: y + 2.3, z: veh.z - 0.3, sx: 1.0, sy: 0.4, sz: 1.0, c: [1, 0.9, 0.2] });
+    put(0, y + 2.3, -0.3, 1.0, 0.4, 1.0, [1, 0.9, 0.2]);
   }
   if (veh.type === 'fire') {
-    boxes.push({ x: veh.x, y: y + 1.4, z: veh.z + 1.2, sx: 2.2, sy: 1.2, sz: 1.6, c: [0.8, 0.8, 0.85] });
-    boxes.push({ x: veh.x, y: y + 2.3, z: veh.z, sx: 1.6, sy: 0.35, sz: 1.2, c: [0.9, 0.1, 0.1] });
+    put(0, y + 1.4, 1.2, 2.2, 1.2, 1.6, [0.8, 0.8, 0.85]);
+    put(0, y + 2.3, 0, 1.6, 0.35, 1.2, [0.9, 0.1, 0.1]);
   }
   if (veh.smoking) {
-    boxes.push({ x: veh.x, y: y + 2.6, z: veh.z, sx: 1.2, sy: 1.0, sz: 1.2, c: [0.5, 0.5, 0.5], a: 0.7 });
+    put(0, y + 2.6, 0, 1.2, 1.0, 1.2, [0.5, 0.5, 0.5], 0.7);
   }
+  shadow(3.0, 5.2);
   return boxes;
 }

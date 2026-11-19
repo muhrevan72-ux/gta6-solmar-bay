@@ -8,6 +8,7 @@ export function createCamera() {
     yaw: 0, // orbit around the target
     pitch: 0.42,
     dist: 13,
+    close: false, // close mode: interiors keep the camera in the room
     eye: [0, 8, 14],
     center: [0, 2, 0],
     targetYaw: 0,
@@ -20,7 +21,7 @@ export function snapCamera(camera, target, heading) {
   camera.yaw = heading;
   camera.targetYaw = heading;
   camera.pitch = 0.42;
-  camera.dist = 13;
+  camera.dist = camera.close ? 4.5 : 13;
   const ex = target.x - Math.sin(heading) * camera.dist;
   const ez = target.z - Math.cos(heading) * camera.dist;
   camera.eye = [ex, 6, ez];
@@ -34,7 +35,8 @@ export function updateCamera(camera, follow, mouse, dt) {
   if (mouse) {
     camera.targetYaw -= (mouse.dx || 0) * 0.004;
     camera.pitch = clamp(camera.pitch + (mouse.dy || 0) * 0.003, 0.08, 1.1);
-    camera.dist = clamp(camera.dist + (mouse.wheel || 0) * 0.01, 7, 26);
+    const minDist = camera.close ? 3 : 7;
+    camera.dist = clamp(camera.dist + (mouse.wheel || 0) * 0.01, minDist, 26);
   }
   // ease the actual yaw toward the target yaw
   camera.yaw = angleLerp(camera.yaw, camera.targetYaw, 1 - Math.pow(0.0001, dt));

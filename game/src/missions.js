@@ -3,8 +3,12 @@
 // opens the next. Side jobs (taxi / courier / time trial / turf /
 // gang delivery) are available from markers after chapter 1.
 
-import { CHAPTERS, SIDE_JOBS, clamp, dist2 } from './config.js';
-import { showToast, addCash } from './state.js';
+import { CHAPTERS, SIDE_JOBS, RESPECT, clamp, dist2 } from './config.js';
+import { showToast, addCash, addRespect } from './state.js';
+import { notifyPhone } from './phone.js';
+import { showMenu } from './hud.js';
+import { spawnPickup } from './combat.js';
+import { spawnVehicle } from './vehicles.js';
 
 export function createMissions() {
   return {
@@ -16,6 +20,7 @@ export function createMissions() {
     pickedUp: false,
     coolT: 0, // restart cooldown after a job finishes
     active: null, // side job in progress
+    nextChapter: null, // set by completeChapter, started by the passed screen
   };
 }
 
@@ -45,6 +50,10 @@ export function startChapter(game, n) {
   game.state.chapterIntroShown = true;
   m.marker = chapterMarker(game, n);
   showToast(game.state, ch.title + ' — ' + ch.objective, 5);
+  notifyPhone(game, 'Rico', ch.title + ' — ' + ch.objective);
+  // a separate intro card (the play-test saw none: the game just sat
+  // on the frozen world until a key was pressed)
+  showMenu(game.hud, ch.title, ch.intro + '<br><br><b>Objective:</b> ' + ch.objective + '<br>Reward: $' + ch.reward, 'Press Enter to start.');
   if (game.audio) game.audio.play('mission');
 }
 
@@ -64,18 +73,70 @@ function completeChapter(game) {
   const ch = CHAPTERS[m.chapter - 1];
   addCash(game.state, ch.reward);
   game.state.stats.missionsDone += 1;
-  showToast(game.state, 'Chapter complete! +$' + ch.reward, 4);
+  addRespect(game.state, 50);
   if (game.audio) game.audio.play('win');
   m.marker = null;
-  if (m.chapter >= 5) {
-    // story complete: advance past 5 so the HUD shows free roam
-    m.chapter = 6;
-    game.state.chapter = 6;
-    game.state.mode = 'playing';
-    showToast(game.state, 'You beat the story! Solmar Bay is yours. Side jobs still pay.', 6);
-    return;
+  const next = m.chapter + 1;
+  const storyDone = next > 5;
+  // advance the story state NOW (the HUD and tests read it
+  // immediately); the next chapter's intro card waits behind the
+  // mission-passed screen, shown when the player presses Enter.
+  m.chapter = storyDone ? 6 : next;
+  game.state.chapter = m.chapter;
+  m.nextChapter = storyDone ? 6 : next;
+  if (!storyDone) {
+    m.step = 0;
+    m.timer = 0;
+    m.passengers = 0;
+    m.pickedUp = false;
+    m.active = null;
+    m.marker = chapterMarker(game, next);
   }
-  startChapter(game, m.chapter + 1);
+  const unlock = checkRespectUnlocks(game);
+  game.state.mode = 'missionpassed';
+  const done = game.state.stats.missionsDone;
+  const title = storyDone ? 'STORY COMPLETE' : 'MISSION PASSED';
+  const body = ch.title + '<br>+$' + ch.reward + ' · +50 REP' +
+    (unlock ? '<br>Unlocked: ' + unlock : '') +
+    '<br>Story ' + done + '/5 · Completion ' + completionPct(game) + '%';
+  showMenu(game.hud, title, body, 'Press Enter to continue.');
+  notifyPhone(game, 'Rico', title + '! +$' + ch.reward + ' +50 REP. Nice work, kid.');
+}
+
+// Completion %: story 60 (12 per chapter) + side jobs 20 (3 each,
+// capped) + garage cars 8 (4 each, capped) + respect 12 (1 per 100
+// REP, capped). Shown on the mission-passed screen and the pause menu.
+export function completionPct(game) {
+  const s = game.state.stats;
+  const story = Math.min(60, (s.missionsDone || 0) * 12);
+  const jobs = Math.min(20, (s.sideJobsDone || 0) * 3);
+  const cars = Math.min(8, (game.garage ? game.garage.owned.length : 0) * 4);
+  const rep = Math.min(12, Math.floor((game.state.respect || 0) / 100));
+  return story + jobs + cars + rep;
+}
+
+// Respect unlocks: spawn once when a threshold is crossed, tracked
+// in state.flags. Returns the label of a newly unlocked item, or null.
+export function checkRespectUnlocks(game) {
+  const state = game.state;
+  const rep = state.respect || 0;
+  for (const u of RESPECT.unlocks) {
+    if (rep < u.min || state.flags[u.flag]) continue;
+    state.flags[u.flag] = true;
+    if (u.flag === 'smgUnlocked') {
+      spawnPickup(game, 260, 260, 'smg', true); // shooting range, persistent
+    } else if (u.flag === 'shotgunUnlocked') {
+      spawnPickup(game, 300, -100, 'shotgun', true); // harbour, persistent
+    } else if (u.flag === 'sportsCarSpawned') {
+      const veh = spawnVehicle(game.vehicles, 'car', 150, -120, 0, [0.95, 0.75, 0.15]);
+      veh.driver = 'parked';
+      veh.name = 'Solmar Comet';
+    }
+    showToast(state, 'Respect unlock: ' + u.label, 4);
+    notifyPhone(game, 'Rico', 'Respect unlock: ' + u.label);
+    return u.label;
+  }
+  return null;
 }
 
 // Per-frame chapter logic. Called from stepGame.
@@ -210,7 +271,11 @@ function finishSideJob(game, success) {
   if (!job) return;
   if (success) {
     addCash(game.state, job.reward);
+    game.state.stats.sideJobsDone = (game.state.stats.sideJobsDone || 0) + 1;
+    addRespect(game.state, 25);
+    checkRespectUnlocks(game);
     showToast(game.state, job.label + ' done! +$' + job.reward, 3);
+    notifyPhone(game, 'Rico', job.label + ' done! +$' + job.reward);
     if (game.audio) game.audio.play('win');
   } else {
     showToast(game.state, job.label + ' failed.', 3);

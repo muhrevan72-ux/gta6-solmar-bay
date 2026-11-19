@@ -3,7 +3,8 @@
 // while in the truck extinguishes it for $150 a fire.
 
 import { dist2 } from './config.js';
-import { addCash, showToast } from './state.js';
+import { addCash, addRespect, showToast } from './state.js';
+import { checkRespectUnlocks } from './missions.js';
 
 export function createFire() {
   return {
@@ -43,6 +44,8 @@ export function updateFire(game, dt) {
           fire.fires.splice(i, 1);
           addCash(game.state, 150);
           game.state.stats.firesOut += 1;
+          addRespect(game.state, 15);
+          checkRespectUnlocks(game);
           showToast(game.state, 'Fire out! +$150', 3);
           if (game.audio) game.audio.play('win');
         }

@@ -21,6 +21,7 @@ export function createPlayer(city) {
     swimming: false,
     parachute: false,
     falling: 0,
+    fishing: false,
     lean: 0, // body lean into turns (-1..1)
     bob: 0,
     eCooldown: 0,
@@ -45,6 +46,7 @@ export function resetPlayer(player, city, keepOutfit) {
   player.swimming = false;
   player.parachute = false;
   player.falling = 0;
+  player.fishing = false;
   player.lean = 0;
   player.bob = 0;
   player.eCooldown = 0;
@@ -58,7 +60,7 @@ export function updatePlayer(game, dt) {
   const p = game.player;
   const input = game.input;
   const city = game.city;
-  if (p.inVehicle || p.onTrain || p.onElevator) return;
+  if (p.inVehicle || p.onTrain || p.onElevator || p.fishing) return;
 
   p.eCooldown = Math.max(0, p.eCooldown - dt);
 
@@ -153,30 +155,46 @@ export function playerBoxes(game) {
   const hair = OUTFIT.hair[p.outfit.hair].colour;
   const skin = [0.95, 0.75, 0.55];
   const bobY = Math.sin(p.bob) * 0.08 * Math.min(1, p.speed / 6);
-  const leanX = p.lean * 0.25;
   const y = p.y + bobY;
+  // graphics pass: the body faces the player's heading (every box
+  // carries yaw), the legs/arms swing with sin(bob) like a walk
+  // cycle, and the lean runs along the body's right axis. A blob
+  // shadow grounds the player.
+  const yaw = p.heading;
+  const s = Math.sin(yaw);
+  const c = Math.cos(yaw);
+  const lean = p.lean * 0.25;
+  const at = (dx, dz) => ({ x: p.x + (dx + lean) * c + dz * s, z: p.z - (dx + lean) * s + dz * c });
+  const put = (boxes, dx, yy, dz, sx, sy, sz, col) => {
+    const q = at(dx, dz);
+    boxes.push({ x: q.x, y: yy, z: q.z, sx, sy, sz, c: col, yaw });
+  };
   const boxes = [];
-  // legs
-  boxes.push({ x: p.x - 0.28 + leanX, y: y + 0.45, z: p.z, sx: 0.5, sy: 0.9, sz: 0.5, c: pants });
-  boxes.push({ x: p.x + 0.28 + leanX, y: y + 0.45, z: p.z, sx: 0.5, sy: 0.9, sz: 0.5, c: pants });
-  // shoes
-  boxes.push({ x: p.x - 0.28 + leanX, y: y + 0.08, z: p.z, sx: 0.55, sy: 0.16, sz: 0.7, c: shoes });
-  boxes.push({ x: p.x + 0.28 + leanX, y: y + 0.08, z: p.z, sx: 0.55, sy: 0.16, sz: 0.7, c: shoes });
+  const swing = Math.sin(p.bob) * 0.3 * Math.min(1, p.speed / 6);
+  // legs + shoes (opposite phases, swinging along the facing direction)
+  put(boxes, -0.28, y + 0.45, swing, 0.5, 0.9, 0.5, pants);
+  put(boxes, 0.28, y + 0.45, -swing, 0.5, 0.9, 0.5, pants);
+  put(boxes, -0.28, y + 0.08, swing, 0.55, 0.16, 0.7, shoes);
+  put(boxes, 0.28, y + 0.08, -swing, 0.55, 0.16, 0.7, shoes);
   // torso
-  boxes.push({ x: p.x + leanX, y: y + 1.35, z: p.z, sx: 1.1, sy: 0.9, sz: 0.6, c: shirt });
-  // arms
-  boxes.push({ x: p.x - 0.75 + leanX, y: y + 1.35, z: p.z, sx: 0.4, sy: 0.85, sz: 0.45, c: shirt });
-  boxes.push({ x: p.x + 0.75 + leanX, y: y + 1.35, z: p.z, sx: 0.4, sy: 0.85, sz: 0.45, c: shirt });
+  put(boxes, 0, y + 1.35, 0, 1.1, 0.9, 0.6, shirt);
+  // arms (opposite to the legs)
+  put(boxes, -0.75, y + 1.35, -swing * 0.8, 0.4, 0.85, 0.45, shirt);
+  put(boxes, 0.75, y + 1.35, swing * 0.8, 0.4, 0.85, 0.45, shirt);
   // head + hair
-  boxes.push({ x: p.x + leanX, y: y + 2.05, z: p.z, sx: 0.7, sy: 0.65, sz: 0.65, c: skin });
-  boxes.push({ x: p.x + leanX, y: y + 2.4, z: p.z, sx: 0.74, sy: 0.25, sz: 0.7, c: hair });
+  put(boxes, 0, y + 2.05, 0, 0.7, 0.65, 0.65, skin);
+  put(boxes, 0, y + 2.4, 0, 0.74, 0.25, 0.7, hair);
   // carried cat rides on the shoulder
   if (p.carryingCat) {
-    boxes.push({ x: p.x + 0.6 + leanX, y: y + 1.9, z: p.z, sx: 0.4, sy: 0.35, sz: 0.5, c: p.carryingCat.colour });
+    put(boxes, 0.6, y + 1.9, 0, 0.4, 0.35, 0.5, p.carryingCat.colour);
   }
   // parachute canopy
   if (p.parachute) {
-    boxes.push({ x: p.x, y: y + 3.6, z: p.z, sx: 3.4, sy: 0.25, sz: 2.2, c: [0.95, 0.3, 0.3] });
+    put(boxes, 0, y + 3.6, 0, 3.4, 0.25, 2.2, [0.95, 0.3, 0.3]);
+  }
+  // blob shadow (only on the ground, not while flying/falling)
+  if (!p.parachute && (p.y || 0) < 1) {
+    boxes.push({ x: p.x, y: 0.06, z: p.z, sx: 1.4, sy: 0.05, sz: 1.4, c: [0, 0, 0], yaw, a: 0.22 });
   }
   return boxes;
 }

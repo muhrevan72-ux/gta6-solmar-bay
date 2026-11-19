@@ -35,7 +35,7 @@ export function createInput(keyTarget, mouseTarget) {
     if (e.repeat) return; // repeats must NOT re-add to `pressed`
     keys.add(e.code);
     pressed.add(e.code);
-    if (e.code === 'Space' || e.code.startsWith('Arrow')) {
+    if (e.code === 'Space' || e.code === 'Tab' || e.code.startsWith('Arrow')) {
       if (e.preventDefault) e.preventDefault();
     }
   }

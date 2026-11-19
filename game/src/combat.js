@@ -7,15 +7,16 @@ import { addCash, showToast } from './state.js';
 import { collideCircle } from './world.js';
 
 export const WEAPONS = [
-  { id: 'pistol', name: 'Pistol', damage: TUNE.pistolDamage, range: 60, rate: 0.28, spread: 0.02, pellets: 1 },
-  { id: 'smg', name: 'SMG', damage: TUNE.smgDamage, range: 55, rate: 0.09, spread: 0.06, pellets: 1 },
-  { id: 'shotgun', name: 'Shotgun', damage: TUNE.shotgunDamage, range: 30, rate: 0.7, spread: 0.12, pellets: 6 },
+  { id: 'pistol', name: 'Pistol', damage: TUNE.pistolDamage, range: 60, rate: 0.28, spread: 0.02, pellets: 1, ammo: Infinity }, // infinite ammo
+  { id: 'smg', name: 'SMG', damage: TUNE.smgDamage, range: 55, rate: 0.09, spread: 0.06, pellets: 1, ammo: 120 },
+  { id: 'shotgun', name: 'Shotgun', damage: TUNE.shotgunDamage, range: 30, rate: 0.7, spread: 0.12, pellets: 6, ammo: 24 },
 ];
 
 export function createCombat() {
   return {
     weapon: 0, // index into WEAPONS
     owned: [true, false, false], // pistol owned; smg/shotgun are pickups
+    ammo: [Infinity, 0, 0], // rounds per weapon (pistol infinite)
     bombs: 3,
     bombCooldown: 0,
     shootCooldown: 0,
@@ -27,8 +28,11 @@ export function createCombat() {
   };
 }
 
-export function spawnPickup(game, x, z, kind) {
-  game.combat.pickups.push({ x, z, kind, t: 0 });
+// `persist` pickups never expire — the respect unlocks (SMG at the
+// range, shotgun at the harbour) must still be there when the player
+// walks over, however long that takes.
+export function spawnPickup(game, x, z, kind, persist) {
+  game.combat.pickups.push({ x, z, kind, t: 0, persist: !!persist });
 }
 
 export function dropCash(game, x, z, amount) {
@@ -48,7 +52,9 @@ export function damagePlayer(game, amount) {
   state.health -= left;
   if (state.health <= 0) {
     state.health = 0;
-    if (game.police) game.police.bustPlayer(game, 'You were beaten down');
+    // death (health 0) is WASTED, arrest is BUSTED — the police
+    // module shows the right screen for each
+    if (game.police) game.police.bustPlayer(game, 'You were beaten down', 'wasted');
   }
 }
 
@@ -127,7 +133,10 @@ export function shoot(game) {
   const weapon = WEAPONS[combat.weapon];
   if (!combat.owned[combat.weapon]) return false;
   if (combat.shootCooldown > 0) return false;
+  // ammo: the pistol is infinite, SMG/shotgun spend a round per shot
+  if (combat.ammo[combat.weapon] <= 0) return false;
   combat.shootCooldown = weapon.rate;
+  if (combat.ammo[combat.weapon] !== Infinity) combat.ammo[combat.weapon] -= 1;
   const p = game.player;
   const camYaw = game.camera.yaw;
   const fx = Math.sin(camYaw);
@@ -268,7 +277,7 @@ export function updateCombat(game, dt) {
   for (let i = combat.pickups.length - 1; i >= 0; i--) {
     const pk = combat.pickups[i];
     pk.t += dt;
-    if (pk.t > 60) {
+    if (pk.t > 60 && !pk.persist) {
       combat.pickups.splice(i, 1);
       continue;
     }
@@ -280,9 +289,11 @@ export function updateCombat(game, dt) {
         p.inVehicle.wrecked = false;
       } else if (pk.kind === 'smg') {
         combat.owned[1] = true;
+        combat.ammo[1] = WEAPONS[1].ammo; // refill on pickup
         combat.weapon = 1;
       } else if (pk.kind === 'shotgun') {
         combat.owned[2] = true;
+        combat.ammo[2] = WEAPONS[2].ammo; // refill on pickup
         combat.weapon = 2;
       }
       showToast(game.state, 'Picked up ' + pk.kind, 2);

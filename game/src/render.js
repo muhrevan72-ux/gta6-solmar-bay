@@ -26,6 +26,20 @@ export function pushQuad(out, a, b, c, d, col, alpha) {
   }
 }
 
+// Per-face shading: a cheap fake Lambert from a fixed sun
+// overhead. Top faces are brightest, the ground-facing bottom
+// darkest, ±X a touch brighter than ±Z — the same box reads as a
+// solid object instead of a flat colour.
+function faceShade(nx, ny, nz) {
+  if (ny > 0.5) return 1.0; // top
+  if (ny < -0.5) return 0.6; // bottom
+  if (Math.abs(nx) > 0.5) return 0.85; // ±X
+  return 0.75; // ±Z
+}
+function shadeCol(col, f) {
+  return [col[0] * f, col[1] * f, col[2] * f];
+}
+
 // Push one axis-aligned box centred at (x, y, z) with size
 // (sx, sy, sz). y is the box centre height.
 export function pushBox(out, x, y, z, sx, sy, sz, col, alpha) {
@@ -36,26 +50,69 @@ export function pushBox(out, x, y, z, sx, sy, sz, col, alpha) {
   const z0 = z - sz / 2;
   const z1 = z + sz / 2;
   // +X face
-  pushQuad(out, [x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0], col, alpha);
+  pushQuad(out, [x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0], shadeCol(col, 0.85), alpha);
   // -X face
-  pushQuad(out, [x0, y0, z1], [x0, y0, z0], [x0, y1, z0], [x0, y1, z1], col, alpha);
+  pushQuad(out, [x0, y0, z1], [x0, y0, z0], [x0, y1, z0], [x0, y1, z1], shadeCol(col, 0.85), alpha);
   // +Y top
-  pushQuad(out, [x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], col, alpha);
+  pushQuad(out, [x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], shadeCol(col, 1.0), alpha);
   // -Y bottom
-  pushQuad(out, [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], col, alpha);
+  pushQuad(out, [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], shadeCol(col, 0.6), alpha);
   // +Z face
-  pushQuad(out, [x1, y0, z1], [x0, y0, z1], [x0, y1, z1], [x1, y1, z1], col, alpha);
+  pushQuad(out, [x1, y0, z1], [x0, y0, z1], [x0, y1, z1], [x1, y1, z1], shadeCol(col, 0.75), alpha);
   // -Z face
-  pushQuad(out, [x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], col, alpha);
+  pushQuad(out, [x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], shadeCol(col, 0.75), alpha);
+}
+
+// Push a box rotated around the Y axis by `yaw` (radians, the
+// game's heading convention: forward = (sin yaw, cos yaw)). The
+// box's 8 corners are rotated around its centre, then the 6 faces
+// are emitted with shading from the ROTATED face normals, so a
+// rotated box is lit like the world around it. Used for vehicles,
+// people and anything else that faces a heading.
+export function pushBoxRot(out, x, y, z, sx, sy, sz, yaw, col, alpha) {
+  const s = Math.sin(yaw);
+  const c = Math.cos(yaw);
+  const hx = sx / 2;
+  const hy = sy / 2;
+  const hz = sz / 2;
+  const y0 = y - hy;
+  const y1 = y + hy;
+  // one corner: rotate the local (lx, lz) offset, translate by the centre
+  const corner = (lx, yy, lz) => [x + lx * c + lz * s, yy, z - lx * s + lz * c];
+  const c000 = corner(-hx, y0, -hz);
+  const c100 = corner(hx, y0, -hz);
+  const c110 = corner(hx, y1, -hz);
+  const c010 = corner(-hx, y1, -hz);
+  const c001 = corner(-hx, y0, hz);
+  const c101 = corner(hx, y0, hz);
+  const c111 = corner(hx, y1, hz);
+  const c011 = corner(-hx, y1, hz);
+  // local face normals, rotated by yaw (Y stays Y)
+  const nX = [c, 0, -s]; // local +X
+  const nZ = [s, 0, c]; // local +Z
+  // +X face
+  pushQuad(out, c100, c101, c111, c110, shadeCol(col, faceShade(nX[0], 0, nX[2])), alpha);
+  // -X face
+  pushQuad(out, c001, c000, c010, c011, shadeCol(col, faceShade(-nX[0], 0, -nX[2])), alpha);
+  // +Y top
+  pushQuad(out, c011, c111, c110, c010, shadeCol(col, 1.0), alpha);
+  // -Y bottom
+  pushQuad(out, c000, c100, c101, c001, shadeCol(col, 0.6), alpha);
+  // +Z face
+  pushQuad(out, c101, c001, c011, c111, shadeCol(col, faceShade(nZ[0], 0, nZ[2])), alpha);
+  // -Z face
+  pushQuad(out, c000, c100, c110, c010, shadeCol(col, faceShade(-nZ[0], 0, -nZ[2])), alpha);
 }
 
 // Build a Float32Array of triangle vertices from a box list.
-// Each box: { x, y, z, sx, sy, sz, c: [r,g,b], a? }.
+// Each box: { x, y, z, sx, sy, sz, c: [r,g,b], a?, yaw? } — a box
+// with a `yaw` is rotated around Y (see pushBoxRot).
 export function buildVertices(boxes) {
   const out = [];
   for (let i = 0; i < boxes.length; i++) {
     const b = boxes[i];
-    pushBox(out, b.x, b.y, b.z, b.sx, b.sy, b.sz, b.c, b.a);
+    if (b.yaw) pushBoxRot(out, b.x, b.y, b.z, b.sx, b.sy, b.sz, b.yaw, b.c, b.a);
+    else pushBox(out, b.x, b.y, b.z, b.sx, b.sy, b.sz, b.c, b.a);
   }
   return new Float32Array(out);
 }

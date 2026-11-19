@@ -1,6 +1,44 @@
 // Solmar Bay — WebAudio synth sound only (no audio files).
 // Node-safe: every method no-ops when there is no AudioContext.
 
+// Radio stations with ORIGINAL synth tracks (nothing copyrighted,
+// nothing from the leaders' games). Each song is a small pattern of
+// scale degrees over a root note; the sequencer below plays it.
+export const STATIONS = [
+  {
+    name: 'BAY FM', freq: '94.7', genre: 'Sunset Drive',
+    songs: [
+      { title: 'Golden Hour', artist: 'Marina Lights', root: 110, scale: [0, 3, 5, 7, 10], pattern: [0, 2, 4, 3, 2, 0, 1, 2], bpm: 96 },
+      { title: 'Coastal Cruise', artist: 'The Palms', root: 98, scale: [0, 2, 4, 7, 9], pattern: [0, 1, 2, 4, 3, 2, 1, 0], bpm: 104 },
+    ],
+  },
+  {
+    name: 'PALM 102.3', freq: '102.3', genre: 'Tropical House',
+    songs: [
+      { title: 'Coconut Sky', artist: 'DJ Frond', root: 130.8, scale: [0, 2, 4, 7, 9], pattern: [0, 2, 1, 4, 2, 0, 3, 1], bpm: 112 },
+      { title: 'Beachcomber', artist: 'The Palms', root: 123.5, scale: [0, 3, 5, 7, 10], pattern: [0, 1, 3, 2, 4, 3, 1, 0], bpm: 108 },
+    ],
+  },
+  {
+    name: 'NEON 89.1', freq: '89.1', genre: 'Electro',
+    songs: [
+      { title: 'Midnight Grid', artist: 'Volt Avenue', root: 87.3, scale: [0, 2, 3, 7, 8], pattern: [0, 0, 2, 0, 3, 0, 2, 4], bpm: 122 },
+      { title: 'Chrome Rain', artist: 'Volt Avenue', root: 92.5, scale: [0, 2, 3, 7, 10], pattern: [0, 3, 2, 1, 0, 1, 2, 3], bpm: 118 },
+    ],
+  },
+  {
+    name: 'CORAL 105.5', freq: '105.5', genre: 'Chill',
+    songs: [
+      { title: 'Slow Tide', artist: 'Marina Lights', root: 146.8, scale: [0, 2, 4, 7, 9], pattern: [0, 4, 2, 1, 0, 2, 3, 4], bpm: 80 },
+      { title: 'Harbour Lights', artist: 'DJ Frond', root: 138.6, scale: [0, 3, 5, 7, 10], pattern: [0, 2, 3, 4, 3, 2, 1, 2], bpm: 84 },
+    ],
+  },
+];
+
+// A song is 32 sequencer steps (4 bars of 8th notes); then the next
+// song on the station starts.
+export const SONG_STEPS = 32;
+
 export function createAudio() {
   const audio = {
     ctx: null,
@@ -9,6 +47,26 @@ export function createAudio() {
     engineGain: null,
     musicT: 0,
     sirenOn: false,
+    station: 0, // index into STATIONS
+    songIdx: 0,
+    step: 0, // sequencer step within the song (0..31)
+    stepT: 0, // seconds into the current step
+  };
+
+  // The station + song currently playing (for the HUD).
+  audio.currentSong = () => {
+    const st = STATIONS[audio.station];
+    return { station: st.name, freq: st.freq, genre: st.genre, song: st.songs[audio.songIdx] };
+  };
+
+  // R: change station (wired in main.js). Returns the new station
+  // so the caller can show a toast.
+  audio.nextStation = () => {
+    audio.station = (audio.station + 1) % STATIONS.length;
+    audio.songIdx = 0;
+    audio.step = 0;
+    audio.stepT = 0;
+    return audio.currentSong();
   };
 
   audio.ensure = () => {
@@ -84,16 +142,30 @@ export function createAudio() {
     }
   };
 
-  // Simple ambient bass loop: a note every beat.
+  // Radio sequencer: plays the current station's song as 8th-note
+  // steps (a lead note from the song's pattern + a bass note on the
+  // beat). The step counter advances even with no AudioContext —
+  // only tone() is ctx-guarded — so headless tests can verify the
+  // sequencer runs and songs change.
   audio.music = (dt) => {
-    if (!audio.ctx || audio.muted) return;
-    audio.musicT += dt;
-    if (audio.musicT > 0.5) {
-      audio.musicT = 0;
-      const notes = [55, 55, 65.4, 49];
-      const n = notes[Math.floor(Math.random() * notes.length)];
-      tone(n, 0.4, 'triangle', 0.06);
+    const now = audio.currentSong();
+    const song = now.song;
+    const stepDur = 60 / song.bpm / 2;
+    audio.stepT += dt;
+    if (audio.stepT < stepDur) return;
+    audio.stepT -= stepDur;
+    audio.step += 1;
+    if (audio.step >= SONG_STEPS) {
+      audio.step = 0;
+      audio.songIdx = (audio.songIdx + 1) % STATIONS[audio.station].songs.length;
+      return;
     }
+    if (!audio.ctx || audio.muted) return;
+    const degree = song.pattern[audio.step % song.pattern.length];
+    const semis = song.scale[degree % song.scale.length];
+    const freq = song.root * Math.pow(2, semis / 12) * 2;
+    tone(freq, stepDur * 0.9, 'triangle', 0.07);
+    if (audio.step % 4 === 0) tone(song.root, stepDur * 1.8, 'triangle', 0.06);
   };
 
   return audio;

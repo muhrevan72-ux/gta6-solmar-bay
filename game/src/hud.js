@@ -2,6 +2,12 @@
 // objective, speed, toasts, menus) + a 2D canvas minimap drawn
 // behind the menus too (the title screen must not show an empty box).
 
+import { currentSky } from './weather.js';
+import { CHAPTERS, RESPECT } from './config.js';
+import { respectLevel } from './state.js';
+import { policeListData } from './police.js';
+import { completionPct } from './missions.js';
+
 export function createHud(documentRef) {
   const doc = documentRef || (typeof document !== 'undefined' ? document : null);
   const hud = {
@@ -14,7 +20,7 @@ export function createHud(documentRef) {
     hud.wantedFlash = 1;
   };
   if (doc) {
-    const ids = ['cash', 'health', 'healthbar', 'armour', 'wanted', 'objective', 'speed', 'toast', 'chapter', 'weapon', 'bombs', 'relationship', 'minimap', 'menu', 'menu-title', 'menu-body', 'menu-hint'];
+    const ids = ['cash', 'health', 'healthbar', 'armour', 'wanted', 'objective', 'speed', 'toast', 'chapter', 'weapon', 'bombs', 'relationship', 'clock', 'minimap', 'menu', 'menu-title', 'menu-body', 'menu-hint', 'mission-panel', 'police-list', 'radio', 'carinfo', 'dialogue'];
     for (const id of ids) {
       hud.els[id] = doc.getElementById(id);
     }
@@ -52,7 +58,7 @@ export function updateHud(game) {
   }
   if (hud.els.weapon) {
     const w = game.combat ? game.combat : null;
-    setText(hud.els.weapon, w ? 'Weapon: ' + ['Pistol', 'SMG', 'Shotgun'][w.weapon] : '');
+    setText(hud.els.weapon, w ? weaponSlotsText(w) : '');
   }
   if (hud.els.bombs) {
     setText(hud.els.bombs, game.combat ? 'Bombs: ' + game.combat.bombs : '');
@@ -60,7 +66,143 @@ export function updateHud(game) {
   if (hud.els.relationship) {
     setText(hud.els.relationship, state.relationship > 0 ? 'Maya \u2665 ' + Math.round(state.relationship) + '%' : '');
   }
+  if (hud.els.clock && game.weather) {
+    const sky = currentSky(game.weather);
+    setText(hud.els.clock, 'Day ' + sky.day + ' · ' + sky.clock + ' · ' + sky.phase + ' · ' + sky.weather);
+  }
+  updateDensePanels(game);
   drawMinimap(game);
+}
+
+// Weapon slots with ammo counts (graphics pass): the current weapon
+// is bracketed, unowned slots are dimmed with a dash.
+export function weaponSlotsText(combat) {
+  const names = ['Pistol', 'SMG', 'Shotgun'];
+  return names.map((n, i) => {
+    if (!combat.owned[i]) return n + ' —';
+    const ammo = combat.ammo && combat.ammo[i] !== undefined ? combat.ammo[i] : Infinity;
+    const label = ammo === Infinity ? '∞' : String(ammo);
+    const slot = n + ' ' + label;
+    return i === combat.weapon ? '[' + slot + ']' : slot;
+  }).join('  ');
+}
+
+// ---- dense HUD panels (graphics pass, top-4 formula) ----
+
+// District name for a position.
+export function districtAt(x, z) {
+  if (x < -300) return 'Beach';
+  if (x > 300 && z < 0) return 'Harbour';
+  if (z > 200) return 'Suburbs';
+  if (x > 200 && z < -200) return 'Airport';
+  if (Math.abs(x) <= 150 && Math.abs(z) <= 150) return 'Downtown';
+  if (x >= 0 && z < 0) return 'Eastside';
+  if (x < 0 && z < 0) return 'Northside';
+  if (x >= 0) return 'Southside';
+  return 'West End';
+}
+
+// Mission panel data: chapter + stage + objective + next + respect
+// + location + completion. Pure, headless-testable.
+export function missionPanelData(game) {
+  const state = game.state;
+  const ch = state.chapter;
+  const rep = state.respect || 0;
+  const level = respectLevel(rep, RESPECT.levels);
+  const nextLevel = RESPECT.levels.find((l) => l.min > rep);
+  const repPct = nextLevel ? Math.round(((rep - level.min) / (nextLevel.min - level.min)) * 100) : 100;
+  const marker = game.missions ? currentMarker(game) : null;
+  const step = game.missions ? game.missions.step || 0 : 0;
+  if (ch > 5) {
+    return {
+      title: 'Free Roam', stage: 'Story complete', objective: 'Side jobs still pay.',
+      next: 'NEXT: —', respect: rep, levelName: level.name, repPct,
+      location: districtAt(game.player.x, game.player.z), completion: completionPct(game),
+    };
+  }
+  const chapter = CHAPTERS[ch - 1];
+  const nextChapter = CHAPTERS[ch];
+  return {
+    title: chapter.title,
+    stage: 'Stage ' + (step + 1) + (marker ? ' — ' + marker.label : ''),
+    objective: chapter.objective,
+    next: 'NEXT: ' + (nextChapter ? nextChapter.title : 'Free roam'),
+    respect: rep, levelName: level.name, repPct,
+    location: districtAt(game.player.x, game.player.z),
+    completion: completionPct(game),
+  };
+}
+
+// Car panel data while driving: name + condition (100 - damage).
+export function carInfoData(game) {
+  const veh = game.player.inVehicle;
+  if (!veh) return null;
+  return {
+    name: veh.name || 'Car',
+    condition: Math.max(0, 100 - (veh.damage || 0)),
+    speedKmh: Math.round(Math.abs(veh.speed || 0) * 3.6),
+  };
+}
+
+// Dialogue box data: the latest named-NPC message (Rico/Maya/Taxi
+// Co.), shown while it is less than 10s old (game time).
+export function dialogueData(game) {
+  const msgs = game.phone && game.phone.messages;
+  if (!msgs || !msgs.length) return null;
+  const m = msgs[msgs.length - 1];
+  if (game.state.time - (m.t || 0) > 10) return null;
+  const roles = { Rico: 'Fixer', Maya: 'Girlfriend', 'Taxi Co.': 'Dispatch' };
+  return { from: m.from, role: roles[m.from] || 'Contact', text: m.text };
+}
+
+// Radio panel data: station + song (null when there is no audio).
+export function radioData(game) {
+  if (!game.audio || !game.audio.currentSong) return null;
+  const now = game.audio.currentSong();
+  return { station: now.station, freq: now.freq, song: now.song.title, artist: now.song.artist };
+}
+
+function setPanel(el, html) {
+  if (!el) return;
+  if (!html) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  if (el.innerHTML !== html) el.innerHTML = html;
+}
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function updateDensePanels(game) {
+  const hud = game.hud;
+  const state = game.state;
+  // mission panel: chapter + stage + objective + next + respect + location
+  const mp = missionPanelData(game);
+  setPanel(hud.els['mission-panel'],
+    '<div class="mp-title">' + esc(mp.title) + '</div>' +
+    '<div>' + esc(mp.stage) + '</div>' +
+    '<div>' + esc(mp.objective) + '</div>' +
+    '<div class="mp-next">' + esc(mp.next) + '</div>' +
+    '<div class="mp-rep">REP ' + esc(mp.levelName) + ' · ' + mp.respect +
+    '<div class="mp-repbar"><div class="mp-repfill" style="width:' + mp.repPct + '%"></div></div></div>' +
+    '<div>' + esc(mp.location) + ' · ' + mp.completion + '% complete</div>');
+  // police response list: named units + distance + status
+  const units = policeListData(game);
+  setPanel(hud.els['police-list'], units.length === 0 ? null :
+    '<div class="pl-title">POLICE RESPONSE</div>' +
+    units.map((u) => '<div class="pl-row"><span>' + esc(u.name) + '</span><span>' + u.dist + 'm</span><span class="pl-status">' + esc(u.status) + '</span></div>').join(''));
+  // radio: station + song
+  const rd = radioData(game);
+  setPanel(hud.els.radio, rd ? '<div class="r-station">' + esc(rd.station) + ' ' + esc(rd.freq) + '</div><div>"' + esc(rd.song) + '" — ' + esc(rd.artist) + '</div><div>R to change · M mute</div>' : null);
+  // car info: name + condition, only while driving
+  const ci = carInfoData(game);
+  setPanel(hud.els.carinfo, ci ? '<div class="c-name">' + esc(ci.name) + '</div><div>Condition ' + ci.condition + '% · ' + ci.speedKmh + ' km/h</div>' : null);
+  // dialogue: latest named-NPC message
+  const dg = dialogueData(game);
+  setPanel(hud.els.dialogue, dg ? '<span class="d-from">' + esc(dg.from) + ' (' + esc(dg.role) + '):</span> ' + esc(dg.text) : null);
 }
 
 function chapterObjective(game) {
@@ -90,12 +232,13 @@ function currentMarker(game) {
 
 // 2D top-down minimap: roads, water, buildings, player, mission
 // marker, police blips, gang turf. Drawn every frame, including
-// behind the title menu.
-export function drawMinimap(game) {
+// behind the title menu. Optional ctx/size draw into another canvas
+// (the phone's big map).
+export function drawMinimap(game, ctx, size) {
   const hud = game.hud;
-  const ctx = hud && hud.minimapCtx;
+  ctx = ctx || (hud && hud.minimapCtx);
   if (!ctx) return;
-  const S = 200; // canvas pixels
+  const S = size || 200; // canvas pixels
   const W = 800; // world units
   const scale = S / W;
   const toX = (x) => (x + 400) * scale;

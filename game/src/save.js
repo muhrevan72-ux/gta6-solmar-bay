@@ -25,11 +25,15 @@ export function saveGame(game) {
   const p = game.player;
   const data = {
     cash: state.cash,
+    bank: state.bank || 0,
     chapter: state.chapter,
     health: state.health,
     armour: state.armour,
+    respect: state.respect || 0,
+    flags: state.flags || {},
     relationship: state.relationship,
     outfit: state.outfit,
+    garage: game.garage ? { owned: game.garage.owned } : { owned: [] },
     x: p.x,
     z: p.z,
     stats: state.stats,
