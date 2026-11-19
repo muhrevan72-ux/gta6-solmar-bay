@@ -1,70 +1,99 @@
-[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
-[![rank](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard)
-[![reward](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/reward.svg)](https://make.fun/bounty/gta6-01)
+# Solmar Bay — 3D voxel open-world crime game
 
-# Solmar Bay
+[![Make GTA 6](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
+[![Rank](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/rank.svg)](https://make.fun/bounty/gta6-01)
+[![Reward](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/reward.svg)](https://make.fun/bounty/gta6-01)
 
-An original 2D top-down open-world crime game, built for the make.fun
-bounty [Make GTA 6](https://make.fun/bounty/gta6-01). No Rockstar
-assets, no network needed: the whole game runs offline in a desktop
-browser from static files.
+An original 3D voxel open-world crime game, built for the
+[Make GTA 6](https://make.fun/bounty/gta6-01) bounty on make.fun.
+Nothing from Rockstar: our own city, story, art and sound.
 
-Play it live: https://muhrevan72-ux.github.io/gta6-solmar-bay/game/
-
-## The game
-
-You arrive in Solmar Bay with nothing but a pair of legs. Steal cars,
-outrun the police, earn cash, and work your way through five story
-missions — from your first joyride to the big one.
-
-- **A living city:** downtown streets, a beach road, traffic AI and
-  pedestrians going about their day.
-- **On foot and behind the wheel:** walk, run, steal any car you
-  find, and drive it like you stole it.
-- **Wanted level 0–5:** the more chaos you cause, the harder the
-  police come after you — patrol cars and officers on foot. Get
-  busted and you wake up at the hospital, 20% lighter.
-- **5 story missions:** First Wheels ($200), The Package ($400),
-  Getaway ($500), Night Run ($600), The Big One ($1,500) — plus
-  courier jobs for extra cash.
-- **HUD + minimap:** speed, cash, wanted stars, mission tracker and
-  a live minimap.
-- **Save:** progress is saved in your browser (localStorage).
-- **Sound:** synthesized WebAudio effects and engine hum, no audio
-  files needed.
+**Solmar Bay** is a sun-soaked coastal voxel city — downtown towers,
+a beach, a harbour, suburbs, an airport and a highway loop — rendered
+with raw WebGL1 (no libraries) in a blocky Minecraft/Roblox style,
+with a third-person GTA-like camera.
 
 ## How to play
 
-Open `game/index.html` in a desktop browser (Chrome recommended), or
-play the live version linked above.
+Serve the game and open it in a desktop browser:
+
+```sh
+node serve.ts
+# then open http://localhost:8080
+```
+
+Or just open `game/index.html` directly — the game is plain static
+files, no build step, no network.
+
+### Controls
 
 | Key | Action |
 | --- | --- |
-| WASD / arrows | Move on foot, drive |
-| E | Enter / exit a car |
-| Space | Handbrake |
-| P | Pause |
+| WASD | Move on foot / drive |
+| Mouse drag | Orbit the camera |
+| Mouse wheel | Zoom |
+| Shift | Run |
+| E | Enter / exit car, bike, boat, plane |
+| F | Punch |
+| Click | Shoot (crosshair) |
+| 1 / 2 / 3 | Pistol / SMG / Shotgun |
+| G | Throw a bomb |
+| Space | Handbrake (driving) / parachute (falling) |
+| Plane | W/S throttle, Arrow keys pitch, A/D turn |
+| Esc | Pause |
 | M | Mute |
 
-## Screenshots
+## What's in the game
 
-Real gameplay renders, in `screenshots/`:
-
-- `1-chase.jpg` — police chase, 3 wanted stars, Getaway mission
-- `2-drive.jpg` — driving downtown, First Wheels mission
-- `3-beach.png` — beach road, Night Run mission
-- `4-title.jpg` — title screen over the living city
+- **Open voxel world** (~800×800): downtown skyline, beach with
+  animated water, harbour with docks and containers, suburbs,
+  airport with a runway, and a highway loop.
+- **Vehicles**: cars, fast motorbikes, boats on the water, and a
+  flyable airplane — plus a parachute for bailing out mid-air.
+- **Weapons**: pistol (start), SMG and shotgun pickups, throwable
+  bombs. Killed peds and cops drop cash ($10–$50).
+- **Wanted system**: 0–5 stars. Police cars chase and ram, foot
+  cops chase and grab you. Lose the heat to drop stars. Getting
+  busted means the hospital and a fine.
+- **Story — 5 chapters**: First Wheels ($200), The Package ($400),
+  Getaway ($500), Night Run ($600), The Big One ($1,500), with
+  chapter titles and story text.
+- **Side jobs**: repeatable taxi fares, courier deliveries and time
+  trials from green markers, with cash rewards.
+- **Traffic and pedestrians**: NPC cars drive the road network,
+  pedestrians walk the sidewalks and flee from danger.
+- **HUD + minimap**: cash, health, armour, wanted stars, weapon and
+  ammo, speed, objective text, and a live top-down minimap.
+- **Save**: progress (cash, chapter, position) in localStorage.
+- **Sound**: WebAudio synth — engine hum, sirens, gunshots,
+  explosions, mission jingles, ambient bass.
 
 ## Structure
 
-- `main.ts` — entrypoint (Node 22) for the make.fun harness
-- `game/index.html` — the game page
-- `game/src/` — the game source (~2,500 lines, 16 modules: world,
-  vehicles, pedestrians, player, police, missions, combat, audio,
-  HUD, render, save, state, shots, input, config, main)
-- `screenshots/` — 4 real gameplay screenshots (1280×720)
-- `vendor/makefun-game.ts` — make.fun kit file, unchanged
+```
+game/
+  index.html        canvas + HUD
+  src/
+    config.js       tuning + palette
+    render.js       raw WebGL1 engine (shaders, boxes, camera)
+    world.js        voxel city generation + collision
+    input.js        keyboard + mouse
+    shots.js        third-person camera
+    state.js        game state + progression
+    player.js       on-foot movement, parachute
+    vehicles.js     cars, bikes, boats, plane, traffic, stealing
+    pedestrians.js  ped AI
+    police.js       wanted level + police AI
+    missions.js     5 chapters + side missions
+    combat.js       weapons, bombs, cash drops, pickups
+    hud.js          HUD + minimap
+    audio.js        WebAudio synth
+    save.js         localStorage save/load
+    main.js         game loop + wiring
+main.ts             entrypoint (hands the game in)
+screenshots/       4 real renders of the game
+```
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
