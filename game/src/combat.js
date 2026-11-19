@@ -1,275 +1,333 @@
-// Solmar Bay — combat: punch, hitscan weapons (pistol/SMG/shotgun),
-// throwable bombs, cash drops for kills, health/armour/wrench/
-// weapon pickups. Killing raises wanted through the crime table.
+// Solmar Bay — combat: punch, hitscan pistol / SMG / shotgun,
+// throwable bombs, cash drops ($10–$50) from kills, health / armour /
+// wrench pickups, and damage to the player (which can bust them).
 
-import { TUNE, clamp, dist } from './config.js';
-import { collides } from './world.js';
+import { TUNE, clamp, dist2 } from './config.js';
+import { addCash, showToast } from './state.js';
+import { collideCircle } from './world.js';
+
+export const WEAPONS = [
+  { id: 'pistol', name: 'Pistol', damage: TUNE.pistolDamage, range: 60, rate: 0.28, spread: 0.02, pellets: 1 },
+  { id: 'smg', name: 'SMG', damage: TUNE.smgDamage, range: 55, rate: 0.09, spread: 0.06, pellets: 1 },
+  { id: 'shotgun', name: 'Shotgun', damage: TUNE.shotgunDamage, range: 30, rate: 0.7, spread: 0.12, pellets: 6 },
+];
 
 export function createCombat() {
   return {
-    pickups: [], // {kind, x, z, amount}
-    cashDrops: [], // {x, z, amount, t}
-    bombs: [], // {x, z, y, vx, vz, fuse}
-    shootT: 0,
+    weapon: 0, // index into WEAPONS
+    owned: [true, false, false], // pistol owned; smg/shotgun are pickups
+    bombs: 3,
+    bombCooldown: 0,
+    shootCooldown: 0,
+    punchCooldown: 0,
+    bombWentOff: false, // one-frame flag so peds flee
+    cashDrops: [], // { x, z, amount, t }
+    pickups: [], // { x, z, kind: health|armour|wrench|smg|shotgun, t }
+    bombsActive: [], // { x, y, z, vx, vy, vz, t }
   };
 }
 
-export function seedPickups(game) {
-  const c = game.combat;
-  const spots = [
-    { kind: 'health', x: -40, z: 40 }, { kind: 'health', x: 120, z: -120 },
-    { kind: 'armour', x: 40, z: -40 }, { kind: 'armour', x: -120, z: 120 },
-    { kind: 'wrench', x: 170, z: 110 }, { kind: 'wrench', x: -90, z: 210 },
-    { kind: 'smg', x: 100, z: 100 }, { kind: 'shotgun', x: -200, z: 300 },
-    { kind: 'bomb', x: 60, z: 60 }, { kind: 'bomb', x: -60, z: -60 },
-    { kind: 'health', x: -330, z: 0 }, { kind: 'armour', x: 300, z: -300 },
-  ];
-  for (const s of spots) c.pickups.push({ kind: s.kind, x: s.x, z: s.z, amount: s.kind === 'smg' ? 60 : s.kind === 'shotgun' ? 12 : s.kind === 'bomb' ? 3 : 0 });
+export function spawnPickup(game, x, z, kind) {
+  game.combat.pickups.push({ x, z, kind, t: 0 });
 }
 
-function rayBlocked(city, x0, z0, x1, z1) {
-  const steps = Math.ceil(dist(x0, z0, x1, z1) / 4);
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps;
-    if (collides(city, x0 + (x1 - x0) * t, z0 + (z1 - z0) * t, 0.5)) return true;
-  }
-  return false;
+export function dropCash(game, x, z, amount) {
+  game.combat.cashDrops.push({ x, z, amount, t: 0 });
 }
 
-// All shootable targets: peds, gang members, foot cops.
-export function shootTargets(game) {
-  const out = [];
-  for (const p of game.peds.list) if (p.alive) out.push({ x: p.x, z: p.z, ref: p, kind: 'ped' });
-  if (game.gangs) for (const m of game.gangs.members) if (m.alive) out.push({ x: m.x, z: m.z, ref: m, kind: 'gang' });
-  for (const c of game.police.cops) if (c.alive) out.push({ x: c.x, z: c.z, ref: c, kind: 'cop' });
-  return out;
-}
-
-// Damage a ped/gang member/cop. Returns 'killed' when it dies.
-export function damageTarget(game, target, dmg, cause) {
-  const ref = target.ref;
-  ref.health -= dmg;
-  // a gang member hit turns its whole gang hostile
-  if (target.kind === 'gang' && game.gangs && game.gangs.onMemberHit) {
-    game.gangs.onMemberHit(game, ref);
-  }
-  if (ref.health > 0) return 'hit';
-  ref.alive = false;
+// Damage the player (armour absorbs first). Health 0 = busted.
+export function damagePlayer(game, amount) {
   const state = game.state;
-  state.stats.kills += 1;
-  // cash drop $10–$50
-  const cash = 10 + Math.floor(Math.random() * 41);
-  game.combat.cashDrops.push({ x: ref.x, z: ref.z, amount: cash, t: 0 });
-  if (target.kind === 'ped') {
-    if (game.police) game.police.commitCrime(game, cause === 'bomb' ? 'explosion' : 'killPed');
-    if (game.peds && game.peds.fleeFrom) game.peds.fleeFrom(ref.x, ref.z, 25);
-  } else if (target.kind === 'gang') {
-    if (game.police) game.police.commitCrime(game, cause === 'bomb' ? 'explosion' : 'killGang');
-  } else if (target.kind === 'cop') {
-    if (game.police) game.police.commitCrime(game, 'killCop');
+  if (state.mode !== 'playing') return;
+  let left = amount;
+  if (state.armour > 0) {
+    const absorbed = Math.min(state.armour, left);
+    state.armour -= absorbed;
+    left -= absorbed;
   }
-  return 'killed';
+  state.health -= left;
+  if (state.health <= 0) {
+    state.health = 0;
+    if (game.police) game.police.bustPlayer(game, 'You were beaten down');
+  }
 }
 
-// F punch: nearest target in front, within range. Cooldown gated `<= 0`.
-export function tryPunch(game) {
-  const state = game.state;
-  if (state.fCooldown > 0) return false;
-  state.fCooldown = TUNE.punchCooldown;
-  const p = game.player;
-  if (p.inVehicle) return false;
-  const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
-  let best = null, bd = TUNE.punchRange;
-  for (const t of shootTargets(game)) {
-    const d = dist(p.x, p.z, t.x, t.z);
-    if (d > bd) continue;
-    const dot = ((t.x - p.x) * fx + (t.z - p.z) * fz) / (d || 1);
-    if (dot < 0.3) continue;
-    best = t; bd = d;
-  }
-  if (!best) {
-    if (game.audio) game.audio.thud(300);
-    return true; // swung at air
-  }
-  if (game.audio) game.audio.thud(500);
-  if (best.kind === 'ped' && game.police) game.police.commitCrime(game, 'punchPed');
-  return damageTarget(game, best, TUNE.punchDamage, 'punch');
+export function healPlayer(game, amount) {
+  game.state.health = clamp(game.state.health + amount, 0, 100);
 }
 
-// Mouse click / auto-fire: hitscan from the camera centre crosshair.
-export function tryShoot(game) {
-  const state = game.state;
+// Punch: hits the nearest ped / gang member / cop in front, 2.5 range.
+export function punch(game) {
   const combat = game.combat;
-  if (combat.shootT > 0) return false;
-  const cd = state.weapon === 'smg' ? TUNE.shootCooldownSmg
-    : state.weapon === 'shotgun' ? TUNE.shootCooldownShotgun
-    : TUNE.shootCooldownPistol;
-  combat.shootT = cd;
+  if (combat.punchCooldown > 0) return false;
+  combat.punchCooldown = 0.45;
   const p = game.player;
-  if (p.inVehicle) return false;
-  // spend ammo (pistol is infinite)
-  if (state.weapon === 'smg') {
-    if (state.ammo.smg <= 0) { state.weapon = 'pistol'; return false; }
-    state.ammo.smg -= 1;
-  } else if (state.weapon === 'shotgun') {
-    if (state.ammo.shotgun <= 0) { state.weapon = 'pistol'; return false; }
-    state.ammo.shotgun -= 1;
+  const fx = Math.sin(p.heading);
+  const fz = Math.cos(p.heading);
+  let hit = false;
+  const tryHit = (x, z) => {
+    const dx = x - p.x;
+    const dz = z - p.z;
+    const d = Math.hypot(dx, dz);
+    if (d > 3 || d < 0.01) return false;
+    const dot = (dx * fx + dz * fz) / d;
+    return dot > 0.3;
+  };
+  for (const ped of game.peds) {
+    if (!ped.alive || !tryHit(ped.x, ped.z)) continue;
+    killPed(game, ped, 'punchPed');
+    hit = true;
+    break;
   }
-  const cam = game.camera;
-  const eye = cam.eye;
-  const tx = cam.target[0], ty = cam.target[1], tz = cam.target[2];
-  let dx = tx - eye[0], dy = ty - eye[1], dz = tz - eye[2];
-  const dl = Math.hypot(dx, dy, dz) || 1;
-  dx /= dl; dy /= dl; dz /= dl;
-  const range = TUNE.shootRange;
-  const spread = state.weapon === 'shotgun' ? 0.09 : state.weapon === 'smg' ? 0.03 : 0.012;
-  const acc = 1 + (state.accuracyBonus || 0);
-  const shots = state.weapon === 'shotgun' ? 5 : 1;
-  let hitAny = false;
-  for (let s = 0; s < shots; s++) {
-    const jx = (Math.random() - 0.5) * spread * 2 / acc;
-    const jz = (Math.random() - 0.5) * spread * 2 / acc;
-    const dirx = dx + jx, dirz = dz + jz;
-    let best = null, bd = range;
-    for (const t of shootTargets(game)) {
-      const vx = t.x - eye[0], vz = t.z - eye[2];
-      const along = vx * dirx + vz * dirz;
-      if (along < 1 || along > bd) continue;
-      const perp = Math.abs(vx * dirz - vz * dirx);
-      if (perp > 1.6) continue;
-      if (rayBlocked(game.city, eye[0], eye[2], t.x, t.z)) continue;
-      best = t; bd = along;
-    }
-    if (best) {
-      const dmg = state.weapon === 'shotgun' ? 22 : state.weapon === 'smg' ? 14 : 34;
-      damageTarget(game, best, dmg, 'shoot');
-      hitAny = true;
+  if (!hit && game.gangs) {
+    for (const m of game.gangs.members) {
+      if (!m.alive || !tryHit(m.x, m.z)) continue;
+      killGangMember(game, m, 'punchPed');
+      hit = true;
+      break;
     }
   }
-  if (game.audio) game.audio.shot(state.weapon);
-  return hitAny;
+  if (hit && game.audio) game.audio.play('punch');
+  return hit;
 }
 
-// G: throw a bomb. Cooldown gated `<= 0`.
-export function throwBomb(game) {
-  const state = game.state;
-  if (state.gCooldown > 0) return false;
-  if (state.bombs <= 0) return false;
+export function killPed(game, ped, crime) {
+  if (!ped.alive) return;
+  ped.alive = false;
+  game.state.stats.pedsKilled += 1;
+  if (game.police && game.police.commitCrime) game.police.commitCrime(game, crime || 'killPed');
+  const amount = TUNE.cashDropMin + Math.floor(Math.random() * (TUNE.cashDropMax - TUNE.cashDropMin));
+  dropCash(game, ped.x, ped.z, amount);
+  // respawn a fresh ped elsewhere (handled by updateCombat)
+  game._respawnPed = true;
+}
+
+export function killGangMember(game, member, crime) {
+  if (!member.alive) return;
+  member.alive = false;
+  if (game.police && game.police.commitCrime) game.police.commitCrime(game, crime || 'killGang');
+  const amount = TUNE.cashDropMin + Math.floor(Math.random() * (TUNE.cashDropMax - TUNE.cashDropMin));
+  dropCash(game, member.x, member.z, amount);
+}
+
+export function killCop(game, cop) {
+  // foot cop object: remove from the police list
+  const list = game.police.footCops;
+  const i = list.indexOf(cop);
+  if (i >= 0) list.splice(i, 1);
+  if (game.police && game.police.commitCrime) game.police.commitCrime(game, 'killCop');
+  dropCash(game, cop.x, cop.z, 50);
+  game.state.stats.copsKilled += 1;
+}
+
+// Hitscan shot from the camera crosshair: ray from the player
+// forward; nearest living target within range and a narrow cone.
+export function shoot(game) {
+  const combat = game.combat;
+  const weapon = WEAPONS[combat.weapon];
+  if (!combat.owned[combat.weapon]) return false;
+  if (combat.shootCooldown > 0) return false;
+  combat.shootCooldown = weapon.rate;
   const p = game.player;
-  if (p.inVehicle) return false;
-  state.gCooldown = TUNE.bombCooldown;
-  state.bombs -= 1;
-  game.combat.bombs.push({
-    x: p.x, z: p.z, y: 1.5,
-    vx: Math.sin(p.heading) * 14, vz: Math.cos(p.heading) * 14,
-    fuse: 1.1,
-  });
-  if (game.audio) game.audio.blip(300, 0.1);
+  const camYaw = game.camera.yaw;
+  const fx = Math.sin(camYaw);
+  const fz = Math.cos(camYaw);
+  let best = null;
+  let bestD = weapon.range;
+  const consider = (x, z, kind, ref) => {
+    const dx = x - p.x;
+    const dz = z - p.z;
+    const d = Math.hypot(dx, dz);
+    if (d > weapon.range || d < 0.5) return;
+    const dot = (dx * fx + dz * fz) / d;
+    const spread = weapon.spread + (1 - dot) * 2;
+    if (dot < 0.92) return;
+    if (d < bestD) {
+      bestD = d;
+      best = { kind, ref, d, spread };
+    }
+  };
+  for (const ped of game.peds) if (ped.alive) consider(ped.x, ped.z, 'ped', ped);
+  if (game.gangs) for (const m of game.gangs.members) if (m.alive) consider(m.x, m.z, 'gang', m);
+  if (game.police) for (const c of game.police.footCops) consider(c.x, c.z, 'cop', c);
+  if (game.training) for (const t of game.training.targets) if (t.alive) consider(t.x, t.z, 'target', t);
+  if (game.audio) game.audio.play('shoot');
+  if (!best) return true; // shot fired, nothing hit
+  const damage = weapon.damage * weapon.pellets;
+  if (best.kind === 'ped') killPed(game, best.ref, 'killPed');
+  else if (best.kind === 'gang') killGangMember(game, best.ref, 'killGang');
+  else if (best.kind === 'cop') killCop(game, best.ref);
+  else if (best.kind === 'target' && game.training) game.training.hitTarget(game, best.ref, damage);
   return true;
 }
 
-export function updateCombat(dt, game) {
+// Throw a bomb toward the crosshair. It arcs, lands, explodes.
+export function throwBomb(game) {
   const combat = game.combat;
-  const state = game.state;
-  if (combat.shootT > 0) combat.shootT -= dt;
-  // bombs tick and explode
-  for (let i = combat.bombs.length - 1; i >= 0; i--) {
-    const b = combat.bombs[i];
-    b.fuse -= dt;
-    b.x += b.vx * dt;
-    b.z += b.vz * dt;
-    b.y += 3 * dt;
-    if (b.fuse <= 0) {
-      combat.bombs.splice(i, 1);
-      explode(game, b.x, b.z);
-    }
-  }
-  // cash drops expire after 25s
-  for (let i = combat.cashDrops.length - 1; i >= 0; i--) {
-    combat.cashDrops[i].t += dt;
-    if (combat.cashDrops[i].t > 25) combat.cashDrops.splice(i, 1);
-  }
-  // pickup collection (walk over)
+  if (combat.bombs <= 0 || combat.bombCooldown > 0) return false;
+  combat.bombs -= 1;
+  combat.bombCooldown = 0.6;
   const p = game.player;
-  if (p.inVehicle) return;
-  for (let i = combat.pickups.length - 1; i >= 0; i--) {
-    const pk = combat.pickups[i];
-    if (dist(p.x, p.z, pk.x, pk.z) < 2.2) {
-      combat.pickups.splice(i, 1);
-      collectPickup(game, pk);
-    }
-  }
-  for (let i = combat.cashDrops.length - 1; i >= 0; i--) {
-    const cd = combat.cashDrops[i];
-    if (dist(p.x, p.z, cd.x, cd.z) < 2.2) {
-      combat.cashDrops.splice(i, 1);
-      state.cash += cd.amount;
-      if (game.audio) game.audio.blip(880, 0.08);
-    }
-  }
+  const yaw = game.camera.yaw;
+  combat.bombsActive.push({
+    x: p.x,
+    y: (p.y || 0) + 1.5,
+    z: p.z,
+    vx: Math.sin(yaw) * 18,
+    vy: 6,
+    vz: Math.cos(yaw) * 18,
+    t: 0,
+  });
+  if (game.audio) game.audio.play('throw');
+  return true;
 }
 
-function explode(game, x, z) {
-  const state = game.state;
-  if (game.audio) game.audio.boom();
-  game.flashT = 0.12;
-  // damage every target in the blast radius
+function explodeBomb(game, bomb) {
+  const combat = game.combat;
+  combat.bombWentOff = true;
+  if (game.audio) game.audio.play('explosion');
   let victims = 0;
-  for (const t of shootTargets(game)) {
-    if (dist(x, z, t.x, t.z) < TUNE.bombRadius) {
-      damageTarget(game, t, TUNE.bombDamage, 'bomb');
+  const blast = (x, z) => dist2(x, z, bomb.x, bomb.z) < TUNE.bombRadius * TUNE.bombRadius;
+  for (const ped of game.peds) {
+    if (ped.alive && blast(ped.x, ped.z)) {
+      killPed(game, ped, 'explosion');
       victims += 1;
     }
   }
-  // self-damage up close
+  if (game.gangs) {
+    for (const m of game.gangs.members) {
+      if (m.alive && blast(m.x, m.z)) {
+        killGangMember(game, m, 'explosion');
+        victims += 1;
+      }
+    }
+  }
+  if (game.police) {
+    for (const c of [...game.police.footCops]) {
+      if (blast(c.x, c.z)) {
+        killCop(game, c);
+        victims += 1;
+      }
+    }
+    for (const car of game.police.copCars) {
+      if (blast(car.x, car.z)) {
+        car.damage = 100;
+        car.wrecked = true;
+      }
+    }
+  }
+  // the player's own bomb can hurt the player too
   const p = game.player;
-  const pd = dist(x, z, p.x, p.z);
-  if (!p.inVehicle && pd < 6 && game.hurtPlayer) game.hurtPlayer(30, 'bomb');
-  if (p.inVehicle && dist(x, z, p.inVehicle.x, p.inVehicle.z) < TUNE.bombRadius) {
-    p.inVehicle.damage += 60;
+  if (dist2(p.x, p.z, bomb.x, bomb.z) < 36) {
+    damagePlayer(game, 40);
   }
-  if (victims > 0 && game.police) game.police.commitCrime(game, victims >= 3 ? 'massRampage' : 'explosion');
-  if (game.peds && game.peds.fleeFrom) game.peds.fleeFrom(x, z, 40);
-}
-
-function collectPickup(game, pk) {
-  const state = game.state;
-  if (pk.kind === 'health') {
-    state.health = Math.min(100, state.health + 40);
-  } else if (pk.kind === 'armour') {
-    state.armour = Math.min(100, state.armour + 40);
-  } else if (pk.kind === 'wrench') {
-    const v = game.player.inVehicle;
-    if (v) v.damage = Math.max(0, v.damage - 50);
-  } else if (pk.kind === 'smg') {
-    state.ammo.smg += pk.amount;
-    state.weapon = 'smg';
-  } else if (pk.kind === 'shotgun') {
-    state.ammo.shotgun += pk.amount;
-    state.weapon = 'shotgun';
-  } else if (pk.kind === 'bomb') {
-    state.bombs += pk.amount;
+  if (victims >= 2 && game.police) {
+    game.police.explosionKills += 1;
   }
-  if (game.audio) game.audio.blip(880, 0.08);
-}
-
-const PICKUP_COLORS = {
-  health: [1, 0.25, 0.3], armour: [0.3, 0.6, 1], wrench: [0.9, 0.9, 0.9],
-  smg: [0.9, 0.7, 0.2], shotgun: [0.9, 0.5, 0.2], bomb: [0.2, 0.2, 0.25],
-};
-
-export function drawCombat(renderer, game) {
-  const t = game.time;
-  for (const pk of game.combat.pickups) {
-    const bob = Math.sin(t * 3 + pk.x) * 0.25;
-    renderer.box(pk.x, 1 + bob, pk.z, 1.1, 1.1, 1.1, PICKUP_COLORS[pk.kind] || [1, 1, 1], 1, 0, t * 0.8, 0);
-  }
-  for (const cd of game.combat.cashDrops) {
-    renderer.box(cd.x, 0.5 + Math.sin(t * 4 + cd.x) * 0.15, cd.z, 0.9, 0.4, 0.6, [0.2, 0.9, 0.3], 1, 0, 0, 0);
-  }
-  for (const b of game.combat.bombs) {
-    renderer.box(b.x, b.y, b.z, 0.7, 0.7, 0.7, [0.15, 0.15, 0.18], 1, 0, t * 5, 0);
+  if (game.police && game.police.commitCrime && victims > 0) {
+    game.police.commitCrime(game, 'explosion');
   }
 }
 
-export { clamp };
+export function updateCombat(game, dt) {
+  const combat = game.combat;
+  combat.bombWentOff = false;
+  combat.bombCooldown = Math.max(0, combat.bombCooldown - dt);
+  combat.shootCooldown = Math.max(0, combat.shootCooldown - dt);
+  combat.punchCooldown = Math.max(0, combat.punchCooldown - dt);
+
+  // bombs arc and explode on landing
+  for (let i = combat.bombsActive.length - 1; i >= 0; i--) {
+    const b = combat.bombsActive[i];
+    b.t += dt;
+    b.vy -= 22 * dt;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+    b.z += b.vz * dt;
+    if (b.y <= 0 || b.t > 3) {
+      combat.bombsActive.splice(i, 1);
+      explodeBomb(game, b);
+    }
+  }
+
+  // cash drops + pickups: walk over to collect
+  const p = game.player;
+  for (let i = combat.cashDrops.length - 1; i >= 0; i--) {
+    const d = combat.cashDrops[i];
+    d.t += dt;
+    if (d.t > 30) {
+      combat.cashDrops.splice(i, 1);
+      continue;
+    }
+    if (dist2(p.x, p.z, d.x, d.z) < TUNE.pickupRadius * TUNE.pickupRadius) {
+      addCash(game.state, d.amount);
+      showToast(game.state, '+$' + d.amount, 1.5);
+      combat.cashDrops.splice(i, 1);
+    }
+  }
+  for (let i = combat.pickups.length - 1; i >= 0; i--) {
+    const pk = combat.pickups[i];
+    pk.t += dt;
+    if (pk.t > 60) {
+      combat.pickups.splice(i, 1);
+      continue;
+    }
+    if (dist2(p.x, p.z, pk.x, pk.z) < TUNE.pickupRadius * TUNE.pickupRadius) {
+      if (pk.kind === 'health') healPlayer(game, 50);
+      else if (pk.kind === 'armour') game.state.armour = clamp(game.state.armour + 50, 0, 100);
+      else if (pk.kind === 'wrench' && p.inVehicle) {
+        p.inVehicle.damage = Math.max(0, p.inVehicle.damage - 50);
+        p.inVehicle.wrecked = false;
+      } else if (pk.kind === 'smg') {
+        combat.owned[1] = true;
+        combat.weapon = 1;
+      } else if (pk.kind === 'shotgun') {
+        combat.owned[2] = true;
+        combat.weapon = 2;
+      }
+      showToast(game.state, 'Picked up ' + pk.kind, 2);
+      combat.pickups.splice(i, 1);
+    }
+  }
+
+  // keep the city crowded: respawn killed peds elsewhere
+  if (game._respawnPed) {
+    game._respawnPed = false;
+    let alive = 0;
+    for (const ped of game.peds) if (ped.alive) alive += 1;
+    if (alive < TUNE.pedCap) {
+      const x = -280 + Math.random() * 560;
+      const z = -280 + Math.random() * 560;
+      const fixed = collideCircle(game.city, x, z, 0.6);
+      game.peds.push({
+        id: game.peds.length,
+        x: fixed.x, z: fixed.z,
+        heading: Math.random() * Math.PI * 2,
+        targetHeading: 0,
+        speed: 1.5, baseSpeed: 1.5, fleeing: 0, group: 0,
+        skin: [0.9, 0.7, 0.5], shirt: [0.2, 0.5, 0.9], pants: [0.25, 0.35, 0.6],
+        wanderT: 2, bob: 0, alive: true,
+      });
+    }
+  }
+
+  // ramming: a fast car hitting a ped kills them (a crime)
+  if (p.inVehicle && Math.abs(p.inVehicle.speed) > 6) {
+    const veh = p.inVehicle;
+    for (const ped of game.peds) {
+      if (!ped.alive) continue;
+      if (dist2(ped.x, ped.z, veh.x, veh.z) < 6) {
+        killPed(game, ped, 'killPed');
+      }
+    }
+    if (game.gangs) {
+      for (const m of game.gangs.members) {
+        if (m.alive && dist2(m.x, m.z, veh.x, veh.z) < 6) {
+          // gang members cannot be rammed (round-3 note): they dodge
+          m.x += (m.x - veh.x) * 0.5;
+          m.z += (m.z - veh.z) * 0.5;
+        }
+      }
+    }
+  }
+}

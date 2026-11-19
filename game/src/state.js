@@ -1,124 +1,79 @@
-// Solmar Bay — game state machine and player stats.
-
-export const MODES = {
-  menu: 'menu',
-  playing: 'playing',
-  paused: 'paused',
-  chapter: 'chapter',
-  busted: 'busted',
-  complete: 'complete',
-};
+// Solmar Bay — the shared game state: cash, health, wanted, progress,
+// stats and the mode machine (menu / playing / paused / busted / chapter).
 
 export function createState() {
   return {
-    mode: MODES.menu,
+    mode: 'menu', // menu | playing | paused | busted | chapter | gameover
     cash: 150,
     health: 100,
     armour: 0,
     wanted: 0,
-    chapter: 0,
-    chapterActive: false,
-    chapterTitle: '',
-    chapterText: '',
-    objective: 'Start a new game.',
-    weapon: 'pistol',
-    ammo: { smg: 0, shotgun: 0 },
-    bombs: 3,
+    chapter: 1,
+    chapterStep: 0,
+    chapterIntroShown: false,
+    time: 0, // seconds in-game
+    dayTime: 0.3, // 0..1 across the sunset
     stats: {
-      kills: 0, carsStolen: 0, missionsDone: 0, sideDone: 0,
-      distanceDriven: 0, timePlayed: 0, firesOut: 0, fares: 0,
-      catsPet: 0, datesDone: 0,
+      carsStolen: 0,
+      pedsKilled: 0,
+      copsKilled: 0,
+      missionsDone: 0,
+      cashEarned: 0,
+      distanceDriven: 0,
+      catsPet: 0,
+      firesOut: 0,
+      faresDone: 0,
     },
+    // chapter/mission runtime fields, filled by missions.js
+    mission: null,
+    sideJob: null,
     toast: '',
-    toastTimer: 0,
-    bustedReason: '',
-    outfit: { hair: 0, shirt: 0, pants: 0, shoes: 0 },
+    toastT: 0,
+    // dating / outfit / events runtime
     relationship: 0,
-    accuracyBonus: 0, // from shooting-range training
-    handlingBonus: 0, // from driving training
-    // cooldowns — ALWAYS gated with `<= 0`, never `!cooldown`
-    eCooldown: 0,
-    fCooldown: 0,
-    gCooldown: 0,
+    outfit: { hair: 0, shirt: 0, pants: 0, shoes: 0 },
+    flags: {},
   };
 }
 
-// fresh=true for a new game, false for a respawn after busted
-// (keeps cash/chapter progress, refills health).
 export function resetState(state, fresh) {
+  state.mode = 'playing';
+  state.health = 100;
+  state.armour = 0;
+  state.wanted = 0;
+  state.chapterStep = 0;
+  state.chapterIntroShown = false;
+  state.mission = null;
+  state.sideJob = null;
+  state.toast = '';
+  state.toastT = 0;
   if (fresh) {
-    const outfit = state.outfit;
-    const rel = state.relationship;
-    const acc = state.accuracyBonus;
-    const han = state.handlingBonus;
-    Object.assign(state, createState());
-    state.outfit = outfit;
-    state.relationship = rel;
-    state.accuracyBonus = acc;
-    state.handlingBonus = han;
-  } else {
-    state.health = 100;
-    state.armour = 0;
-    state.wanted = 0;
+    state.cash = 150;
+    state.chapter = 1;
+    state.time = 0;
+    state.relationship = 0;
+    state.outfit = { hair: 0, shirt: 0, pants: 0, shoes: 0 };
+    state.flags = {};
+    state.stats = {
+      carsStolen: 0,
+      pedsKilled: 0,
+      copsKilled: 0,
+      missionsDone: 0,
+      cashEarned: 0,
+      distanceDriven: 0,
+      catsPet: 0,
+      firesOut: 0,
+      faresDone: 0,
+    };
   }
-  state.eCooldown = 0;
-  state.fCooldown = 0;
-  state.gCooldown = 0;
-  state.mode = MODES.playing;
-}
-
-// Returns true if the player died from this damage.
-export function damagePlayer(state, amount) {
-  let left = amount;
-  if (state.armour > 0) {
-    const absorbed = Math.min(state.armour, left);
-    state.armour -= absorbed;
-    left -= absorbed;
-  }
-  state.health -= left;
-  if (state.health <= 0) {
-    state.health = 0;
-    return true;
-  }
-  return false;
-}
-
-export function healPlayer(state, amount) {
-  state.health = Math.min(100, state.health + amount);
-}
-
-export function addArmor(state, amount) {
-  state.armour = Math.min(100, state.armour + amount);
 }
 
 export function addCash(state, amount) {
   state.cash += amount;
+  if (amount > 0) state.stats.cashEarned += amount;
 }
 
-// Spend one round of the current weapon. Returns false if empty.
-export function spendAmmo(state) {
-  if (state.weapon === 'pistol') return true; // infinite
-  if (state.weapon === 'smg') {
-    if (state.ammo.smg <= 0) return false;
-    state.ammo.smg -= 1;
-    return true;
-  }
-  if (state.weapon === 'shotgun') {
-    if (state.ammo.shotgun <= 0) return false;
-    state.ammo.shotgun -= 1;
-    return true;
-  }
-  return true;
-}
-
-export function selectWeapon(state, weapon) {
-  if (weapon === 'smg' && state.ammo.smg <= 0 && state.weapon !== 'smg') return false;
-  if (weapon === 'shotgun' && state.ammo.shotgun <= 0 && state.weapon !== 'shotgun') return false;
-  state.weapon = weapon;
-  return true;
-}
-
-export function setToast(state, text, seconds) {
+export function showToast(state, text, seconds) {
   state.toast = text;
-  state.toastTimer = seconds || 3;
+  state.toastT = seconds || 3;
 }

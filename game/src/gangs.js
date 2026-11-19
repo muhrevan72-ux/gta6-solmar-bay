@@ -1,156 +1,151 @@
 // Solmar Bay — gangs. Two original rival gangs:
-// gold Bay Kings (downtown turf) vs teal Harbour Sharks (harbour turf).
-// Members hang out in groups in their turf; they turn hostile if the
-// player attacks them, fires a gun in their turf, or rolls in with
-// 3+ stars of heat. Killing one drops cash and raises wanted
-// (handled by combat.js via the crime table).
+// gold "Bay Kings" downtown vs teal "Harbour Sharks" at the harbour.
+// Members hang out in groups in their turf (shown on the minimap),
+// turn hostile if provoked or if the player causes trouble in their
+// turf, and drop cash when killed. Two gang side jobs plug into
+// missions.js via spawnHostile / countHostile.
 
-import { COL, dist, clamp, mulberry32 } from './config.js';
-import { moveWithCollision } from './world.js';
+import { TUNE, clamp, angleLerp, dist2 } from './config.js';
+import { collideCircle } from './world.js';
 
-export const TURFS = {
-  king: { x0: -150, x1: 150, z0: -150, z1: 150, color: COL.gangKing, name: 'Bay Kings' },
-  shark: { x0: -300, x1: -60, z0: 250, z1: 380, color: COL.gangShark, name: 'Harbour Sharks' },
+export const GANGS = {
+  kings: {
+    name: 'Bay Kings',
+    colour: [0.95, 0.75, 0.15],
+    turf: { x0: -150, x1: 150, z0: -150, z1: 150 },
+    home: { x: -100, z: -100 },
+  },
+  sharks: {
+    name: 'Harbour Sharks',
+    colour: [0.1, 0.7, 0.7],
+    turf: { x0: 230, x1: 400, z0: 220, z1: 400 },
+    home: { x: 320, z: 300 },
+  },
 };
 
 export function createGangs() {
-  const rng = mulberry32(999);
-  const members = [];
-  const hangouts = {
-    king: [[-100, -100], [100, 100], [0, -100], [-44, 44], [100, -100]],
-    shark: [[-200, 300], [-280, 330], [-120, 280], [290, 330], [-240, 350]],
+  const gangs = {
+    members: [],
+    hostility: { kings: 0, sharks: 0 },
   };
-  for (let i = 0; i < 14; i++) {
-    const h = hangouts.king[i % hangouts.king.length];
-    members.push(makeMember(rng, 'king', h[0], h[1]));
+  gangs.spawnHostile = (game, x, z, count) => spawnHostile(game, x, z, count);
+  gangs.countHostile = () => countHostile(gangs);
+  gangs.onMemberHit = (game, member) => onMemberHit(game, member);
+  // 25 members: 13 Kings downtown, 12 Sharks at the harbour
+  for (let i = 0; i < 13; i++) {
+    gangs.members.push(makeMember('kings', -140 + Math.random() * 280, -140 + Math.random() * 280, i));
   }
-  for (let i = 0; i < 11; i++) {
-    const h = hangouts.shark[i % hangouts.shark.length];
-    members.push(makeMember(rng, 'shark', h[0], h[1]));
+  for (let i = 0; i < 12; i++) {
+    gangs.members.push(makeMember('sharks', 240 + Math.random() * 150, 230 + Math.random() * 150, 13 + i));
   }
+  return gangs;
+}
+
+function makeMember(gangId, x, z, id) {
+  const g = GANGS[gangId];
   return {
-    members,
-    onMemberHit: (g, m) => onMemberHit(g, m),
-    spawnHostile: (g, gang, x, z, n) => spawnHostile(g, gang, x, z, n),
-    countHostile: (g, gang) => countHostile(g, gang),
+    id,
+    gang: gangId,
+    x, z,
+    heading: Math.random() * Math.PI * 2,
+    targetHeading: Math.random() * Math.PI * 2,
+    speed: 1.4 + Math.random(),
+    baseSpeed: 1.4 + Math.random(),
+    hostile: false,
+    alive: true,
+    colour: g.colour,
+    wanderT: 2 + Math.random() * 4,
+    bob: Math.random() * 6,
   };
 }
 
-function makeMember(rng, gang, hx, hz) {
-  return {
-    x: hx + (rng() - 0.5) * 8,
-    z: hz + (rng() - 0.5) * 8,
-    heading: rng() * Math.PI * 2,
-    health: 100, alive: true,
-    gang, hostile: 0,
-    homeX: hx, homeZ: hz,
-    tx: hx, tz: hz,
-    speed: 1.8 + rng() * 0.8,
-    phase: rng() * Math.PI * 2,
-    color: gang === 'king' ? COL.gangKing : COL.gangShark,
-  };
-}
-
-// A gang member was hit — its whole gang turns hostile for a while.
-export function onMemberHit(game, member) {
-  if (!game.gangs) return;
-  for (const m of game.gangs.members) {
-    if (m.alive && m.gang === member.gang) m.hostile = Math.max(m.hostile, 8);
+export function spawnHostile(game, x, z, count) {
+  const gangs = game.gangs;
+  for (let i = 0; i < count; i++) {
+    const gangId = Math.random() < 0.5 ? 'kings' : 'sharks';
+    const m = makeMember(gangId, x + (Math.random() * 20 - 10), z + (Math.random() * 20 - 10), gangs.members.length);
+    m.hostile = true;
+    gangs.members.push(m);
   }
 }
 
-// Spawn n hostile members of a gang at a spot (turf clear-out job).
-export function spawnHostile(game, gang, x, z, n) {
-  if (!game.gangs) return;
-  for (let i = 0; i < n; i++) {
-    const m = makeMember(Math.random, gang, x, z);
-    m.hostile = 999; // stays hostile until killed
-    m.x = x + (Math.random() - 0.5) * 10;
-    m.z = z + (Math.random() - 0.5) * 10;
-    game.gangs.members.push(m);
-  }
-}
-
-export function countHostile(game, gang) {
-  if (!game.gangs) return 0;
+export function countHostile(gangs) {
   let n = 0;
-  for (const m of game.gangs.members) {
-    if (m.alive && m.gang === gang && m.hostile > 0) n += 1;
-  }
+  for (const m of gangs.members) if (m.alive && m.hostile) n += 1;
   return n;
 }
 
-function inTurf(turf, x, z) {
-  return x >= turf.x0 && x <= turf.x1 && z >= turf.z0 && z <= turf.z1;
+// Attacking a gang member makes its gang hostile to the player.
+export function onMemberHit(game, member) {
+  const gangs = game.gangs;
+  gangs.hostility[member.gang] = 1;
+  member.hostile = true;
+  // nearby members of the same gang join in
+  for (const m of gangs.members) {
+    if (m.alive && m.gang === member.gang && dist2(m.x, m.z, member.x, member.z) < 400) {
+      m.hostile = true;
+    }
+  }
 }
 
-export function updateGangs(dt, game) {
-  const p = game.player;
+function inTurf(gangId, x, z) {
+  const t = GANGS[gangId].turf;
+  return x >= t.x0 && x <= t.x1 && z >= t.z0 && z <= t.z1;
+}
+
+export function updateGangs(game, dt) {
+  const gangs = game.gangs;
+  const player = game.player;
   const state = game.state;
-  // firing a gun inside a turf, or 3+ stars inside a turf, provokes it
-  for (const key of ['king', 'shark']) {
-    const turf = TURFS[key];
-    if (inTurf(turf, p.x, p.z)) {
-      if (game.combat && game.combat.shootT > 0.15) {
-        for (const m of game.gangs.members) {
-          if (m.alive && m.gang === key) m.hostile = Math.max(m.hostile, 5);
-        }
-      }
-      if (state.wanted >= 3) {
-        for (const m of game.gangs.members) {
-          if (m.alive && m.gang === key) m.hostile = Math.max(m.hostile, 5);
-        }
-      }
-    }
-  }
-  for (const m of game.gangs.members) {
+  for (const m of gangs.members) {
     if (!m.alive) continue;
-    if (m.hostile > 0) {
-      m.hostile -= dt;
-      // chase the player and punch up close
-      const d = dist(m.x, m.z, p.x, p.z);
-      if (p.inVehicle) {
-        // chase the car
-        const want = Math.atan2(p.x - m.x, p.z - m.z);
-        m.heading = want;
-        moveWithCollision(game.city, m, Math.sin(want) * 6 * dt, Math.cos(want) * 6 * dt, 0.8);
-        continue;
+    m.bob += m.speed * dt * 2;
+    // hostile members chase + punch the player; they only go hostile
+    // when provoked, or when the player has 3+ stars inside their turf
+    if (!m.hostile) {
+      if (state.wanted >= 3 && inTurf(m.gang, player.x, player.z)) {
+        m.hostile = true;
       }
-      const want = Math.atan2(p.x - m.x, p.z - m.z);
-      m.heading = want;
-      if (d > 2.2) {
-        moveWithCollision(game.city, m, Math.sin(want) * 5.5 * dt, Math.cos(want) * 5.5 * dt, 0.8);
-      } else if (game.hurtPlayer) {
-        game.hurtPlayer(12 * dt, 'gang');
+    }
+    if (m.hostile) {
+      const d = Math.hypot(player.x - m.x, player.z - m.z);
+      const desired = Math.atan2(player.x - m.x, player.z - m.z);
+      m.targetHeading = desired;
+      m.speed = 5.5;
+      if (d < 2) {
+        if (game.combat) game.combat.damagePlayer(game, 10 * dt);
       }
-      continue;
+      if (d > 80) m.hostile = false; // they give up far from the player
+    } else {
+      m.speed = m.baseSpeed;
+      m.wanderT -= dt;
+      if (m.wanderT <= 0) {
+        m.wanderT = 3 + Math.random() * 5;
+        // drift back toward the gang home
+        const home = GANGS[m.gang].home;
+        const toHome = Math.atan2(home.x - m.x, home.z - m.z);
+        m.targetHeading = Math.random() < 0.6 ? toHome + (Math.random() - 0.5) : Math.random() * Math.PI * 2;
+      }
     }
-    // calm: wander around the home hangout, inside the turf
-    const turf = TURFS[m.gang];
-    if (dist(m.x, m.z, m.tx, m.tz) < 2) {
-      m.tx = clamp(m.homeX + (Math.random() - 0.5) * 30, turf.x0 + 2, turf.x1 - 2);
-      m.tz = clamp(m.homeZ + (Math.random() - 0.5) * 30, turf.z0 + 2, turf.z1 - 2);
-    }
-    const want = Math.atan2(m.tx - m.x, m.tz - m.z);
-    let diff = want - m.heading;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    m.heading += clamp(diff, -3 * dt, 3 * dt);
-    const pace = 1 + 0.2 * Math.sin(game.time * 0.9 + m.phase);
-    moveWithCollision(game.city, m, Math.sin(m.heading) * m.speed * pace * dt, Math.cos(m.heading) * m.speed * pace * dt, 0.8);
+    m.heading = angleLerp(m.heading, m.targetHeading, 1 - Math.pow(0.001, dt));
+    const nx = m.x + Math.sin(m.heading) * m.speed * dt;
+    const nz = m.z + Math.cos(m.heading) * m.speed * dt;
+    const fixed = collideCircle(game.city, nx, nz, 0.6);
+    m.x = fixed.x;
+    m.z = fixed.z;
   }
 }
 
-export function drawGangs(renderer, game) {
-  for (const m of game.gangs.members) {
-    if (!m.alive) continue;
-    const bob = Math.sin(game.time * 6 + m.phase) * 0.05;
-    renderer.box(m.x, 0.4 + bob, m.z, 0.5, 0.8, 0.5, [0.2, 0.2, 0.22], 1, m.heading, 0, 0);
-    renderer.box(m.x, 1.15 + bob, m.z, 0.95, 0.75, 0.55, m.color, 1, m.heading, 0, 0);
-    renderer.box(m.x, 1.85 + bob, m.z, 0.58, 0.58, 0.58, [0.92, 0.75, 0.6], 1, m.heading, 0, 0);
-    if (m.hostile > 0) {
-      // red ring above hostile members
-      renderer.box(m.x, 2.6 + bob, m.z, 0.9, 0.25, 0.9, [1, 0.15, 0.15], 0.9, 0, game.time * 2, 0);
-    }
-  }
+export function gangBoxes(m) {
+  const bobY = Math.sin(m.bob) * 0.05;
+  const boxes = [];
+  boxes.push({ x: m.x - 0.22, y: 0.4 + bobY, z: m.z, sx: 0.4, sy: 0.8, sz: 0.4, c: [0.15, 0.15, 0.18] });
+  boxes.push({ x: m.x + 0.22, y: 0.4 + bobY, z: m.z, sx: 0.4, sy: 0.8, sz: 0.4, c: [0.15, 0.15, 0.18] });
+  boxes.push({ x: m.x, y: 1.2 + bobY, z: m.z, sx: 0.95, sy: 0.85, sz: 0.55, c: m.colour });
+  boxes.push({ x: m.x - 0.62, y: 1.2 + bobY, z: m.z, sx: 0.3, sy: 0.7, sz: 0.35, c: m.colour });
+  boxes.push({ x: m.x + 0.62, y: 1.2 + bobY, z: m.z, sx: 0.3, sy: 0.7, sz: 0.35, c: m.colour });
+  boxes.push({ x: m.x, y: 1.85 + bobY, z: m.z, sx: 0.6, sy: 0.55, sz: 0.55, c: [0.85, 0.65, 0.5] });
+  // gang bandana
+  boxes.push({ x: m.x, y: 2.12 + bobY, z: m.z, sx: 0.64, sy: 0.18, sz: 0.6, c: m.colour });
+  return boxes;
 }

@@ -1,299 +1,306 @@
-// Solmar Bay — story chapters (5, sequential) + repeatable side jobs
-// (taxi fares, courier, time trials, gang jobs). Markers are tall
-// glowing beacons so the player always knows where to go.
+// Solmar Bay — story chapters (5, sequential) + repeatable side jobs.
+// Each chapter has steps; completing a chapter pays its reward and
+// opens the next. Side jobs (taxi / courier / time trial / turf /
+// gang delivery) are available from markers after chapter 1.
 
-import { CHAPTERS, SIDE_REWARDS, dist } from './config.js';
-import { setToast, addCash, MODES } from './state.js';
+import { CHAPTERS, SIDE_JOBS, clamp, dist2 } from './config.js';
+import { showToast, addCash } from './state.js';
 
 export function createMissions() {
   return {
-    introT: 0,
-    timer: 0, // chapter timer (M2 delivery)
-    stage: 0, // per-chapter stage
-    passengers: [], // M4: {x, z, destX, destZ, picked}
-    sideJobs: [
-      { type: 'taxi', x: 0, z: 160, color: [1, 0.85, 0.1], label: 'Taxi fare', active: false, stage: 0, tx: 0, tz: 0, timer: 0, reward: 0, coolT: 0 },
-      { type: 'courier', x: -100, z: -100, color: [0.4, 0.8, 1], label: 'Courier run', active: false, stage: 0, tx: 0, tz: 0, timer: 0, reward: 0, coolT: 0 },
-      { type: 'trial', x: 200, z: -200, color: [1, 0.5, 0.2], label: 'Time trial', active: false, stage: 0, tx: 0, tz: 0, timer: 0, reward: 0, coolT: 0 },
-      { type: 'turf', x: -44, z: 44, color: [1, 0.8, 0.15], label: 'Turf clear-out', active: false, stage: 0, tx: 0, tz: 0, timer: 0, reward: 0, coolT: 0 },
-      { type: 'gangrun', x: 290, z: 330, color: [0.15, 0.75, 0.8], label: 'Gang delivery', active: false, stage: 0, tx: 0, tz: 0, timer: 0, reward: 0, coolT: 0 },
-    ],
-    checkpoints: [], // time-trial checkpoints
-    trialIdx: 0,
+    chapter: 1,
+    step: 0,
+    marker: null, // { x, z, label }
+    timer: 0,
+    passengers: 0,
+    pickedUp: false,
+    coolT: 0, // restart cooldown after a job finishes
+    active: null, // side job in progress
   };
 }
 
-export function startChapter(game, i) {
-  const state = game.state;
+// Mission spots are STREET points in front of the sites — never the
+// building centres, which sit inside solid colliders and can never
+// be reached (a chapter could never complete).
+export const SPOTS = {
+  garage: { x: 150, z: -120 },
+  harbour: { x: 300, z: -100 },
+  hideout: { x: 250, z: -220 },
+  safehouse: { x: -250, z: 190 },
+  fireStation: { x: 150, z: 112 },
+  taxiStand: { x: 0, z: 50 },
+};
+
+export function startChapter(game, n) {
   const m = game.missions;
-  const ch = CHAPTERS[i];
-  state.chapter = i;
-  state.chapterActive = true;
-  state.chapterTitle = 'Chapter ' + (i + 1) + ' — ' + ch.title;
-  state.chapterText = ch.text;
-  state.mode = MODES.chapter;
-  m.introT = 0;
-  m.stage = 0;
+  const ch = CHAPTERS[n - 1];
+  m.chapter = n;
+  m.step = 0;
   m.timer = 0;
-  m.passengers = [];
-  if (i === 0) state.objective = 'Steal a car and drive to the garage.';
-  if (i === 1) state.objective = 'Pick up the package downtown.';
-  if (i === 2) {
-    state.objective = 'Lose the cops and reach the hideout.';
-    if (game.police) { state.wanted = 3; }
-  }
-  if (i === 3) {
-    state.objective = 'Pick up 3 passengers across the city.';
-    m.passengers = [
-      { x: -40, z: 140, destX: 0, destZ: 160, picked: false, done: false },
-      { x: 140, z: -40, destX: 0, destZ: 160, picked: false, done: false },
-      { x: 0, z: -160, destX: 0, destZ: 160, picked: false, done: false },
-    ];
-  }
-  if (i === 4) state.objective = 'Grab the cash from the dock office.';
+  m.passengers = 0;
+  m.pickedUp = false;
+  m.active = null;
+  game.state.chapter = n;
+  game.state.mode = 'chapter';
+  game.state.chapterIntroShown = true;
+  m.marker = chapterMarker(game, n);
+  showToast(game.state, ch.title + ' — ' + ch.objective, 5);
+  if (game.audio) game.audio.play('mission');
 }
 
-function completeChapter(game) {
-  const state = game.state;
-  const ch = CHAPTERS[state.chapter];
-  addCash(state, ch.reward);
-  state.stats.missionsDone += 1;
-  setToast(state, ch.title + ' complete! +$' + ch.reward, 4);
-  if (game.audio) game.audio.jingle();
-  state.chapterActive = false;
-  if (state.chapter >= 4) {
-    state.objective = 'Story complete — Solmar Bay is yours. Free roam!';
-    state.mode = MODES.complete;
-    return;
-  }
-  startChapter(game, state.chapter + 1);
-}
-
-function chapterTarget(game) {
-  const s = game.city.spawns;
-  const state = game.state;
-  const m = game.missions;
-  switch (state.chapter) {
-    case 0: return { x: s.garage.x, z: s.garage.z };
-    case 1: return m.stage === 0 ? { x: s.packagePickup.x, z: s.packagePickup.z } : { x: s.harbourOffice.x, z: s.harbourOffice.z };
-    case 2: return { x: s.hideout.x, z: s.hideout.z };
-    case 3: {
-      const next = m.passengers.find((p) => !p.done);
-      if (!next) return null;
-      return next.picked ? { x: next.destX, z: next.destZ } : { x: next.x, z: next.z };
-    }
-    case 4: return m.stage === 0 ? { x: s.harbourOffice.x, z: s.harbourOffice.z } : { x: s.safehouse.x, z: s.safehouse.z };
+function chapterMarker(game, n) {
+  switch (n) {
+    case 1: return { x: SPOTS.garage.x, z: SPOTS.garage.z, label: 'Garage' };
+    case 2: return { x: SPOTS.harbour.x, z: SPOTS.harbour.z, label: 'Harbour docks' };
+    case 3: return null; // getaway: no marker, just lose the heat
+    case 4: return { x: SPOTS.taxiStand.x, z: SPOTS.taxiStand.z, label: 'Pick up passenger' };
+    case 5: return { x: SPOTS.harbour.x, z: SPOTS.harbour.z, label: 'Harbour vault' };
     default: return null;
   }
 }
 
-export function updateMissions(dt, game) {
-  const state = game.state;
+function completeChapter(game) {
   const m = game.missions;
-  const p = game.player;
-  if (state.mode === MODES.chapter) {
-    m.introT += dt;
+  const ch = CHAPTERS[m.chapter - 1];
+  addCash(game.state, ch.reward);
+  game.state.stats.missionsDone += 1;
+  showToast(game.state, 'Chapter complete! +$' + ch.reward, 4);
+  if (game.audio) game.audio.play('win');
+  m.marker = null;
+  if (m.chapter >= 5) {
+    // story complete: advance past 5 so the HUD shows free roam
+    m.chapter = 6;
+    game.state.chapter = 6;
+    game.state.mode = 'playing';
+    showToast(game.state, 'You beat the story! Solmar Bay is yours. Side jobs still pay.', 6);
     return;
   }
-  if (state.mode !== MODES.playing) return;
-
-  // ---- story chapters ----
-  if (state.chapterActive) {
-    const t = chapterTarget(game);
-    if (t) {
-      const near = dist(p.x, p.z, t.x, t.z);
-      if (state.chapter === 0) {
-        if (p.inVehicle && near < 12) completeChapter(game);
-      } else if (state.chapter === 1) {
-        if (m.stage === 0) {
-          if (near < 6) { m.stage = 1; m.timer = 120; state.objective = 'Deliver the package to the harbour office — 120s!'; }
-        } else {
-          m.timer -= dt;
-          state.objective = 'Deliver the package to the harbour office — ' + Math.max(0, Math.ceil(m.timer)) + 's';
-          if (m.timer <= 0) {
-            setToast(state, 'Delivery failed — the package is late.', 3);
-            startChapter(game, 1); // retry the chapter
-          } else if (near < 8) completeChapter(game);
-        }
-      } else if (state.chapter === 2) {
-        if (state.wanted === 0 && near < 12) completeChapter(game);
-      } else if (state.chapter === 3) {
-        const next = m.passengers.find((x) => !x.done);
-        if (next) {
-          if (!next.picked && near < 6 && p.inVehicle) {
-            next.picked = true;
-            state.objective = 'Drive the passenger to the taxi stand.';
-            setToast(state, 'Passenger aboard — drive to the taxi stand.', 3);
-          } else if (next.picked && near < 8) {
-            next.done = true;
-            addCash(state, 100);
-            setToast(state, 'Fare +$100', 2);
-            const left = m.passengers.filter((x) => !x.done).length;
-            state.objective = left > 0 ? 'Pick up ' + left + ' more passenger' + (left > 1 ? 's' : '') + '.' : '';
-            if (left === 0) completeChapter(game);
-          }
-        }
-      } else if (state.chapter === 4) {
-        if (m.stage === 0) {
-          if (near < 6) {
-            m.stage = 1;
-            state.wanted = 4;
-            if (game.police) game.police.decayT = 0;
-            state.objective = 'Cash grabbed! Lose the heat and reach the safehouse.';
-            setToast(state, 'Cash grabbed! Lose the heat!', 3);
-          }
-        } else if (state.wanted <= 2 && near < 10) {
-          completeChapter(game);
-        }
-      }
-    }
-  }
-
-  // ---- side jobs ----
-  for (const job of m.sideJobs) {
-    if (job.active) {
-      updateSideJob(dt, game, job);
-      continue;
-    }
-    // restart cooldown: finishing a job on its own marker must not
-    // instantly start the same job again (the player is standing on it)
-    if (job.coolT > 0) job.coolT -= dt;
-    if (job.coolT <= 0 && dist(p.x, p.z, job.x, job.z) < 6) startSideJob(game, job);
-  }
+  startChapter(game, m.chapter + 1);
 }
 
-function startSideJob(game, job) {
-  const state = game.state;
+// Per-frame chapter logic. Called from stepGame.
+export function updateMissions(game, dt) {
   const m = game.missions;
-  job.active = true;
-  job.stage = 0;
-  if (job.type === 'taxi') {
-    // pick a passenger spot, then a destination
-    const spots = [[-140, 40], [140, -40], [-40, -140], [100, 100], [-300, 100]];
-    const s = spots[Math.floor(Math.random() * spots.length)];
-    job.tx = s[0]; job.tz = s[1];
-    job.reward = SIDE_REWARDS.taxiFare;
-    state.objective = 'Taxi: pick up the passenger.';
-    setToast(state, 'Taxi fare: pick up the passenger.', 3);
-  } else if (job.type === 'courier') {
-    job.tx = 290; job.tz = 330;
-    job.timer = 90;
-    job.reward = SIDE_REWARDS.courier;
-    state.objective = 'Courier: deliver to the harbour — 90s!';
-  } else if (job.type === 'trial') {
-    m.checkpoints = [[200, -100], [100, -200], [-100, -200], [-200, 0], [0, 100]];
-    m.trialIdx = 0;
-    job.timer = 75;
-    job.reward = SIDE_REWARDS.timeTrial;
-    state.objective = 'Time trial: hit all 5 checkpoints — 75s!';
-  } else if (job.type === 'turf') {
-    if (game.gangs) game.gangs.spawnHostile(game, 'shark', -44, 44, 4);
-    job.reward = SIDE_REWARDS.turf;
-    state.objective = 'Turf clear-out: take out the 4 Sharks.';
-  } else if (job.type === 'gangrun') {
-    job.tx = -220; job.tz = 330;
-    job.timer = 75;
-    job.reward = SIDE_REWARDS.gangRun;
-    state.objective = 'Gang delivery: reach the safehouse — 75s!';
-  }
-}
-
-function updateSideJob(dt, game, job) {
   const state = game.state;
-  const m = game.missions;
   const p = game.player;
-  const finish = (ok) => {
-    job.active = false;
-    job.coolT = 5; // don't restart on the same marker for 5s
-    if (ok) {
-      addCash(state, job.reward);
-      state.stats.sideDone += 1;
-      setToast(state, job.label + ' done! +$' + job.reward, 3);
-      if (game.audio) game.audio.jingle();
-    } else {
-      setToast(state, job.label + ' failed.', 3);
-    }
-    if (state.chapterActive) state.objective = currentChapterObjective(game);
-    else state.objective = 'Free roam — find a side-job marker.';
-  };
-  if (job.type === 'taxi') {
-    if (job.stage === 0) {
-      if (dist(p.x, p.z, job.tx, job.tz) < 6 && p.inVehicle) {
-        job.stage = 1;
-        job.tx = 0; job.tz = 160;
-        state.objective = 'Taxi: drive the passenger to the taxi stand.';
+  if (m.coolT > 0) m.coolT -= dt;
+  if (state.mode !== 'playing') return;
+  if (m.active) {
+    updateSideJob(game, dt);
+    return;
+  }
+  if (m.chapter > 5) return;
+
+  const ch = m.chapter;
+  if (ch === 1) {
+    // step 0: steal a car. step 1: drive it to the garage.
+    if (m.step === 0) {
+      if (p.inVehicle) {
+        m.step = 1;
+        showToast(state, 'Nice wheels. Now drive to the garage.', 3);
       }
-    } else if (dist(p.x, p.z, job.tx, job.tz) < 8) {
-      finish(true);
+    } else if (dist2(p.x, p.z, SPOTS.garage.x, SPOTS.garage.z) < 100) {
+      completeChapter(game);
     }
-  } else if (job.type === 'courier') {
-    job.timer -= dt;
-    state.objective = 'Courier: deliver to the harbour — ' + Math.max(0, Math.ceil(job.timer)) + 's';
-    if (job.timer <= 0) finish(false);
-    else if (dist(p.x, p.z, job.tx, job.tz) < 8) finish(true);
-  } else if (job.type === 'trial') {
-    job.timer -= dt;
-    const cp = m.checkpoints[m.trialIdx];
-    if (cp && dist(p.x, p.z, cp[0], cp[1]) < 8) {
-      m.trialIdx += 1;
-      if (m.trialIdx >= m.checkpoints.length) { finish(true); return; }
-      state.objective = 'Time trial: checkpoint ' + (m.trialIdx + 1) + ' of 5 — ' + Math.max(0, Math.ceil(job.timer)) + 's';
+  } else if (ch === 2) {
+    if (m.step === 0) {
+      if (dist2(p.x, p.z, SPOTS.harbour.x, SPOTS.harbour.z) < 144) {
+        m.step = 1;
+        m.timer = 90;
+        m.marker = { x: SPOTS.hideout.x, z: SPOTS.hideout.z, label: 'Hideout' };
+        showToast(state, 'Package grabbed! 90 seconds to the hideout.', 3);
+      }
     } else {
-      state.objective = 'Time trial: checkpoint ' + (m.trialIdx + 1) + ' of 5 — ' + Math.max(0, Math.ceil(job.timer)) + 's';
+      m.timer -= dt;
+      if (m.timer <= 0) {
+        showToast(state, 'Too slow — the deal moved on. Try again.', 3);
+        m.step = 0;
+        m.marker = chapterMarker(game, 2);
+      } else if (dist2(p.x, p.z, SPOTS.hideout.x, SPOTS.hideout.z) < 100) {
+        completeChapter(game);
+      }
     }
-    if (job.timer <= 0) finish(false);
-  } else if (job.type === 'turf') {
-    const left = game.gangs ? game.gangs.countHostile(game, 'shark') : 0;
-    state.objective = 'Turf clear-out: ' + left + ' Sharks left.';
-    if (left <= 0) finish(true);
-  } else if (job.type === 'gangrun') {
+  } else if (ch === 3) {
+    // getaway: survive a 3-star wanted level, then lose it
+    if (m.step === 0) {
+      if (game.police) game.police.commitCrime(game, 'massRampage');
+      m.step = 1;
+      showToast(state, '3 stars! Lose the heat.', 3);
+    } else if (state.wanted === 0) {
+      completeChapter(game);
+    }
+  } else if (ch === 4) {
+    // pick up 3 passengers at the taxi stand, drop each at a marker
+    // (drop-offs are street points, never building centres)
+    const stops = [
+      { x: 150, z: 112, label: 'Drop-off: fire station' },
+      { x: -250, z: -210, label: 'Drop-off: suburbs' },
+      { x: 250, z: 210, label: 'Drop-off: south beach' },
+    ];
+    if (m.step < 3) {
+      const stop = stops[m.step];
+      if (!m.pickedUp) {
+        m.marker = { x: SPOTS.taxiStand.x, z: SPOTS.taxiStand.z, label: 'Pick up passenger ' + (m.step + 1) + '/3' };
+        if (dist2(p.x, p.z, SPOTS.taxiStand.x, SPOTS.taxiStand.z) < 64) {
+          m.pickedUp = true;
+          m.marker = { x: stop.x, z: stop.z, label: stop.label };
+          showToast(state, 'Passenger aboard — ' + stop.label, 3);
+        }
+      } else if (dist2(p.x, p.z, stop.x, stop.z) < 100) {
+        m.pickedUp = false;
+        m.step += 1;
+        m.passengers += 1;
+        addCash(state, 50);
+        showToast(state, 'Fare +$50', 2);
+      }
+    } else {
+      completeChapter(game);
+    }
+  } else if (ch === 5) {
+    if (m.step === 0) {
+      if (dist2(p.x, p.z, SPOTS.harbour.x, SPOTS.harbour.z) < 144) {
+        m.step = 1;
+        if (game.police) game.police.commitCrime(game, 'armedRobbery');
+        state.wanted = Math.max(state.wanted, 4);
+        m.marker = { x: SPOTS.safehouse.x, z: SPOTS.safehouse.z, label: 'Safehouse' };
+        showToast(state, 'Cash grabbed! 4 stars — reach the safehouse.', 3);
+      }
+    } else if (m.step === 1) {
+      if (state.wanted === 0) {
+        m.step = 2;
+        showToast(state, 'Heat is off. Get to the safehouse.', 3);
+      }
+    } else if (dist2(p.x, p.z, SPOTS.safehouse.x, SPOTS.safehouse.z) < 100) {
+      completeChapter(game);
+    }
+  }
+}
+
+// Side-job markers are street points (never building centres).
+// Exported: main.js's E dispatcher reads this same list.
+export const SIDE_MARKERS = {
+  taxi: { x: 0, z: 50 },
+  courier: { x: -150, z: -106 },
+  trial: { x: 100, z: -350 },
+  turf: { x: -100, z: -100 },
+  gangrun: { x: 100, z: 100 },
+};
+
+export function startSideJob(game, jobId) {
+  const m = game.missions;
+  if (m.active || m.coolT > 0) return false;
+  const def = SIDE_JOBS.find((j) => j.id === jobId);
+  if (!def) return false;
+  const mk = SIDE_MARKERS[jobId];
+  m.active = {
+    id: jobId,
+    label: def.label,
+    reward: def.reward,
+    step: 0,
+    timer: jobId === 'trial' ? 60 : 0,
+    target: { x: mk.x, z: mk.z },
+  };
+  showToast(game.state, def.label + ' started — ' + def.desc, 3);
+  return true;
+}
+
+function finishSideJob(game, success) {
+  const m = game.missions;
+  const job = m.active;
+  if (!job) return;
+  if (success) {
+    addCash(game.state, job.reward);
+    showToast(game.state, job.label + ' done! +$' + job.reward, 3);
+    if (game.audio) game.audio.play('win');
+  } else {
+    showToast(game.state, job.label + ' failed.', 3);
+  }
+  m.active = null;
+  m.coolT = 5; // 5s restart cooldown — a job must not re-trigger on its own marker
+}
+
+function updateSideJob(game, dt) {
+  const m = game.missions;
+  const job = m.active;
+  const p = game.player;
+  if (!job) return;
+  if (job.id === 'taxi') {
+    // step 0: pick up at the stand (must be in a taxi or any car)
+    if (job.step === 0) {
+      if (dist2(p.x, p.z, 0, 50) < 64) {
+        job.step = 1;
+        // destination: a random road intersection (always reachable)
+        const nodes = game.city.roadNodes;
+        const node = nodes[Math.floor(Math.random() * nodes.length)];
+        job.target = { x: node.x, z: node.z };
+        showToast(game.state, 'Passenger in! Drive to the marker.', 3);
+      }
+    } else if (dist2(p.x, p.z, job.target.x, job.target.z) < 100) {
+      if (game.state) game.state.stats.faresDone += 1;
+      finishSideJob(game, true);
+    }
+  } else if (job.id === 'courier') {
+    if (job.step === 0) {
+      if (dist2(p.x, p.z, -150, -106) < 64) {
+        job.step = 1;
+        job.target = { x: 250, z: 210 };
+        showToast(game.state, 'Parcel collected — deliver it south.', 3);
+      }
+    } else if (dist2(p.x, p.z, job.target.x, job.target.z) < 100) {
+      finishSideJob(game, true);
+    }
+  } else if (job.id === 'trial') {
     job.timer -= dt;
-    state.objective = 'Gang delivery: reach the safehouse — ' + Math.max(0, Math.ceil(job.timer)) + 's';
-    if (job.timer <= 0) finish(false);
-    else if (dist(p.x, p.z, job.tx, job.tz) < 8) finish(true);
+    if (job.timer <= 0) {
+      finishSideJob(game, false);
+      return;
+    }
+    // 3 checkpoints in sequence
+    const cps = [
+      { x: 100, z: -100 },
+      { x: -100, z: 100 },
+      { x: 0, z: 0 },
+    ];
+    const cp = cps[Math.min(job.step, 2)];
+    job.target = cp;
+    if (dist2(p.x, p.z, cp.x, cp.z) < 100) {
+      job.step += 1;
+      showToast(game.state, 'Checkpoint ' + job.step + '/3', 2);
+      if (job.step >= 3) finishSideJob(game, true);
+    }
+  } else if (job.id === 'turf') {
+    // clear hostiles near the marker: count hostile gang members left
+    const hostiles = game.gangs ? game.gangs.countHostile() : 0;
+    if (job.step === 0) {
+      if (dist2(p.x, p.z, -100, -100) < 400) {
+        job.step = 1;
+        if (game.gangs) game.gangs.spawnHostile(game, -100, -100, 4);
+        showToast(game.state, 'Rivals incoming — clear them out!', 3);
+      }
+    } else if (hostiles <= 0) {
+      finishSideJob(game, true);
+    }
+  } else if (job.id === 'gangrun') {
+    if (job.step === 0) {
+      if (dist2(p.x, p.z, 100, 100) < 64) {
+        job.step = 1;
+        job.target = { x: -250, z: -210 };
+        showToast(game.state, 'Goods loaded — deliver to the north-west.', 3);
+      }
+    } else if (dist2(p.x, p.z, job.target.x, job.target.z) < 100) {
+      finishSideJob(game, true);
+    }
   }
 }
 
-function currentChapterObjective(game) {
-  const state = game.state;
-  if (state.chapter === 0) return 'Steal a car and drive to the garage.';
-  if (state.chapter === 1) return game.missions.stage === 0 ? 'Pick up the package downtown.' : 'Deliver the package to the harbour office.';
-  if (state.chapter === 2) return 'Lose the cops and reach the hideout.';
-  if (state.chapter === 3) return 'Pick up passengers across the city.';
-  if (state.chapter === 4) return game.missions.stage === 0 ? 'Grab the cash from the dock office.' : 'Lose the heat and reach the safehouse.';
-  return 'Free roam.';
+export function sideJobMarker(game) {
+  const m = game.missions;
+  if (!m.active) return null;
+  return { x: m.active.target.x, z: m.active.target.z, label: m.active.label };
 }
 
-export function drawMissions(renderer, game) {
-  const t = game.time;
-  const pulse = 0.6 + Math.sin(t * 4) * 0.25;
-  // story target beacon
-  if (game.state.chapterActive) {
-    const tgt = chapterTarget(game);
-    if (tgt) {
-      renderer.box(tgt.x, 6, tgt.z, 2.5, 12, 2.5, [1, 0.85, 0.2], pulse);
-      renderer.box(tgt.x, 0.5, tgt.z, 6, 1, 6, [1, 0.85, 0.2], 0.8);
-    }
-  }
-  // side-job markers
-  for (const job of game.missions.sideJobs) {
-    if (job.active) continue;
-    const b = Math.sin(t * 3 + job.x) * 0.3;
-    renderer.box(job.x, 2 + b, job.z, 1.6, 4, 1.6, job.color, 0.85);
-  }
-  // active side-job target
-  for (const job of game.missions.sideJobs) {
-    if (!job.active) continue;
-    let tgt = null;
-    if (job.type === 'trial') tgt = game.missions.checkpoints[game.missions.trialIdx];
-    else if (job.tx !== undefined && job.tz !== undefined && job.type !== 'turf') tgt = [job.tx, job.tz];
-    if (tgt) renderer.box(tgt[0], 6, tgt[1], 2.5, 12, 2.5, job.color, pulse);
-  }
-  // M4 passengers
-  if (game.state.chapter === 3 && game.state.chapterActive) {
-    for (const ps of game.missions.passengers) {
-      if (ps.done || ps.picked) continue;
-      renderer.box(ps.x, 1.2, ps.z, 0.9, 2.4, 0.9, [1, 0.9, 0.2], 0.9);
-    }
-  }
+export function missionMarker(game) {
+  const m = game.missions;
+  if (m.active) return sideJobMarker(game);
+  return m.marker;
 }

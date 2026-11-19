@@ -1,27 +1,42 @@
-// Solmar Bay — localStorage save / load. Guarded: with no
-// localStorage (Node tests) every call is a safe no-op / null.
+// Solmar Bay — save / load via localStorage. Node-safe: in a
+// headless test the storage object is an in-memory stand-in.
 
 const KEY = 'solmar-bay-save-v1';
 
-export function saveGame(game) {
+function storage() {
   try {
-    if (typeof localStorage === 'undefined') return false;
-    const s = game.state;
-    const data = {
-      cash: s.cash,
-      chapter: s.chapter,
-      chapterActive: s.chapterActive,
-      weapon: s.weapon,
-      ammo: s.ammo,
-      bombs: s.bombs,
-      outfit: s.outfit,
-      relationship: s.relationship,
-      accuracyBonus: s.accuracyBonus,
-      handlingBonus: s.handlingBonus,
-      stats: s.stats,
-      player: { x: game.player.x, z: game.player.z },
+    if (typeof localStorage !== 'undefined') return localStorage;
+  } catch (e) {
+    // fall through to the memory stand-in
+  }
+  if (!globalThis.__solmarMemoryStore) {
+    globalThis.__solmarMemoryStore = {
+      data: {},
+      getItem(k) { return this.data[k] === undefined ? null : this.data[k]; },
+      setItem(k, v) { this.data[k] = String(v); },
+      removeItem(k) { delete this.data[k]; },
     };
-    localStorage.setItem(KEY, JSON.stringify(data));
+  }
+  return globalThis.__solmarMemoryStore;
+}
+
+export function saveGame(game) {
+  const state = game.state;
+  const p = game.player;
+  const data = {
+    cash: state.cash,
+    chapter: state.chapter,
+    health: state.health,
+    armour: state.armour,
+    relationship: state.relationship,
+    outfit: state.outfit,
+    x: p.x,
+    z: p.z,
+    stats: state.stats,
+    savedAt: Date.now(),
+  };
+  try {
+    storage().setItem(KEY, JSON.stringify(data));
     return true;
   } catch (e) {
     return false;
@@ -30,8 +45,7 @@ export function saveGame(game) {
 
 export function loadGame() {
   try {
-    if (typeof localStorage === 'undefined') return null;
-    const raw = localStorage.getItem(KEY);
+    const raw = storage().getItem(KEY);
     if (!raw) return null;
     return JSON.parse(raw);
   } catch (e) {
@@ -39,9 +53,14 @@ export function loadGame() {
   }
 }
 
+export function hasSave() {
+  return loadGame() !== null;
+}
+
 export function clearSave() {
   try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.removeItem(KEY);
-  } catch (e) { /* ignore */ }
+    storage().removeItem(KEY);
+  } catch (e) {
+    // ignore
+  }
 }

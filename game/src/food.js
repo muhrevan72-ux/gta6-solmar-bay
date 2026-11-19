@@ -1,60 +1,54 @@
 // Solmar Bay — food shops: pizza, burger, chicken, donut, taco.
-// Walk up to a shop, press E, buy food with cash to heal. Eating
-// with the girlfriend counts toward a date.
+// Walk up, press E to open the menu, number keys buy food:
+// snack +10 HP, meal +25 HP, feast full HP + armour. Eating with
+// the girlfriend during a date counts toward it.
 
-import { FOOD_MENU, dist } from './config.js';
-import { setToast } from './state.js';
+import { FOOD_MENU, FOOD_SHOPS, clamp, dist2 } from './config.js';
+import { showToast } from './state.js';
 
 export function createFood() {
-  return { menuOpen: false, shop: null };
+  return {
+    shops: FOOD_SHOPS.map((s) => ({ ...s })),
+    openShop: null, // shop the player is browsing, or null
+  };
 }
 
-export function nearestShop(game, x, z, maxDist) {
-  let best = null, bd = maxDist;
-  for (const s of game.city.shops) {
-    const d = dist(x, z, s.x, s.z);
-    if (d < bd) { bd = d; best = s; }
+// Nearest shop within E range.
+export function nearestFoodShop(game) {
+  const p = game.player;
+  for (const s of game.food.shops) {
+    if (dist2(p.x, p.z, s.x, s.z) < 25) return s;
   }
-  return best;
+  return null;
 }
 
-export function openFoodMenu(game, shop) {
-  game.food.menuOpen = true;
-  game.food.shop = shop;
-  setToast(game.state, shop.name + ' — press 1/2/3 to buy, Esc to leave.', 4);
-}
-
-export function closeFoodMenu(game) {
-  game.food.menuOpen = false;
-  game.food.shop = null;
-}
-
-export function buyFood(game, idx) {
-  const state = game.state;
-  const item = FOOD_MENU[idx];
+export function buyFood(game, index) {
+  const food = game.food;
+  const shop = food.openShop;
+  if (!shop) return false;
+  const item = FOOD_MENU[index];
   if (!item) return false;
-  if (state.cash < item.price) {
-    setToast(state, 'Not enough cash for a ' + item.name + ' ($' + item.price + ').', 2);
+  if (game.state.cash < item.price) {
+    showToast(game.state, 'Not enough cash for the ' + item.name + '.', 2);
     return false;
   }
-  state.cash -= item.price;
-  state.health = Math.min(100, state.health + item.heal);
-  state.armour = Math.min(100, state.armour + item.armour);
-  setToast(state, item.name + ' — yum! +$' + item.price + ' spent.', 2);
-  if (game.audio) game.audio.blip(700, 0.1);
-  // eating together counts toward a date
-  if (game.dating && game.dating.active && game.dating.stage === 1) {
-    game.dating.stage = 2;
-    state.objective = 'Drop her off at the beach house.';
-    setToast(state, 'She loved the food! Now drive her home.', 3);
+  game.state.cash -= item.price;
+  game.state.health = clamp(game.state.health + item.heal, 0, 100);
+  game.state.armour = clamp(game.state.armour + item.armour, 0, 100);
+  showToast(game.state, item.name + ' from ' + shop.name + '! +' + item.heal + ' HP', 2);
+  if (game.audio) game.audio.play('pickup');
+  // eating with the girlfriend counts toward the date
+  if (game.dating && game.dating.onDate) {
+    game.dating.ateTogether = true;
+    game.dating.progress = Math.max(game.dating.progress, 2);
   }
   return true;
 }
 
-export function drawFood(renderer, game) {
-  // shop signs above each food shop
-  for (const s of game.city.shops) {
-    renderer.box(s.x, 5.2, s.z - 8, 7, 1.6, 0.5, s.color, 1);
-    renderer.box(s.x, 5.2, s.z + 8, 7, 1.6, 0.5, s.color, 1);
-  }
+export function foodBoxes(shop) {
+  return [
+    { x: shop.x, y: 1.5, z: shop.z, sx: 10, sy: 3, sz: 8, c: shop.colour },
+    { x: shop.x, y: 3.4, z: shop.z + 4.2, sx: 8, sy: 0.8, sz: 1.2, c: [0.95, 0.95, 0.9] },
+    { x: shop.x, y: 4.4, z: shop.z + 4.4, sx: 7, sy: 1.2, sz: 0.4, c: shop.colour },
+  ];
 }

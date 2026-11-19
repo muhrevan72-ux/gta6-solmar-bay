@@ -1,108 +1,102 @@
-// Solmar Bay — city events. Every few minutes one event fires,
-// announced by a toast and a beacon marker: a street race, a beach
-// party, or a gang turf war. Show up, take part, get paid.
+// Solmar Bay — event scheduler. Every few minutes one event
+// triggers, announced by toast + HUD marker: street race (race
+// checkpoints for cash), beach party (crowd at the beach, free
+// food/health), gang turf war (rival gangs fight, join for cash).
 
-import { SIDE_REWARDS, dist } from './config.js';
-import { setToast, addCash } from './state.js';
-
-const EVENT_TYPES = ['race', 'party', 'turfwar'];
+import { dist2 } from './config.js';
+import { addCash, showToast } from './state.js';
 
 export function createEvents() {
   return {
-    timer: 120 + Math.random() * 60,
-    active: null, // {type, x, z, t, stage, data}
+    nextT: 150, // first event ~2.5 minutes in
+    active: null, // { kind, t, step, target }
     partyPeds: [],
   };
 }
 
-export function startEvent(game, type) {
-  const ev = game.events;
-  if (type === 'race') {
-    ev.active = {
-      type, t: 90, idx: 0,
-      checkpoints: [[-150, -150], [150, -150], [150, 150], [-150, 150], [0, 0]],
-      x: -150, z: -150,
-    };
-    setToast(game.state, 'EVENT: Street race! Hit all 5 checkpoints — $300!', 5);
-  } else if (type === 'party') {
-    ev.active = { type, t: 90, x: -340, z: 0, paid: false };
-    ev.partyPeds = [];
-    for (let i = 0; i < 10; i++) {
-      ev.partyPeds.push({ x: -350 + Math.random() * 20, z: -30 + Math.random() * 60, phase: Math.random() * 6 });
-    }
-    setToast(game.state, 'EVENT: Beach party! Come hang out at the beach!', 5);
-  } else {
-    ev.active = { type, t: 90, x: 0, z: 0 };
-    if (game.gangs) {
-      game.gangs.spawnHostile(game, 'shark', 10, 10, 3);
-      game.gangs.spawnHostile(game, 'king', -10, -10, 3);
-    }
-    setToast(game.state, 'EVENT: Gang turf war downtown! Take out the Sharks — $250!', 5);
-  }
-  if (game.audio) game.audio.jingle();
-}
+const EVENT_KINDS = ['race', 'party', 'turfwar'];
 
-export function updateEvents(dt, game) {
+export function updateEvents(game, dt) {
   const ev = game.events;
-  const state = game.state;
   const p = game.player;
   if (!ev.active) {
-    ev.timer -= dt;
-    if (ev.timer <= 0) {
-      ev.timer = 150 + Math.random() * 60;
-      startEvent(game, EVENT_TYPES[Math.floor(Math.random() * EVENT_TYPES.length)]);
+    ev.nextT -= dt;
+    if (ev.nextT <= 0) {
+      const kind = EVENT_KINDS[Math.floor(Math.random() * EVENT_KINDS.length)];
+      ev.active = { kind, t: 0, step: 0, target: null };
+      if (kind === 'race') {
+        ev.active.target = { x: 100, z: -100 };
+        showToast(game.state, 'EVENT: Street race! Hit the checkpoints!', 4);
+      } else if (kind === 'party') {
+        showToast(game.state, 'EVENT: Beach party! Free food at the beach.', 4);
+        // party crowd: peds gather at the beach
+        for (let i = 0; i < 10; i++) {
+          ev.partyPeds.push({ x: -340 + Math.random() * 20, z: -200 + Math.random() * 400 });
+        }
+      } else {
+        ev.active.target = { x: -100, z: -100 };
+        showToast(game.state, 'EVENT: Turf war downtown! Join the fight for $250.', 4);
+        if (game.gangs) game.gangs.spawnHostile(game, -100, -100, 6);
+      }
+      if (game.audio) game.audio.play('mission');
     }
     return;
   }
+  ev.active.t += dt;
   const a = ev.active;
-  a.t -= dt;
-  if (a.type === 'race') {
-    const cp = a.checkpoints[a.idx];
-    a.x = cp[0]; a.z = cp[1];
-    if (dist(p.x, p.z, cp[0], cp[1]) < 8 && p.inVehicle) {
-      a.idx += 1;
-      if (a.idx >= a.checkpoints.length) {
-        addCash(state, SIDE_REWARDS.streetRace);
-        setToast(state, 'Street race won! +$' + SIDE_REWARDS.streetRace, 4);
+  if (a.kind === 'race') {
+    const cps = [
+      { x: 100, z: -100 },
+      { x: -100, z: 100 },
+      { x: 200, z: 200 },
+      { x: 0, z: 0 },
+    ];
+    const cp = cps[Math.min(a.step, 3)];
+    a.target = cp;
+    if (p.inVehicle && dist2(p.x, p.z, cp.x, cp.z) < 100) {
+      a.step += 1;
+      showToast(game.state, 'Race checkpoint ' + a.step + '/4', 2);
+      if (a.step >= 4) {
+        addCash(game.state, 300);
+        showToast(game.state, 'You won the street race! +$300', 3);
         ev.active = null;
-        return;
+        ev.nextT = 180;
       }
     }
-  } else if (a.type === 'party') {
-    if (!a.paid && dist(p.x, p.z, a.x, a.z) < 15) {
-      a.paid = true;
-      addCash(state, SIDE_REWARDS.beachParty);
-      state.health = 100;
-      setToast(state, 'Beach party! Free food, full health, +$' + SIDE_REWARDS.beachParty, 4);
-    }
-  } else if (a.type === 'turfwar') {
-    const left = game.gangs ? game.gangs.countHostile(game, 'shark') : 0;
-    if (left <= 0) {
-      addCash(state, SIDE_REWARDS.turfWar);
-      setToast(state, 'Turf war won! +$' + SIDE_REWARDS.turfWar, 4);
+    if (a.t > 180) {
       ev.active = null;
-      return;
+      ev.nextT = 180;
+      showToast(game.state, 'The street race ended.', 2);
     }
-  }
-  if (a.t <= 0) {
-    setToast(state, 'The event is over.', 3);
-    ev.active = null;
-    ev.partyPeds = [];
+  } else if (a.kind === 'party') {
+    // standing on the beach during the party heals you
+    if (p.x < -300 && p.x > -400) {
+      game.state.health = Math.min(100, game.state.health + 5 * dt);
+    }
+    if (a.t > 120) {
+      ev.active = null;
+      ev.nextT = 180;
+      ev.partyPeds = [];
+      showToast(game.state, 'The beach party wound down.', 2);
+    }
+  } else if (a.kind === 'turfwar') {
+    const hostiles = game.gangs ? game.gangs.countHostile() : 0;
+    if (hostiles <= 0 && a.t > 5) {
+      addCash(game.state, 250);
+      showToast(game.state, 'Turf war won! +$250', 3);
+      ev.active = null;
+      ev.nextT = 180;
+    }
+    if (a.t > 240) {
+      ev.active = null;
+      ev.nextT = 180;
+    }
   }
 }
 
-export function drawEvents(renderer, game) {
-  const ev = game.events;
-  const t = game.time;
-  if (!ev.active) return;
-  const a = ev.active;
-  const pulse = 0.6 + Math.sin(t * 4) * 0.25;
-  renderer.box(a.x, 8, a.z, 3, 16, 3, [1, 0.4, 0.9], pulse);
-  if (a.type === 'party') {
-    const cols = [[1, 0.4, 0.5], [0.4, 0.8, 1], [1, 0.8, 0.2], [0.5, 1, 0.5]];
-    ev.partyPeds.forEach((pp, i) => {
-      const bob = Math.abs(Math.sin(t * 6 + pp.phase)) * 0.5;
-      renderer.box(pp.x, 1.1 + bob, pp.z, 0.9, 1.6, 0.5, cols[i % cols.length], 1, 0, 0, 0);
-    });
-  }
+export function eventMarker(game) {
+  const a = game.events.active;
+  if (!a || !a.target) return null;
+  const label = a.kind === 'race' ? 'Street race' : a.kind === 'turfwar' ? 'Turf war' : 'Beach party';
+  return { x: a.target.x, z: a.target.z, label };
 }

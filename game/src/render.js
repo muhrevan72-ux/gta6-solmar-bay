@@ -1,28 +1,82 @@
-// Solmar Bay — raw WebGL1 voxel renderer. No libraries.
-// All art is coloured boxes. One directional light (baked into
-// per-face brightness) + distance fog. Static city geometry is baked
-// into one vertex buffer; moving things go through a dynamic batch.
+// Solmar Bay — raw WebGL1 renderer.
 //
-// Importing this module is safe in Node (no GL work happens until
-// createRenderer is called with a real canvas).
+// REQUIRED (round-4 play-test): WebGL1 has no quad drawing mode at
+// all. Every quad is emitted as 2 triangles (6 vertices) and drawn
+// with gl.drawArrays(gl.TRIANGLES, ...). The four-letter quad
+// constant must never appear in this file or anywhere in the entry.
+//
+// A box is 6 faces x 2 triangles x 3 vertices = 36 vertices.
+// Each vertex is 7 floats: x,y,z, r,g,b,a (28 bytes).
+// Face culling is OFF, so winding order cannot break the render.
 
-// ---- pure matrix math (testable) ----
+export const VERTEX_FLOATS = 7;
+export const VERTS_PER_BOX = 36;
+
+// One quad (4 corners, counter-clockwise from outside) becomes two
+// triangles: a,b,c and a,c,d. `out` is a plain number array.
+export function pushQuad(out, a, b, c, d, col, alpha) {
+  const r = col[0];
+  const g = col[1];
+  const bl = col[2];
+  const al = alpha === undefined ? 1 : alpha;
+  const tris = [a, b, c, a, c, d];
+  for (let i = 0; i < 6; i++) {
+    const p = tris[i];
+    out.push(p[0], p[1], p[2], r, g, bl, al);
+  }
+}
+
+// Push one axis-aligned box centred at (x, y, z) with size
+// (sx, sy, sz). y is the box centre height.
+export function pushBox(out, x, y, z, sx, sy, sz, col, alpha) {
+  const x0 = x - sx / 2;
+  const x1 = x + sx / 2;
+  const y0 = y - sy / 2;
+  const y1 = y + sy / 2;
+  const z0 = z - sz / 2;
+  const z1 = z + sz / 2;
+  // +X face
+  pushQuad(out, [x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0], col, alpha);
+  // -X face
+  pushQuad(out, [x0, y0, z1], [x0, y0, z0], [x0, y1, z0], [x0, y1, z1], col, alpha);
+  // +Y top
+  pushQuad(out, [x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], col, alpha);
+  // -Y bottom
+  pushQuad(out, [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], col, alpha);
+  // +Z face
+  pushQuad(out, [x1, y0, z1], [x0, y0, z1], [x0, y1, z1], [x1, y1, z1], col, alpha);
+  // -Z face
+  pushQuad(out, [x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0], col, alpha);
+}
+
+// Build a Float32Array of triangle vertices from a box list.
+// Each box: { x, y, z, sx, sy, sz, c: [r,g,b], a? }.
+export function buildVertices(boxes) {
+  const out = [];
+  for (let i = 0; i < boxes.length; i++) {
+    const b = boxes[i];
+    pushBox(out, b.x, b.y, b.z, b.sx, b.sy, b.sz, b.c, b.a);
+  }
+  return new Float32Array(out);
+}
+
+// --- mat4 (column-major, WebGL style) ---
 export function mat4Identity() {
   return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 }
-
 export function mat4Multiply(a, b) {
-  const o = new Array(16).fill(0);
+  const o = new Array(16);
   for (let c = 0; c < 4; c++) {
     for (let r = 0; r < 4; r++) {
-      let s = 0;
-      for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
-      o[c * 4 + r] = s;
+      o[c * 4 + r] =
+        a[0 * 4 + r] * b[c * 4 + 0] +
+        a[1 * 4 + r] * b[c * 4 + 1] +
+        a[2 * 4 + r] * b[c * 4 + 2] +
+        a[3 * 4 + r] * b[c * 4 + 3];
     }
   }
   return o;
 }
-
 export function mat4Perspective(fovY, aspect, near, far) {
   const f = 1 / Math.tan(fovY / 2);
   const nf = 1 / (near - far);
@@ -33,15 +87,20 @@ export function mat4Perspective(fovY, aspect, near, far) {
     0, 0, 2 * far * near * nf, 0,
   ];
 }
-
-export function mat4LookAt(eye, target, up) {
-  let zx = eye[0] - target[0], zy = eye[1] - target[1], zz = eye[2] - target[2];
-  let zl = Math.hypot(zx, zy, zz) || 1;
-  zx /= zl; zy /= zl; zz /= zl;
-  let xx = up[1] * zz - up[2] * zy, xy = up[2] * zx - up[0] * zz, xz = up[0] * zy - up[1] * zx;
-  let xl = Math.hypot(xx, xy, xz) || 1;
-  xx /= xl; xy /= xl; xz /= xl;
-  const yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+export function mat4LookAt(eye, center, up) {
+  let zx = eye[0] - center[0];
+  let zy = eye[1] - center[1];
+  let zz = eye[2] - center[2];
+  let len = Math.hypot(zx, zy, zz) || 1;
+  zx /= len; zy /= len; zz /= len;
+  let xx = up[1] * zz - up[2] * zy;
+  let xy = up[2] * zx - up[0] * zz;
+  let xz = up[0] * zy - up[1] * zx;
+  len = Math.hypot(xx, xy, xz) || 1;
+  xx /= len; xy /= len; xz /= len;
+  const yx = zy * xz - zz * xy;
+  const yy = zz * xx - zx * xz;
+  const yz = zx * xy - zy * xx;
   return [
     xx, yx, zx, 0,
     xy, yy, zy, 0,
@@ -53,99 +112,53 @@ export function mat4LookAt(eye, target, up) {
   ];
 }
 
-// Rotate a point around Y (yaw), then around the local forward axis
-// (roll), then around the local right axis (pitch). Returns [x, y, z].
-export function rotatePoint(p, yaw, roll, pitch) {
-  let [x, y, z] = p;
-  if (yaw) {
-    const c = Math.cos(yaw), s = Math.sin(yaw);
-    const nx = x * c + z * s, nz = -x * s + z * c;
-    x = nx; z = nz;
-  }
-  if (pitch) {
-    const c = Math.cos(pitch), s = Math.sin(pitch);
-    const ny = y * c - z * s, nz = y * s + z * c;
-    y = ny; z = nz;
-  }
-  if (roll) {
-    const c = Math.cos(roll), s = Math.sin(roll);
-    const nx = x * c - y * s, ny = x * s + y * c;
-    x = nx; y = ny;
-  }
-  return [x, y, z];
-}
-
-// The 8 corners of a box centred on the origin, half-extents given.
-export function boxCorners(sx, sy, sz, yaw, roll, pitch) {
-  const hx = sx / 2, hy = sy / 2, hz = sz / 2;
-  const raw = [
-    [-hx, -hy, -hz], [hx, -hy, -hz], [hx, -hy, hz], [-hx, -hy, hz],
-    [-hx, hy, -hz], [hx, hy, -hz], [hx, hy, hz], [-hx, hy, hz],
-  ];
-  return raw.map((p) => rotatePoint(p, yaw || 0, roll || 0, pitch || 0));
-}
-
-// Face definitions over the corner indices above, with a shade
-// (fake directional light: top brightest, bottom darkest).
-const FACES = [
-  { idx: [4, 5, 6, 7], shade: 1.0 }, // top
-  { idx: [3, 2, 1, 0], shade: 0.5 }, // bottom
-  { idx: [1, 5, 6, 2], shade: 0.82 }, // +x
-  { idx: [0, 4, 7, 3], shade: 0.68 }, // -x
-  { idx: [2, 6, 7, 3], shade: 0.9 }, // +z
-  { idx: [0, 1, 5, 4], shade: 0.76 }, // -z
-];
-
-// Emit one box into a flat vertex array (7 floats per vertex:
-// x, y, z, r, g, b, a). Used by both the static bake and the
-// dynamic batch, so the geometry is identical either way.
-export function emitBox(arr, cx, cy, cz, sx, sy, sz, color, alpha, yaw, roll, pitch) {
-  const corners = boxCorners(sx, sy, sz, yaw, roll, pitch);
-  const a = alpha === undefined ? 1 : alpha;
-  for (const f of FACES) {
-    for (const ci of f.idx) {
-      const p = corners[ci];
-      arr.push(
-        cx + p[0], cy + p[1], cz + p[2],
-        color[0] * f.shade, color[1] * f.shade, color[2] * f.shade, a,
-      );
-    }
-  }
-}
-
 const VERT = `
 attribute vec3 aPos;
 attribute vec4 aCol;
 uniform mat4 uMVP;
-varying vec4 vCol;
-varying float vDepth;
-void main() {
-  vec4 view = uMVP * vec4(aPos, 1.0);
-  vCol = aCol;
-  vDepth = -view.z;
-  gl_Position = view;
-}
-`;
-
-const FRAG = `
-precision mediump float;
-varying vec4 vCol;
-varying float vDepth;
+uniform vec3 uCam;
 uniform vec3 uFogColor;
 uniform float uFogNear;
 uniform float uFogFar;
+varying vec4 vCol;
+varying float vFog;
 void main() {
-  float f = clamp((vDepth - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);
-  vec3 col = mix(vCol.rgb, uFogColor, f);
-  gl_FragColor = vec4(col, vCol.a);
-}
-`;
+  vec4 p = uMVP * vec4(aPos, 1.0);
+  gl_Position = p;
+  vCol = aCol;
+  float d = distance(aPos, uCam);
+  vFog = clamp((d - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);
+}`;
+const FRAG = `
+precision mediump float;
+uniform vec3 uFogColor;
+varying vec4 vCol;
+varying float vFog;
+void main() {
+  vec3 rgb = mix(vCol.rgb, uFogColor, vFog);
+  gl_FragColor = vec4(rgb, vCol.a);
+}`;
 
-export const DYNAMIC_BOX_CAP = 2400;
-
-export function createRenderer(canvas, fog) {
-  const gl = canvas.getContext('webgl', { antialias: true });
-  if (!gl) throw new Error('WebGL is not available');
+// Create the renderer. In Node (no canvas / no WebGL) returns a stub
+// with the same method names so headless tests can run.
+export function createRenderer(canvas) {
+  let gl = null;
+  try {
+    gl = canvas && canvas.getContext ? canvas.getContext('webgl', { antialias: true }) : null;
+  } catch (e) {
+    gl = null;
+  }
+  if (!gl) {
+    return {
+      stub: true,
+      gl: null,
+      setStatic() {},
+      setWater() {},
+      draw() {},
+      resize() {},
+      staticVerts: 0,
+    };
+  }
 
   function compile(type, src) {
     const sh = gl.createShader(type);
@@ -161,26 +174,30 @@ export function createRenderer(canvas, fog) {
   gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
   gl.linkProgram(prog);
   gl.useProgram(prog);
-
   const aPos = gl.getAttribLocation(prog, 'aPos');
   const aCol = gl.getAttribLocation(prog, 'aCol');
   const uMVP = gl.getUniformLocation(prog, 'uMVP');
+  const uCam = gl.getUniformLocation(prog, 'uCam');
   const uFogColor = gl.getUniformLocation(prog, 'uFogColor');
   const uFogNear = gl.getUniformLocation(prog, 'uFogNear');
   const uFogFar = gl.getUniformLocation(prog, 'uFogFar');
 
+  gl.disable(gl.CULL_FACE);
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-  gl.clearColor(fog[0], fog[1], fog[2], 1);
 
   const staticBuf = gl.createBuffer();
+  const waterBuf = gl.createBuffer();
   const dynBuf = gl.createBuffer();
   let staticCount = 0;
-  let dynVerts = [];
-  let dynCount = 0;
-  let mvp = mat4Identity();
+  let waterCount = 0;
+  let fogColor = [0.98, 0.74, 0.58];
 
+  function upload(buf, verts) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+  }
   function drawBuffer(buf, count) {
     if (count <= 0) return;
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -188,54 +205,55 @@ export function createRenderer(canvas, fog) {
     gl.vertexAttribPointer(aCol, 4, gl.FLOAT, false, 28, 12);
     gl.enableVertexAttribArray(aPos);
     gl.enableVertexAttribArray(aCol);
-    gl.uniformMatrix4fv(uMVP, false, new Float32Array(mvp));
-    gl.drawArrays(gl.QUADS, 0, count);
+    gl.drawArrays(gl.TRIANGLES, 0, count);
   }
 
   return {
-    // Bake the static city into one buffer. `boxes` are
-    // {x,y,z,sx,sy,sz,color,alpha?,yaw?,roll?,pitch?}.
-    bakeStatic(boxes) {
-      const arr = [];
-      for (const b of boxes) {
-        emitBox(arr, b.x, b.y, b.z, b.sx, b.sy, b.sz, b.color,
-          b.alpha === undefined ? 1 : b.alpha, b.yaw || 0, b.roll || 0, b.pitch || 0);
-      }
-      gl.bindBuffer(gl.ARRAY_BUFFER, staticBuf);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STATIC_DRAW);
-      staticCount = arr.length / 7;
+    stub: false,
+    gl,
+    setFogColor(c) {
+      fogColor = c;
     },
-    beginFrame(eye, target, aspect) {
-      const view = mat4LookAt(eye, target, [0, 1, 0]);
-      const proj = mat4Perspective(1.05, aspect, 0.5, 1200);
-      mvp = mat4Multiply(proj, view);
-      gl.viewport(0, 0, canvas.width, canvas.height);
+    setStatic(boxes) {
+      const verts = buildVertices(boxes);
+      upload(staticBuf, verts);
+      staticCount = verts.length / VERTEX_FLOATS;
+      this.staticVerts = staticCount;
+    },
+    setWater(boxes) {
+      const verts = buildVertices(boxes);
+      upload(waterBuf, verts);
+      waterCount = verts.length / VERTEX_FLOATS;
+    },
+    // camera: { eye:[x,y,z], center:[x,y,z], fov, aspect }
+    // dynamicBoxes: box list for this frame (cars, peds, player...)
+    draw(camera, dynamicBoxes, fogNear, fogFar) {
+      const w = canvas.width;
+      const h = canvas.height;
+      gl.viewport(0, 0, w, h);
+      gl.clearColor(fogColor[0], fogColor[1], fogColor[2], 1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      gl.uniform3f(uFogColor, fog[0], fog[1], fog[2]);
-      gl.uniform1f(uFogNear, 150);
-      gl.uniform1f(uFogFar, 650);
-      dynVerts = [];
-      dynCount = 0;
+      const proj = mat4Perspective(camera.fov, w / h, 0.5, 1400);
+      const view = mat4LookAt(camera.eye, camera.center, [0, 1, 0]);
+      const mvp = mat4Multiply(proj, view);
+      gl.uniformMatrix4fv(uMVP, false, new Float32Array(mvp));
+      gl.uniform3fv(uCam, new Float32Array(camera.eye));
+      gl.uniform3fv(uFogColor, new Float32Array(fogColor));
+      gl.uniform1f(uFogNear, fogNear === undefined ? 120 : fogNear);
+      gl.uniform1f(uFogFar, fogFar === undefined ? 700 : fogFar);
       drawBuffer(staticBuf, staticCount);
-    },
-    // One dynamic box. Same shape as the static bake.
-    box(x, y, z, sx, sy, sz, color, alpha, yaw, roll, pitch) {
-      if (dynCount >= DYNAMIC_BOX_CAP) return false;
-      emitBox(dynVerts, x, y, z, sx, sy, sz, color,
-        alpha === undefined ? 1 : alpha, yaw || 0, roll || 0, pitch || 0);
-      dynCount += 24;
-      return true;
-    },
-    water(x, y, z, sx, sy, sz, color) {
-      return this.box(x, y, z, sx, sy, sz, color, 0.72);
-    },
-    endFrame() {
-      if (dynCount > 0) {
+      if (dynamicBoxes && dynamicBoxes.length) {
+        const verts = buildVertices(dynamicBoxes);
         gl.bindBuffer(gl.ARRAY_BUFFER, dynBuf);
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(dynVerts), gl.DYNAMIC_DRAW);
-        drawBuffer(dynBuf, dynCount);
+        gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
+        drawBuffer(dynBuf, verts.length / VERTEX_FLOATS);
       }
+      drawBuffer(waterBuf, waterCount);
     },
-    get dynamicDropped() { return dynCount >= DYNAMIC_BOX_CAP; },
+    resize(w, h) {
+      canvas.width = w;
+      canvas.height = h;
+    },
+    staticVerts: 0,
   };
 }

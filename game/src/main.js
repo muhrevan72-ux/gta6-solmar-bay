@@ -1,604 +1,461 @@
-// Solmar Bay — game loop and wiring. Builds the shared `game`
-// object, runs the frame loop, owns the menus, and glues every
-// module together.
-//
-// Input rules (play-test, 19 Nov 2026): every tap action (E, F, G,
-// Escape/P, M, Digit1-4, Enter) reads `pressedKey` — the `pressed`
-// set that records a keydown even if it is released between frames.
-// Cooldowns are always gated with `<= 0`, never `!cooldown`.
+// Solmar Bay — game loop, wiring, and the E-interaction dispatcher.
+// createGame builds the whole game (Node-safe: no DOM/WebGL needed);
+// stepGame advances one frame; the browser loop at the bottom only
+// runs when `document` exists.
 
-import { createRenderer } from './render.js';
-import { generateCity, buildStaticBoxes, buildWaterBoxes } from './world.js';
-import { COL, dist } from './config.js';
+import { TUNE, OUTFIT, CHAPTERS, FOOD_MENU } from './config.js';
+import { showToast, addCash } from './state.js';
 import { createInput } from './input.js';
-import { createCamera, updateCamera, snapCamera } from './shots.js';
-import {
-  createState, resetState, damagePlayer, healPlayer, addArmor,
-  MODES, selectWeapon,
-} from './state.js';
-import { createPlayer, updatePlayer, drawPlayer, tryEnterVehicle, exitVehicle } from './player.js';
-import { createVehicles, updateVehicles, drawVehicles } from './vehicles.js';
-import { createPeds, updatePeds, drawPeds, fleeFrom } from './pedestrians.js';
-import { createGangs, updateGangs, drawGangs } from './gangs.js';
-import { createPolice, updatePolice, drawPolice, getBusted } from './police.js';
-import { createMissions, startChapter, updateMissions, drawMissions } from './missions.js';
-import {
-  createCombat, seedPickups, tryPunch, tryShoot, throwBomb,
-  updateCombat, drawCombat, damageTarget,
-} from './combat.js';
-import { createFire, updateFire, drawFire } from './fire.js';
-import { createTaxi, updateTaxi, drawTaxi } from './taxi.js';
-import { createFood, nearestShop, openFoodMenu, closeFoodMenu, buyFood, drawFood } from './food.js';
-import { createDating, startDate, updateDating, drawDating } from './dating.js';
-import {
-  createCats, updateCats, drawCats, nearestCat, nearestDog,
-  pickUpCat, putDownCat, petDog,
-} from './cats.js';
-import { createOutfit, openOutfitMenu, closeOutfitMenu, cycleOutfit, drawOutfit, OUTFIT_PARTS } from './outfit.js';
-import {
-  createTraining, updateTraining, drawTraining,
-  startRange, startSwim, startCourse, checkRangeHit,
-} from './training.js';
-import { createEvents, updateEvents, drawEvents } from './events.js';
-import {
-  createLiving, updateLiving, drawLiving, boardTrain, exitTrain,
-  toggleElevator,
-} from './living.js';
-import {
-  createHud, updateHud, showOverlay, setChapterCard, setBustedCard,
-  setCompleteCard, drawMinimap,
-} from './hud.js';
+import { createState, resetState } from './state.js';
+import { buildCity, inWater } from './world.js';
+import { createRenderer } from './render.js';
+import { createCamera, snapCamera, updateCamera, cameraView } from './shots.js';
+import { createPlayer, resetPlayer, updatePlayer, playerBoxes } from './player.js';
+import { createVehicles, updateVehicles, updateDriven, tryEnterVehicle, exitVehicle, vehicleBoxes, nearestVehicle } from './vehicles.js';
+import { createPedestrians, updatePedestrians, pedBoxes } from './pedestrians.js';
+import { createPolice, updatePolice, commitCrime, bustPlayer, respawnAfterBusted } from './police.js';
+import { createMissions, startChapter, updateMissions, missionMarker, startSideJob, SIDE_MARKERS } from './missions.js';
+import { createCombat, updateCombat, punch, shoot, throwBomb, damagePlayer, WEAPONS, spawnPickup } from './combat.js';
+import { createGangs, updateGangs, gangBoxes } from './gangs.js';
+import { createFire, updateFire, fireBoxes } from './fire.js';
+import { createTaxi, updateTaxi, taxiMarker } from './taxi.js';
+import { createFood, nearestFoodShop, buyFood, foodBoxes } from './food.js';
+import { createDating, updateDating, startDate, datingMarker, mayaBoxes } from './dating.js';
+import { createCats, updateCats, interactCat, interactDog, catBoxes, dogBoxes } from './cats.js';
+import { createOutfit, buyOutfitPart, outfitBoxes } from './outfit.js';
+import { createTraining, updateTraining, startRange, startSwimChallenge, startCourse, targetBoxes, rangeBoxes, hitTarget as hitTargetFn } from './training.js';
+import { createEvents, updateEvents, eventMarker } from './events.js';
+import { createLiving, initLivingAmbience, boardTrain, exitTrain, toggleElevator, updateLiving, livingBoxes, nearestTrainCar, trainAtStation } from './living.js';
+import { createHud, updateHud, drawMinimap, showMenu, hideMenu } from './hud.js';
 import { createAudio } from './audio.js';
-import { saveGame, loadGame } from './save.js';
+import { saveGame, loadGame, hasSave } from './save.js';
+import { dist2, clamp } from './config.js';
 
 export function createGame(opts) {
   const o = opts || {};
-  const city = generateCity();
-  const input = o.input || createInput(typeof window !== 'undefined' ? window : null);
-  let renderer = o.renderer || null;
-  if (!renderer && o.canvas) {
-    try {
-      renderer = createRenderer(o.canvas, COL.fog);
-      renderer.bakeStatic(buildStaticBoxes(city));
-    } catch (e) {
-      renderer = null;
-    }
-  }
-  const hud = o.hud || createHud();
-  const audio = o.audio || createAudio();
-
+  const city = buildCity();
+  const state = createState();
+  const input = o.input || createInput(o.keyTarget || null, o.canvas || null);
   const game = {
-    city, input, renderer, hud, audio,
-    canvas: o.canvas || null,
+    city,
+    state,
+    input,
     camera: createCamera(),
-    state: createState(),
-    player: createPlayer(city.spawns.player),
+    player: createPlayer(city),
     vehicles: createVehicles(city),
-    peds: createPeds(city),
-    gangs: createGangs(),
+    peds: createPedestrians(city),
     police: createPolice(),
     missions: createMissions(),
     combat: createCombat(),
+    gangs: createGangs(),
     fire: createFire(),
     taxi: createTaxi(),
     food: createFood(),
     dating: createDating(),
-    cats: createCats(city),
+    cats: createCats(),
     outfit: createOutfit(),
     training: createTraining(),
     events: createEvents(),
     living: createLiving(city),
-    COL,
-    time: 0,
-    flashT: 0,
-    saveT: 0,
-    menuOrbit: 0,
-    lastMode: null,
+    hud: createHud(o.document || null),
+    audio: createAudio(),
+    render: createRenderer(o.canvas || null),
+    configOutfit: OUTFIT,
+    _respawnPed: false,
+    _pickupSeedT: 0,
+    waterT: 0,
   };
-
-  // cross-module helpers the modules call through `game`
-  game.peds.fleeFrom = (x, z, r) => fleeFrom(game.peds, x, z, r);
-  game.combat.damagePed = (g, ped, dmg, cause) => damageTarget(g, { ref: ped, kind: 'ped' }, dmg, cause);
-  game.toast = (text, seconds) => setToast(game.state, text, seconds);
-  game.healPlayer = (amount) => healPlayer(game.state, amount);
-  game.addArmor = (amount) => addArmor(game.state, amount);
-  game.hurtPlayer = (amount, cause) => {
-    if (game.state.mode !== 'playing') return;
-    if (damagePlayer(game.state, amount)) {
-      getBusted(game, cause === 'cop' ? 'Busted by the police' : 'You died');
-    }
+  // wire cross-system methods the modules call through `game`
+  game.police.bustPlayer = (g, reason) => bustPlayer(g, reason);
+  game.combat.damagePlayer = (g, amount) => damagePlayer(g, amount);
+  game.training.hitTarget = (g, target, damage) => {
+    // training.js hitTarget is imported above via the module binding
+    hitTargetFn(g, target, damage);
   };
-  game.save = () => saveGame(game);
-
+  initLivingAmbience(game.living);
   seedPickups(game);
   return game;
 }
 
-// ---- menus ----
-export function startNewGame(game) {
-  game.audio.ensure();
-  game.audio.startBass();
-  resetState(game.state, true);
-  const city = game.city;
-  game.player = createPlayer(city.spawns.player);
-  game.vehicles = createVehicles(city);
-  game.peds = createPeds(city);
-  game.peds.fleeFrom = (x, z, r) => fleeFrom(game.peds, x, z, r);
-  game.gangs = createGangs();
-  game.police = createPolice();
+function seedPickups(game) {
+  // weapon + health pickups on roads/streets (never inside buildings)
+  spawnPickup(game, 60, 0, 'smg');
+  spawnPickup(game, -200, 0, 'shotgun');
+  spawnPickup(game, 100, -100, 'health');
+  spawnPickup(game, -100, 200, 'health');
+  spawnPickup(game, 0, -200, 'armour');
+  spawnPickup(game, 200, 100, 'wrench');
+  spawnPickup(game, -300, 200, 'health');
+}
+
+// ---- game flow ----
+export function startGame(game, fresh) {
+  const state = game.state;
+  resetState(state, fresh);
+  resetPlayer(game.player, game.city, !fresh);
+  game.player.outfit = { ...state.outfit };
   game.missions = createMissions();
-  game.combat = createCombat();
-  game.combat.damagePed = (g, ped, dmg, cause) => damageTarget(g, { ref: ped, kind: 'ped' }, dmg, cause);
-  game.fire = createFire();
-  game.taxi = createTaxi();
-  game.food = createFood();
-  game.dating = createDating();
-  game.cats = createCats(city);
-  game.training = createTraining();
-  game.events = createEvents();
-  game.living = createLiving(city);
-  seedPickups(game);
-  game.camera = createCamera();
-  snapCamera(game.camera, game.player, game.player.heading);
-  startChapter(game, 0);
-  showOverlay(game.hud, 'chapter');
+  game.combat.bombs = 3;
+  state.mode = 'chapter';
+  state.chapterIntroShown = false;
+  startChapter(game, fresh ? 1 : state.chapter);
+  snapCamera(game.camera, game.player, 0);
+  hideMenu(game.hud);
+  if (game.audio) game.audio.ensure();
+  saveGame(game);
 }
 
 export function continueGame(game) {
-  const data = loadGame();
-  if (!data) return false;
-  game.audio.ensure();
-  game.audio.startBass();
-  resetState(game.state, true);
-  game.state.cash = data.cash;
-  game.state.chapter = data.chapter;
-  game.state.stats = { ...game.state.stats, ...data.stats };
-  game.state.weapon = data.weapon || 'pistol';
-  game.state.ammo = data.ammo || { smg: 0, shotgun: 0 };
-  game.state.bombs = data.bombs !== undefined ? data.bombs : 3;
-  if (data.outfit) game.state.outfit = data.outfit;
-  if (data.relationship) game.state.relationship = data.relationship;
-  if (data.accuracyBonus) game.state.accuracyBonus = data.accuracyBonus;
-  if (data.handlingBonus) game.state.handlingBonus = data.handlingBonus;
-  const city = game.city;
-  game.player = createPlayer({ x: data.player.x, z: data.player.z });
-  game.vehicles = createVehicles(city);
-  game.peds = createPeds(city);
-  game.peds.fleeFrom = (x, z, r) => fleeFrom(game.peds, x, z, r);
-  game.gangs = createGangs();
-  game.police = createPolice();
-  game.missions = createMissions();
-  game.combat = createCombat();
-  game.combat.damagePed = (g, ped, dmg, cause) => damageTarget(g, { ref: ped, kind: 'ped' }, dmg, cause);
-  game.fire = createFire();
-  game.taxi = createTaxi();
-  game.food = createFood();
-  game.dating = createDating();
-  game.cats = createCats(city);
-  game.training = createTraining();
-  game.events = createEvents();
-  game.living = createLiving(city);
-  seedPickups(game);
-  game.camera = createCamera();
-  snapCamera(game.camera, game.player, game.player.heading);
-  if (data.chapter >= 5) {
-    game.state.chapterActive = false;
-    game.state.objective = 'Story complete — Solmar Bay is yours. Free roam!';
-    game.state.mode = 'playing';
-    showOverlay(game.hud, null);
-  } else {
-    startChapter(game, data.chapter);
-    showOverlay(game.hud, 'chapter');
+  const saved = loadGame();
+  if (!saved) {
+    startGame(game, true);
+    return;
   }
-  return true;
+  startGame(game, false);
+  const state = game.state;
+  state.cash = saved.cash;
+  state.chapter = saved.chapter;
+  state.health = saved.health;
+  state.armour = saved.armour || 0;
+  state.relationship = saved.relationship || 0;
+  state.outfit = saved.outfit || { hair: 0, shirt: 0, pants: 0, shoes: 0 };
+  game.player.outfit = { ...state.outfit };
+  if (saved.x !== undefined) {
+    game.player.x = saved.x;
+    game.player.z = saved.z;
+  }
+  startChapter(game, state.chapter);
 }
 
-export function respawnAfterBusted(game) {
-  game.audio.ensure();
-  resetState(game.state, false);
-  game.state.mode = 'playing';
-  const h = game.city.spawns.hospital;
-  game.player.x = h.x;
-  game.player.z = h.z;
-  game.player.y = 0;
-  game.player.inVehicle = null;
-  snapCamera(game.camera, game.player, game.player.heading);
-  if (game.state.chapterActive && game.state.chapter < 5) {
-    game.state.objective = 'Continue the story.';
-  } else {
-    game.state.objective = 'Free roam — find a side-job marker.';
-  }
-  showOverlay(game.hud, null);
-  game.save();
-}
-
-// ---- E interaction dispatcher (priority order) ----
+// ---- E interaction dispatcher (priority order, round-4 spec) ----
+// train -> elevator -> cat -> dog -> food -> outfit -> dating ->
+// range -> swim -> course -> vehicle.
 export function interact(game) {
   const p = game.player;
-  const state = game.state;
-  if (state.eCooldown > 0) return false;
-  // 1. get off the train
-  if (p.onTrain) {
-    state.eCooldown = 0.35;
-    return exitTrain(game);
+  if (p.eCooldown > 0) return false;
+  // in a vehicle: get out (or jump out of the plane mid-air)
+  if (p.inVehicle) {
+    const veh = p.inVehicle;
+    if (veh.type === 'plane' && veh.altitude > 10) {
+      exitVehicle(game);
+      p.falling = 1;
+      p.y = veh.altitude;
+      showToast(game.state, 'You jumped! Press SPACE to open the parachute.', 3);
+      return true;
+    }
+    return exitVehicle(game);
   }
-  // 2. elevator ride (already on it)
-  if (p.onElevator) {
-    state.eCooldown = 0.35;
-    return toggleElevator(game);
+  if (p.onTrain) return exitTrain(game);
+  if (p.onElevator) return toggleElevator(game);
+  // board the train at the station
+  if (trainAtStation(game.living)) {
+    const near = nearestTrainCar(game.living, p.x, p.z);
+    if (near.dist < 8) return boardTrain(game);
   }
-  // 3. board the train at the station
-  if (boardTrain(game)) {
-    state.eCooldown = 0.35;
-    return true;
-  }
-  // 4. step onto the elevator platform
-  const el = game.city.elevator;
-  if (dist(p.x, p.z, el.x, el.z) < 4) {
-    p.onElevator = true;
-    state.eCooldown = 0.35;
-    return toggleElevator(game);
-  }
-  // 5. put the carried cat down
-  if (p.carryingCat) {
-    state.eCooldown = 0.2;
-    return putDownCat(game);
-  }
-  // 6. pick up a cat
-  const cat = nearestCat(game, p.x, p.z, 2.5);
-  if (cat) {
-    pickUpCat(game, cat);
-    state.eCooldown = 0.2;
-    return true;
-  }
-  // 7. pet a dog
-  const dog = nearestDog(game, p.x, p.z, 2.5);
-  if (dog) {
-    petDog(game, dog);
-    state.eCooldown = 0.2;
-    return true;
-  }
-  // 8. food shop menu
-  const shop = nearestShop(game, p.x, p.z, 7);
+  // glass elevator on the tallest tower
+  if (dist2(p.x, p.z, 50, 76) < 25) return toggleElevator(game);
+  // cats, then dogs
+  if (interactCat(game)) return true;
+  if (interactDog(game)) return true;
+  // food shop menu
+  const shop = nearestFoodShop(game);
   if (shop) {
-    openFoodMenu(game, shop);
-    state.eCooldown = 0.2;
+    game.food.openShop = shop;
+    showFoodMenu(game, shop);
     return true;
   }
-  // 9. outfit shop menu
-  const os = game.city.spawns.outfitShop;
-  if (dist(p.x, p.z, os.x, os.z) < 8) {
-    openOutfitMenu(game);
-    state.eCooldown = 0.2;
+  // outfit shop menu
+  if (dist2(p.x, p.z, game.outfit.shop.x, game.outfit.shop.z) < 25) {
+    game.outfit.open = true;
+    showOutfitMenu(game);
     return true;
   }
-  // 10. start a date with Maya
-  if (!game.dating.active && dist(p.x, p.z, game.dating.gf.x, game.dating.gf.z) < 4) {
-    startDate(game);
-    state.eCooldown = 0.2;
-    return true;
+  // dating: Maya at the beach house
+  if (!game.dating.onDate && dist2(p.x, p.z, -310, 120) < 25) {
+    return startDate(game);
   }
-  // 11. shooting range
-  const rg = game.city.spawns.range;
-  if (dist(p.x, p.z, rg.x, rg.z) < 10 && !game.training.range.active) {
+  // shooting range
+  if (dist2(p.x, p.z, 260, 260) < 100) {
     startRange(game);
-    state.eCooldown = 0.2;
     return true;
   }
-  // 12. swim challenge
-  const buoy = game.city.spawns.buoy;
-  if (dist(p.x, p.z, buoy.x, buoy.z) < 8 && !game.training.swim.active) {
-    startSwim(game);
-    state.eCooldown = 0.2;
+  // swim challenge (while swimming)
+  if (p.swimming) {
+    startSwimChallenge(game);
     return true;
   }
-  // 13. driving course (in a vehicle, at the start cones)
-  if (p.inVehicle && dist(p.x, p.z, 100, 250) < 8 && !game.training.course.active) {
+  // driving course
+  if (dist2(p.x, p.z, 0, -350) < 100) {
     startCourse(game);
-    state.eCooldown = 0.2;
     return true;
   }
-  // 14. enter / exit a vehicle
-  if (p.inVehicle) return exitVehicle(game);
-  return tryEnterVehicle(game);
+  // side-job markers (single source of truth: missions.js SIDE_MARKERS)
+  for (const id of Object.keys(SIDE_MARKERS)) {
+    const sm = SIDE_MARKERS[id];
+    if (dist2(p.x, p.z, sm.x, sm.z) < 64) {
+      return startSideJob(game, id);
+    }
+  }
+  // finally: enter the nearest vehicle
+  return !!tryEnterVehicle(game);
+}
+
+function showFoodMenu(game, shop) {
+  const lines = FOOD_MENU.map((m, i) => (i + 1) + '. ' + m.name + ' — $' + m.price + ' (+' + m.heal + ' HP' + (m.armour ? ', +' + m.armour + ' armour' : '') + ')').join('<br>');
+  showMenu(game.hud, shop.name, lines, 'Press 1-3 to buy, Esc to close. Cash: $' + game.state.cash);
+}
+
+function showOutfitMenu(game) {
+  const o = game.player.outfit;
+  const parts = ['hair', 'shirt', 'pants', 'shoes'];
+  const lines = parts.map((part, i) => {
+    const opts = OUTFIT[part];
+    const cur = opts[o[part]];
+    return (i + 1) + '. ' + part + ': ' + cur.name + (cur.price ? ' ($' + cur.price + ')' : ' (owned)');
+  }).join('<br>');
+  showMenu(game.hud, 'Outfit Shop', lines, 'Press 1-4 to cycle a part, Esc to close. Cash: $' + game.state.cash);
+}
+
+function handleMenuKeys(game) {
+  const input = game.input;
+  if (game.food.openShop) {
+    if (input.pressedKey('Digit1')) buyFood(game, 0);
+    if (input.pressedKey('Digit2')) buyFood(game, 1);
+    if (input.pressedKey('Digit3')) buyFood(game, 2);
+    return true;
+  }
+  if (game.outfit.open) {
+    if (input.pressedKey('Digit1')) buyOutfitPart(game, 'hair');
+    if (input.pressedKey('Digit2')) buyOutfitPart(game, 'shirt');
+    if (input.pressedKey('Digit3')) buyOutfitPart(game, 'pants');
+    if (input.pressedKey('Digit4')) buyOutfitPart(game, 'shoes');
+    return true;
+  }
+  return false;
+}
+
+function closeMenus(game) {
+  game.food.openShop = null;
+  game.outfit.open = false;
+  hideMenu(game.hud);
 }
 
 // ---- one frame ----
 export function stepGame(game, dt) {
-  if (dt > 0.05) dt = 0.05;
-  if (dt <= 0) dt = 0.001;
+  dt = Math.min(dt, 0.05);
   const state = game.state;
   const input = game.input;
+  state.time += dt;
+  if (state.toastT > 0) state.toastT -= dt;
+  game.waterT += dt;
 
-  syncOverlay(game);
-
+  // --- menus / chapter card / pause / busted ---
   if (state.mode === 'menu') {
-    game.time += dt;
-    game.menuOrbit += dt * 0.08;
-    if (input.pressedKey('Enter')) startNewGame(game);
-    renderMenuBackdrop(game, dt);
-    updateHud(game.hud, game);
+    // slow orbit behind the title; minimap draws behind the menu
+    game.camera.targetYaw += dt * 0.05;
+    updateCamera(game.camera, { x: game.player.x, y: 0, z: game.player.z, heading: 0, speed: 0 }, null, dt);
+    drawMinimap(game);
     input.endFrame();
     return;
   }
-
   if (state.mode === 'chapter') {
-    game.missions.introT += dt;
-    if (game.missions.introT > 4 || input.pressedKey('Enter') || input.pressedKey('Escape')) {
+    if (input.pressedKey('Escape') || input.pressedKey('Enter')) {
       state.mode = 'playing';
-      showOverlay(game.hud, null);
+      hideMenu(game.hud);
     }
-    renderWorld(game, dt, currentAspect(game));
     input.endFrame();
     return;
   }
-
   if (state.mode === 'paused') {
     if (input.pressedKey('Escape') || input.pressedKey('KeyP')) {
       state.mode = 'playing';
-      showOverlay(game.hud, null);
+      hideMenu(game.hud);
     }
-    renderWorld(game, dt, currentAspect(game));
     input.endFrame();
     return;
   }
-
   if (state.mode === 'busted') {
-    if (input.pressedKey('Enter')) respawnAfterBusted(game);
-    renderWorld(game, dt, currentAspect(game));
-    input.endFrame();
-    return;
-  }
-
-  if (state.mode === 'complete') {
-    if (input.pressedKey('Enter') || input.pressedKey('Escape')) {
-      state.mode = 'playing';
-      showOverlay(game.hud, null);
+    if (input.pressedKey('Enter')) {
+      respawnAfterBusted(game);
+      snapCamera(game.camera, game.player, game.player.heading);
+      hideMenu(game.hud);
     }
-    renderWorld(game, dt, currentAspect(game));
     input.endFrame();
     return;
   }
 
-  // ---- playing ----
-  game.time += dt;
-  state.stats.timePlayed += dt;
-  if (state.toastTimer > 0) state.toastTimer -= dt;
-  if (game.flashT > 0) game.flashT -= dt;
-  if (state.eCooldown > 0) state.eCooldown -= dt;
-  if (state.fCooldown > 0) state.fCooldown -= dt;
-  if (state.gCooldown > 0) state.gCooldown -= dt;
-
-  if (input.pressedKey('KeyM')) {
-    game.audio.setMuted(!game.audio.muted);
-    game.toast(game.audio.muted ? 'Sound off' : 'Sound on');
-  }
-
-  // Menus take over the number keys while open. Escape closes the open
-  // menu instead of pausing: pausing first would trap the menu open
-  // (Esc would only toggle pause and the menu could never be left).
-  if (game.food.menuOpen) {
-    if (input.pressedKey('Digit1')) buyFood(game, 0);
-    if (input.pressedKey('Digit2')) buyFood(game, 1);
-    if (input.pressedKey('Digit3')) buyFood(game, 2);
-    if (input.pressedKey('Escape')) closeFoodMenu(game);
-  } else if (game.outfit.menuOpen) {
-    if (input.pressedKey('Digit1')) cycleOutfit(game, OUTFIT_PARTS[0]);
-    if (input.pressedKey('Digit2')) cycleOutfit(game, OUTFIT_PARTS[1]);
-    if (input.pressedKey('Digit3')) cycleOutfit(game, OUTFIT_PARTS[2]);
-    if (input.pressedKey('Digit4')) cycleOutfit(game, OUTFIT_PARTS[3]);
-    if (input.pressedKey('Escape')) closeOutfitMenu(game);
-  } else {
-    if (input.pressedKey('Escape') || input.pressedKey('KeyP')) {
+  // --- playing ---
+  // cooldowns decay every frame, on foot AND in a vehicle (a cooldown
+  // that only decays on foot can never expire while driving)
+  game.player.eCooldown = Math.max(0, game.player.eCooldown - dt);
+  // Escape / P: pause (or close a menu first)
+  if (input.pressedKey('Escape') || input.pressedKey('KeyP')) {
+    if (game.food.openShop || game.outfit.open) {
+      closeMenus(game);
+    } else {
       state.mode = 'paused';
-      showOverlay(game.hud, 'pause');
-      input.endFrame();
-      return;
+      showMenu(game.hud, 'Paused', 'Solmar Bay is waiting for you.', 'Esc to resume. M to mute.');
+      saveGame(game);
     }
-    if (input.pressedKey('Digit1')) selectWeapon(state, 'pistol');
-    if (input.pressedKey('Digit2')) selectWeapon(state, 'smg');
-    if (input.pressedKey('Digit3')) selectWeapon(state, 'shotgun');
-    if (input.pressedKey('KeyG')) throwBomb(game);
-    if (input.pressedKey('KeyF')) tryPunch(game);
-    if (input.pressedKey('KeyE')) interact(game);
-    // parachute: Space while flying high in the plane
-    const pv = game.player.inVehicle;
-    if (input.pressedKey('Space') && pv && pv.kind === 'plane' && pv.airborne && pv.y > 15) {
-      game.player.parachuting = true;
-      game.player.parachuteY = pv.y;
-      game.player.x = pv.x;
-      game.player.z = pv.z;
-      game.player.inVehicle = null;
-      pv.driver = null;
-    }
-    if (input.clicked) {
-      tryShoot(game);
-      checkRangeHit(game);
-    } else if (input.mouseDown && state.weapon === 'smg') {
-      tryShoot(game);
-    }
+    input.endFrame();
+    return;
+  }
+  // menu keys (food / outfit) eat the digits while a menu is open
+  if ((game.food.openShop || game.outfit.open) && handleMenuKeys(game)) {
+    if (game.food.openShop) showFoodMenu(game, game.food.openShop);
+    if (game.outfit.open) showOutfitMenu(game);
+    input.endFrame();
+    return;
+  }
+  // mute
+  if (input.pressedKey('KeyM') && game.audio) {
+    game.audio.muted = !game.audio.muted;
+  }
+  // weapon switching
+  if (input.pressedKey('Digit1')) game.combat.weapon = 0;
+  if (input.pressedKey('Digit2') && game.combat.owned[1]) game.combat.weapon = 1;
+  if (input.pressedKey('Digit3') && game.combat.owned[2]) game.combat.weapon = 2;
+  // parachute
+  if (input.pressedKey('Space') && game.player.falling > 0 && !game.player.parachute) {
+    game.player.parachute = true;
+    game.player.falling = 0;
+    showToast(state, 'Parachute open! Steer with WASD.', 2);
+  }
+  // tap actions via pressedKey (never down() for one-shots)
+  if (input.pressedKey('KeyE')) interact(game);
+  if (input.pressedKey('KeyF') && !game.player.inVehicle) punch(game);
+  if (input.pressedKey('KeyG') && !game.player.inVehicle) throwBomb(game);
+  if (input.mouse && input.mouse.clicked) shoot(game);
+
+  // world updates
+  if (game.player.inVehicle) updateDriven(game, dt);
+  else updatePlayer(game, dt);
+  updateVehicles(game, dt);
+  updatePedestrians(game, dt);
+  updatePolice(game, dt);
+  updateMissions(game, dt);
+  updateCombat(game, dt);
+  updateGangs(game, dt);
+  updateFire(game, dt);
+  updateTaxi(game, dt);
+  updateDating(game, dt);
+  updateCats(game, dt);
+  updateTraining(game, dt);
+  updateEvents(game, dt);
+  updateLiving(game, dt);
+
+  // camera follows the player (or the vehicle)
+  const follow = {
+    x: game.player.x,
+    y: game.player.y || 0,
+    z: game.player.z,
+    heading: game.player.heading,
+    speed: game.player.speed || 0,
+  };
+  updateCamera(game.camera, follow, game.input.mouse, dt);
+
+  // audio
+  if (game.audio) {
+    game.audio.engine(game.player.inVehicle ? Math.abs(game.player.inVehicle.speed || 0) : 0);
+    game.audio.music(dt);
   }
 
-  updatePlayer(dt, game);
-  updateVehicles(dt, game);
-  updatePeds(dt, game);
-  updateGangs(dt, game);
-  updatePolice(dt, game);
-  updateMissions(dt, game);
-  updateCombat(dt, game);
-  updateFire(dt, game);
-  updateTaxi(dt, game);
-  updateDating(dt, game);
-  updateCats(dt, game);
-  updateTraining(dt, game);
-  updateEvents(dt, game);
-  updateLiving(dt, game);
-
-  // engine sound follows the driven vehicle
-  const v = game.player.inVehicle;
-  if (v) game.audio.setEngine(v.speed, v.kind === 'plane' ? 72 : v.kind === 'bike' ? 48 : v.kind === 'boat' ? 26 : 38);
-  else game.audio.setEngine(0, 38);
-
-  renderWorld(game, dt, currentAspect(game));
-  updateHud(game.hud, game);
-
-  // autosave
-  game.saveT += dt;
-  if (game.saveT > 15) {
-    game.saveT = 0;
-    game.save();
-  }
-
+  // HUD + minimap
+  updateHud(game);
   input.endFrame();
 }
 
-function currentAspect(game) {
-  if (game.canvas) {
-    const c = game.canvas;
-    return (c.width || 1280) / (c.height || 720);
-  }
-  return 1280 / 720;
-}
-
-// Keep the visible overlay in sync with the game mode.
-function syncOverlay(game) {
-  const mode = game.state.mode;
-  if (mode === game.lastMode) return;
-  game.lastMode = mode;
-  const map = { menu: 'menu', paused: 'pause', busted: 'busted', chapter: 'chapter', complete: 'complete', playing: null };
-  if (mode === 'chapter') {
-    setChapterCard(game.hud, game.state.chapterTitle, game.state.chapterText);
-  }
-  if (mode === 'busted') {
-    setBustedCard(game.hud, game.state.bustedReason);
-  }
-  if (mode === 'complete') {
-    const s = game.state.stats;
-    setCompleteCard(game.hud,
-      'Cash $' + game.state.cash + ' · Kills ' + s.kills + ' · Cars stolen ' + s.carsStolen +
-      ' · Missions ' + s.missionsDone + ' · Side jobs ' + s.sideDone +
-      ' · Driven ' + Math.round(s.distanceDriven / 1000) + ' km');
-  }
-  showOverlay(game.hud, map[mode] || null);
-}
-
-function renderWorld(game, dt, aspect) {
-  const p = game.player;
-  const v = p.inVehicle;
-  const focus = v ? { x: v.x, y: v.y, z: v.z } : { x: p.x, y: p.y, z: p.z };
-  const heading = v ? v.heading : p.heading;
-  const mode = v ? (v.kind === 'plane' && v.airborne ? 'fly' : 'drive') : 'foot';
-  updateCamera(game.camera, dt, game.input, focus, heading, mode);
-  const r = game.renderer;
-  if (!r) return;
-  r.beginFrame(game.camera.eye, game.camera.target, aspect);
-  drawPlayer(r, game);
-  drawVehicles(r, game);
-  drawPeds(r, game);
-  drawGangs(r, game);
-  drawPolice(r, game);
-  drawCombat(r, game);
-  drawMissions(r, game);
-  drawFire(r, game);
-  drawTaxi(r, game);
-  drawFood(r, game);
-  drawDating(r, game);
-  drawCats(r, game);
-  drawOutfit(r, game);
-  drawTraining(r, game);
-  drawEvents(r, game);
-  drawLiving(r, game);
-  for (const w of buildWaterBoxes(game.city, game.time)) {
-    r.water(w.x, w.y, w.z, w.sx, w.sy, w.sz, w.color);
-  }
-  r.endFrame();
-}
-
-function renderMenuBackdrop(game, dt) {
-  const r = game.renderer;
-  if (!r) return;
-  const eye = [Math.sin(game.menuOrbit) * 150, 70, Math.cos(game.menuOrbit) * 150];
-  r.beginFrame(eye, [0, 8, 0], currentAspect(game));
-  drawVehicles(r, game);
-  drawPeds(r, game);
-  drawGangs(r, game);
-  drawLiving(r, game);
-  for (const w of buildWaterBoxes(game.city, game.time)) {
-    r.water(w.x, w.y, w.z, w.sx, w.sy, w.sz, w.color);
-  }
-  r.endFrame();
-  // the minimap draws behind the menu (never an empty green box)
-  if (game.hud.minimap) {
-    const ctx = game.hud.minimap.getContext('2d');
-    if (ctx) drawMinimap(ctx, game);
-  }
-  void dt;
-}
-
-// ---- browser boot (not run in Node tests) ----
-function boot() {
-  const canvas = document.getElementById('game');
-  const game = createGame({ canvas });
-
-  function resize() {
-    canvas.width = Math.min(window.innerWidth, 1920);
-    canvas.height = Math.min(window.innerHeight, 1080);
-  }
-  window.addEventListener('resize', resize);
-  resize();
-
-  function bind(id, fn) {
-    const el = document.getElementById(id);
-    if (el) el.addEventListener('click', fn);
-  }
-  bind('btn-new', () => startNewGame(game));
-  bind('btn-continue', () => continueGame(game));
-  bind('btn-resume', () => {
-    game.state.mode = 'playing';
-    showOverlay(game.hud, null);
-  });
-  bind('btn-busted', () => respawnAfterBusted(game));
-  bind('btn-roam', () => {
-    game.state.mode = 'playing';
-    showOverlay(game.hud, null);
-  });
-  bind('btn-chapter', () => {
-    if (game.state.mode === 'chapter') {
-      game.state.mode = 'playing';
-      showOverlay(game.hud, null);
+// ---- dynamic boxes for one rendered frame (capped) ----
+export function collectDynamicBoxes(game) {
+  const boxes = [];
+  const push = (list) => {
+    for (const b of list) {
+      if (boxes.length >= TUNE.batchCap) return;
+      boxes.push(b);
     }
-  });
-  bind('btn-menu-quit', () => {
-    game.save();
-    game.state.mode = 'menu';
-    showOverlay(game.hud, 'menu');
-    refreshMenu(game);
-  });
+  };
+  if (!game.player.inVehicle) push(playerBoxes(game));
+  for (const v of game.vehicles.list) {
+    if (v.driver === 'traffic' || v.driver === 'player' || v.driver === 'parked' || v.driver === 'cop') {
+      push(vehicleBoxes(v));
+    }
+  }
+  for (const ped of game.peds) if (ped.alive) push(pedBoxes(ped));
+  if (game.gangs) for (const m of game.gangs.members) if (m.alive) push(gangBoxes(m));
+  if (game.police) for (const c of game.police.footCops) {
+    push([
+      { x: c.x, y: 1.2, z: c.z, sx: 0.9, sy: 0.8, sz: 0.5, c: [0.1, 0.15, 0.35] },
+      { x: c.x, y: 1.85, z: c.z, sx: 0.6, sy: 0.55, sz: 0.55, c: [0.85, 0.65, 0.5] },
+      { x: c.x, y: 2.15, z: c.z, sx: 0.64, sy: 0.2, sz: 0.6, c: [0.1, 0.15, 0.35] },
+    ]);
+  }
+  if (game.cats) {
+    for (const cat of game.cats.list) push(catBoxes(cat));
+    for (const dog of game.cats.dogs) push(dogBoxes(dog));
+  }
+  if (game.fire) for (const f of game.fire.fires) push(fireBoxes(f));
+  if (game.dating) push(mayaBoxes(game));
+  if (game.training) {
+    for (const t of game.training.targets) push(targetBoxes(t));
+    push(rangeBoxes());
+  }
+  if (game.food) for (const s of game.food.shops) push(foodBoxes(s));
+  if (game.outfit) push(outfitBoxes(game.outfit.shop));
+  if (game.combat) {
+    for (const d of game.combat.cashDrops) {
+      push([{ x: d.x, y: 0.5, z: d.z, sx: 0.9, sy: 0.5, sz: 0.6, c: [0.2, 0.85, 0.3] }]);
+    }
+    for (const pk of game.combat.pickups) {
+      const c = pk.kind === 'health' ? [1, 0.3, 0.3] : pk.kind === 'armour' ? [0.3, 0.5, 1] : pk.kind === 'wrench' ? [0.9, 0.9, 0.9] : [0.2, 0.2, 0.2];
+      push([{ x: pk.x, y: 0.6, z: pk.z, sx: 1.0, sy: 1.0, sz: 1.0, c }]);
+    }
+    for (const b of game.combat.bombsActive) {
+      push([{ x: b.x, y: b.y, z: b.z, sx: 0.6, sy: 0.6, sz: 0.6, c: [0.15, 0.15, 0.15] }]);
+    }
+  }
+  if (game.living) push(livingBoxes(game));
+  if (game.events) {
+    for (const pp of game.events.partyPeds) {
+      push([{ x: pp.x, y: 1.2, z: pp.z, sx: 0.9, sy: 0.8, sz: 0.5, c: [0.95, 0.5, 0.7] }]);
+    }
+  }
+  return boxes;
+}
 
-  refreshMenu(game);
-  showOverlay(game.hud, 'menu');
-
-  let lastT = performance.now();
+// ---- browser bootstrap (only when document exists) ----
+if (typeof document !== 'undefined' && typeof window !== 'undefined') {
+  const canvas = document.getElementById('game');
+  const game = createGame({ document, canvas });
+  window.__solmar = game;
+  const btnNew = document.getElementById('btn-new');
+  const btnContinue = document.getElementById('btn-continue');
+  const btnResume = document.getElementById('btn-resume');
+  if (btnNew) btnNew.addEventListener('click', () => startGame(game, true));
+  if (btnContinue) btnContinue.addEventListener('click', () => continueGame(game));
+  if (btnResume) btnResume.addEventListener('click', () => {
+    game.state.mode = 'playing';
+    hideMenu(game.hud);
+  });
+  // title screen content
+  const has = hasSave();
+  if (btnContinue) btnContinue.style.display = has ? 'inline-block' : 'none';
+  showMenu(game.hud, 'SOLMAR BAY', 'A voxel open-world crime game.<br>Steal cars, run missions, dodge the cops, live the Vice City life — original, nothing from Rockstar.<br><br>WASD move &nbsp;·&nbsp; Shift run &nbsp;·&nbsp; E interact / enter car &nbsp;·&nbsp; F punch &nbsp;·&nbsp; G bomb &nbsp;·&nbsp; Click shoot &nbsp;·&nbsp; 1/2/3 weapons &nbsp;·&nbsp; Space handbrake / parachute &nbsp;·&nbsp; Esc pause &nbsp;·&nbsp; M mute', 'New Game or Continue to start.');
+  let last = performance.now();
   function frame(now) {
-    requestAnimationFrame(frame);
-    const dt = (now - lastT) / 1000;
-    lastT = now;
+    const dt = Math.min(0.05, (now - last) / 1000 || 0.016);
+    last = now;
     stepGame(game, dt);
+    if (game.state.mode !== 'menu' || true) {
+      // render every frame (menu too, so the city shows behind it)
+      const view = cameraView(game.camera);
+      const dyn = collectDynamicBoxes(game);
+      const waterY = Math.sin(game.waterT * 0.8) * 0.15;
+      game.render.setWater(game.city.waterBoxes.map((b) => ({ ...b, y: b.y + waterY })));
+      game.render.draw(view, dyn, 120, 700);
+    }
+    requestAnimationFrame(frame);
   }
+  game.render.setStatic(game.city.boxes);
+  game.render.setWater(game.city.waterBoxes);
   requestAnimationFrame(frame);
-}
-
-export function refreshMenu(game) {
-  const data = loadGame();
-  const hud = game.hud;
-  if (hud.menuContinue) hud.menuContinue.style.display = data ? 'inline-block' : 'none';
-  if (hud.menuSaveInfo) {
-    hud.menuSaveInfo.textContent = data
-      ? 'Save found: $' + data.cash + ', chapter ' + Math.min(data.chapter + 1, 5) + ' of 5'
-      : 'No save yet — start a new game.';
-  }
-}
-
-if (typeof document !== 'undefined' && typeof window !== 'undefined' && !window.__SOLMAR_NO_BOOT) {
-  boot();
 }

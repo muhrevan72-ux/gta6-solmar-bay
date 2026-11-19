@@ -1,48 +1,40 @@
-// Solmar Bay — outfit shop: change the player's look from hair to
-// shoes. Walk up to the clothing shop downtown, press E, then press
-// 1/2/3/4 to cycle hair / shirt / pants / shoes. Each cycle buys the
-// next option if the player can afford it. The outfit persists in
-// the save (see save.js).
+// Solmar Bay — outfit shop. A clothing shop building; press E to
+// open the menu, number keys cycle hair / shirt / pants / shoes,
+// each option bought with cash. The player's voxel body uses the
+// chosen colours, and the outfit persists in the save.
 
-import { OUTFIT, dist } from './config.js';
-import { setToast } from './state.js';
-
-export const OUTFIT_PARTS = ['hair', 'shirt', 'pants', 'shoes'];
+import { OUTFIT } from './config.js';
+import { showToast } from './state.js';
 
 export function createOutfit() {
-  return { menuOpen: false };
+  return {
+    open: false,
+    shop: { x: -50, z: 150 },
+  };
 }
 
-export function openOutfitMenu(game) {
-  game.outfit.menuOpen = true;
-  setToast(game.state, 'Outfit shop — 1 hair, 2 shirt, 3 pants, 4 shoes. Esc to leave.', 4);
-}
-
-export function closeOutfitMenu(game) {
-  game.outfit.menuOpen = false;
-}
-
-// Cycle one part to its next option, buying it if affordable.
-export function cycleOutfit(game, part) {
+export function buyOutfitPart(game, part) {
   const state = game.state;
+  const outfit = game.player.outfit;
   const options = OUTFIT[part];
-  const next = (state.outfit[part] + 1) % options.length;
-  const opt = options[next];
-  if (state.cash < opt.price) {
-    setToast(state, opt.name + ' costs $' + opt.price + ' — not enough cash.', 2);
+  if (!options) return false;
+  const next = (outfit[part] + 1) % options.length;
+  const item = options[next];
+  if (item.price > 0 && state.cash < item.price) {
+    showToast(state, 'Not enough cash for the ' + item.name + ' ($' + item.price + ').', 2);
     return false;
   }
-  state.cash -= opt.price;
-  state.outfit[part] = next;
-  setToast(state, part + ': ' + opt.name + (opt.price > 0 ? ' (-$' + opt.price + ')' : ''), 2);
-  if (game.audio) game.audio.blip(700, 0.08);
+  state.cash -= item.price;
+  outfit[part] = next;
+  showToast(state, part + ': ' + item.name + (item.price ? ' (-$' + item.price + ')' : ''), 2);
+  if (game.audio) game.audio.play('pickup');
   return true;
 }
 
-export function drawOutfit(renderer, game) {
-  const s = game.city.spawns.outfitShop;
-  renderer.box(s.x, 5.2, s.z - 10, 8, 1.6, 0.5, [0.9, 0.4, 0.7], 1);
-  renderer.box(s.x, 5.2, s.z + 10, 8, 1.6, 0.5, [0.9, 0.4, 0.7], 1);
+export function outfitBoxes(shop) {
+  return [
+    { x: shop.x, y: 2, z: shop.z, sx: 12, sy: 4, sz: 9, c: [0.75, 0.4, 0.85] },
+    { x: shop.x, y: 4.4, z: shop.z + 4.6, sx: 9, sy: 1.0, sz: 0.5, c: [1, 0.3, 0.6] },
+    { x: shop.x, y: 1.2, z: shop.z + 4.8, sx: 3, sy: 2.4, sz: 0.4, c: [0.95, 0.9, 0.7] },
+  ];
 }
-
-export { dist };

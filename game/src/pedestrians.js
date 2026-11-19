@@ -1,103 +1,100 @@
-// Solmar Bay — pedestrians: sidewalk walkers, beach crowds, groups.
-// Natural movement: per-ped pace variation ("breathing" speed),
-// gentle sinusoidal heading wander, softer turns — no robot-straight
-// walking. They flee from danger.
+// Solmar Bay — pedestrians: walk sidewalks in small groups, varied
+// pace and colours, flee from danger, wander with smooth turns.
+// Crowded: ~76 peds by default (the design cap).
 
-import { mulberry32, clamp, dist } from './config.js';
-import { moveWithCollision, collides } from './world.js';
+import { TUNE, COL, clamp, angleLerp, dist2 } from './config.js';
+import { collideCircle, onRoad } from './world.js';
 
-const SHIRTS = [
-  [0.9, 0.3, 0.3], [0.3, 0.5, 0.9], [0.3, 0.8, 0.4], [0.9, 0.8, 0.2],
-  [0.8, 0.4, 0.8], [0.95, 0.95, 0.95], [0.2, 0.2, 0.25], [0.9, 0.55, 0.25],
-];
-const PANTS = [
-  [0.25, 0.3, 0.55], [0.2, 0.2, 0.22], [0.5, 0.45, 0.35], [0.85, 0.85, 0.8],
-];
-
-export function createPeds(city) {
-  const rng = mulberry32(4242);
-  const list = [];
-  // spawn spots: downtown sidewalks, beach crowd, harbour, suburbs
-  const spots = [];
-  for (let i = 0; i < 40; i++) spots.push({ x: -160 + rng() * 320, z: -160 + rng() * 320 });
-  for (let i = 0; i < 16; i++) spots.push({ x: -350 + rng() * 30, z: -330 + rng() * 660 }); // beach
-  for (let i = 0; i < 10; i++) spots.push({ x: -280 + rng() * 200, z: 260 + rng() * 100 }); // harbour
-  for (let i = 0; i < 10; i++) spots.push({ x: 210 + rng() * 160, z: -320 + rng() * 440 }); // suburbs
-  let id = 0;
-  for (const s of spots) {
-    if (collides(city, s.x, s.z, 1)) continue;
-    // 30% spawn in a small group sharing a destination
-    const inGroup = rng() < 0.3;
-    const group = inGroup ? Math.floor(id / 3) : null;
-    const gx = s.x + (inGroup ? (rng() - 0.5) * 6 : 0);
-    const gz = s.z + (inGroup ? (rng() - 0.5) * 6 : 0);
-    list.push({
-      id: id++, x: gx, z: gz, heading: rng() * Math.PI * 2,
-      baseSpeed: 1.6 + rng() * 1.2, speed: 0,
-      shirt: SHIRTS[Math.floor(rng() * SHIRTS.length)],
-      pants: PANTS[Math.floor(rng() * PANTS.length)],
-      skin: [0.92, 0.75, 0.6],
-      health: 100, alive: true,
-      flee: 0, fleeX: 0, fleeZ: 0,
-      tx: gx, tz: gz, // wander target
-      phase: rng() * Math.PI * 2, // individual rhythm
-      group,
-    });
-    if (list.length >= 76) break;
+export function createPedestrians(city, count) {
+  const peds = [];
+  const n = count || TUNE.pedCap;
+  for (let i = 0; i < n; i++) {
+    peds.push(spawnPed(city, peds.length));
   }
-  return { list };
+  return peds;
 }
 
-export function fleeFrom(peds, x, z, r) {
-  for (const p of peds.list) {
-    if (!p.alive) continue;
-    if (dist(p.x, p.z, x, z) < r) {
-      p.flee = 3 + Math.random() * 2;
-      p.fleeX = x; p.fleeZ = z;
+function randomSidewalkPoint(city) {
+  for (let tries = 0; tries < 20; tries++) {
+    const x = -300 + Math.random() * 600;
+    const z = -300 + Math.random() * 600;
+    if (x < -300 || Math.abs(x) % 100 < 12 || Math.abs(z) % 100 < 12) continue;
+    if (city.spawns && Math.hypot(x - city.spawns.player.x, z - city.spawns.player.z) < 8) continue;
+    return { x, z };
+  }
+  return { x: 40 + Math.random() * 40, z: 40 + Math.random() * 40 };
+}
+
+function spawnPed(city, index) {
+  const pt = randomSidewalkPoint(city);
+  const group = Math.floor(index / 4);
+  return {
+    id: index,
+    x: pt.x,
+    z: pt.z,
+    heading: Math.random() * Math.PI * 2,
+    targetHeading: Math.random() * Math.PI * 2,
+    speed: 1.2 + Math.random() * 1.6, // varied pace
+    baseSpeed: 1.2 + Math.random() * 1.6,
+    fleeing: 0,
+    group,
+    skin: COL.skin[Math.floor(Math.random() * COL.skin.length)],
+    shirt: COL.shirt[Math.floor(Math.random() * COL.shirt.length)],
+    pants: [0.25, 0.35, 0.6],
+    wanderT: 2 + Math.random() * 4,
+    bob: Math.random() * 6,
+    alive: true,
+  };
+}
+
+export function updatePedestrians(game, dt) {
+  const peds = game.peds;
+  const player = game.player;
+  for (const ped of peds) {
+    if (!ped.alive) continue;
+    ped.bob += ped.speed * dt * 2;
+    // flee if the player is close and fast/dangerous, or a bomb went off
+    const d2p = dist2(ped.x, ped.z, player.x, player.z);
+    if (d2p < 100 && (Math.abs(player.speed) > 8 || game.combat.bombWentOff)) {
+      ped.fleeing = 2;
     }
-  }
-}
-
-export function updatePeds(dt, game) {
-  const t = game.time;
-  for (const p of game.peds.list) {
-    if (!p.alive) continue;
-    if (p.flee > 0) {
-      p.flee -= dt;
-      // run away from the danger point
-      const dx = p.x - p.fleeX, dz = p.z - p.fleeZ;
-      const l = Math.hypot(dx, dz) || 1;
-      p.heading = Math.atan2(dx / l, dz / l);
-      const sp = p.baseSpeed * 2.2;
-      moveWithCollision(game.city, p, Math.sin(p.heading) * sp * dt, Math.cos(p.heading) * sp * dt, 0.8);
+    if (ped.fleeing > 0) {
+      ped.fleeing -= dt;
+      const away = Math.atan2(ped.x - player.x, ped.z - player.z);
+      ped.targetHeading = away;
+      ped.speed = ped.baseSpeed * 3.2;
+    } else {
+      ped.speed = ped.baseSpeed;
+      ped.wanderT -= dt;
+      if (ped.wanderT <= 0) {
+        ped.wanderT = 3 + Math.random() * 5;
+        ped.targetHeading = Math.random() * Math.PI * 2;
+      }
+    }
+    ped.heading = angleLerp(ped.heading, ped.targetHeading, 1 - Math.pow(0.001, dt));
+    const nx = ped.x + Math.sin(ped.heading) * ped.speed * dt;
+    const nz = ped.z + Math.cos(ped.heading) * ped.speed * dt;
+    // peds stay off the road centre: nudge back onto sidewalks
+    if (onRoad(nx, nz) && ped.fleeing <= 0) {
+      ped.targetHeading += Math.PI / 2;
       continue;
     }
-    // wander: pick a new nearby target when arrived
-    if (dist(p.x, p.z, p.tx, p.tz) < 3) {
-      const nx = p.x + (Math.random() - 0.5) * 80;
-      const nz = p.z + (Math.random() - 0.5) * 80;
-      p.tx = Math.max(-390, Math.min(390, nx));
-      p.tz = Math.max(-390, Math.min(390, nz));
-    }
-    const want = Math.atan2(p.tx - p.x, p.tz - p.z);
-    let diff = want - p.heading;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    // soft turns + gentle sinusoidal wander
-    p.heading += clamp(diff, -3 * dt, 3 * dt) + Math.sin(t * 0.7 + p.phase) * 0.25 * dt;
-    // pace "breathes" ±20% on an individual rhythm
-    const pace = 1 + 0.2 * Math.sin(t * 0.9 + p.phase);
-    const sp = p.baseSpeed * pace;
-    moveWithCollision(game.city, p, Math.sin(p.heading) * sp * dt, Math.cos(p.heading) * sp * dt, 0.8);
+    const fixed = collideCircle(game.city, nx, nz, 0.6);
+    ped.x = fixed.x;
+    ped.z = fixed.z;
   }
 }
 
-export function drawPeds(renderer, game) {
-  for (const p of game.peds.list) {
-    if (!p.alive) continue;
-    const bob = Math.sin(game.time * 6 + p.phase) * 0.06;
-    renderer.box(p.x, 0.4 + bob, p.z, 0.45, 0.8, 0.45, p.pants, 1, p.heading, 0, 0);
-    renderer.box(p.x, 1.15 + bob, p.z, 0.9, 0.75, 0.5, p.shirt, 1, p.heading, 0, 0);
-    renderer.box(p.x, 1.8 + bob, p.z, 0.55, 0.55, 0.55, p.skin, 1, p.heading, 0, 0);
-  }
+// Voxel boxes for one pedestrian.
+export function pedBoxes(ped) {
+  const bobY = Math.sin(ped.bob) * 0.05;
+  const boxes = [];
+  boxes.push({ x: ped.x - 0.22, y: 0.4 + bobY, z: ped.z, sx: 0.4, sy: 0.8, sz: 0.4, c: ped.pants });
+  boxes.push({ x: ped.x + 0.22, y: 0.4 + bobY, z: ped.z, sx: 0.4, sy: 0.8, sz: 0.4, c: ped.pants });
+  boxes.push({ x: ped.x, y: 1.2 + bobY, z: ped.z, sx: 0.9, sy: 0.8, sz: 0.5, c: ped.shirt });
+  boxes.push({ x: ped.x - 0.6, y: 1.2 + bobY, z: ped.z, sx: 0.3, sy: 0.7, sz: 0.35, c: ped.shirt });
+  boxes.push({ x: ped.x + 0.6, y: 1.2 + bobY, z: ped.z, sx: 0.3, sy: 0.7, sz: 0.35, c: ped.shirt });
+  boxes.push({ x: ped.x, y: 1.85 + bobY, z: ped.z, sx: 0.6, sy: 0.55, sz: 0.55, c: ped.skin });
+  boxes.push({ x: ped.x, y: 2.15 + bobY, z: ped.z, sx: 0.64, sy: 0.2, sz: 0.6, c: [0.15, 0.12, 0.1] });
+  return boxes;
 }

@@ -1,43 +1,67 @@
-// Solmar Bay — taxi: the yellow cab, the taxi stand sign, and the
-// passenger ped who waits at the pickup point of an active taxi
-// side job (the fare state machine itself lives in missions.js).
+// Solmar Bay — taxi: a yellow taxi vehicle plus a fare system.
+// Pick up a passenger at the taxi stand, drive them to the marker,
+// fare + tip based on distance and time.
 
-import { dist } from './config.js';
+import { dist2 } from './config.js';
+import { addCash, showToast } from './state.js';
 
 export function createTaxi() {
-  return { passenger: null, earned: 0 };
+  return {
+    passenger: null, // { x, z } destination while a fare runs
+    fareT: 0,
+    waiting: true, // a passenger waits at the stand
+    standT: 0,
+  };
 }
 
-export function updateTaxi(dt, game) {
+export function updateTaxi(game, dt) {
   const taxi = game.taxi;
-  const job = game.missions.sideJobs.find((j) => j.type === 'taxi');
-  if (!job) return;
-  if (job.active && job.stage === 0) {
-    // a passenger waits at the pickup point
-    if (!taxi.passenger) {
-      taxi.passenger = { x: job.tx, z: job.tz, heading: 0, phase: Math.random() * 6 };
+  const p = game.player;
+  const inTaxi = p.inVehicle && p.inVehicle.type === 'taxi';
+  if (!taxi.passenger && taxi.waiting && inTaxi) {
+    // pick up at the stand
+    if (dist2(p.x, p.z, 0, 50) < 64) {
+      const dest = {
+        x: -250 + Math.random() * 500,
+        z: -250 + Math.random() * 500,
+      };
+      taxi.passenger = dest;
+      taxi.fareT = 0;
+      taxi.waiting = false;
+      showToast(game.state, 'Passenger aboard! Drive to the marker.', 3);
+      if (game.audio) game.audio.play('mission');
     }
-    taxi.passenger.x = job.tx;
-    taxi.passenger.z = job.tz;
-  } else {
-    taxi.passenger = null;
+  } else if (taxi.passenger) {
+    taxi.fareT += dt;
+    if (!inTaxi) {
+      // left the taxi mid-fare: the passenger walks off
+      taxi.passenger = null;
+      taxi.waiting = true;
+      showToast(game.state, 'The passenger left.', 2);
+      return;
+    }
+    if (dist2(p.x, p.z, taxi.passenger.x, taxi.passenger.z) < 100) {
+      const dist = Math.hypot(taxi.passenger.x - 0, taxi.passenger.z - 50);
+      const fare = Math.round(40 + dist * 0.25 + Math.max(0, 60 - taxi.fareT));
+      addCash(game.state, fare);
+      game.state.stats.faresDone += 1;
+      showToast(game.state, 'Fare paid! +$' + fare, 3);
+      if (game.audio) game.audio.play('win');
+      taxi.passenger = null;
+      taxi.standT = 8; // next passenger after a short wait
+    }
+  } else if (!taxi.waiting) {
+    taxi.standT -= dt;
+    if (taxi.standT <= 0) taxi.waiting = true;
   }
-  void dt;
 }
 
-export function drawTaxi(renderer, game) {
-  // taxi stand sign
-  renderer.box(0, 4.5, 152, 6, 1.4, 0.6, [1, 0.85, 0.1], 1);
-  renderer.box(0, 2.2, 152, 0.4, 4.4, 0.4, [0.25, 0.25, 0.28], 1);
-  const ps = game.taxi.passenger;
-  if (ps) {
-    const bob = Math.sin(game.time * 5 + ps.phase) * 0.08;
-    renderer.box(ps.x, 0.4 + bob, ps.z, 0.45, 0.8, 0.45, [0.2, 0.2, 0.25], 1, ps.heading, 0, 0);
-    renderer.box(ps.x, 1.15 + bob, ps.z, 0.9, 0.75, 0.5, [1, 0.85, 0.1], 1, ps.heading, 0, 0);
-    renderer.box(ps.x, 1.8 + bob, ps.z, 0.55, 0.55, 0.55, [0.92, 0.75, 0.6], 1, ps.heading, 0, 0);
-    // waiting marker
-    renderer.box(ps.x, 3.2 + bob, ps.z, 0.7, 0.7, 0.7, [1, 0.85, 0.1], 0.9, 0, game.time * 2, 0);
+export function taxiMarker(game) {
+  if (game.taxi.passenger) {
+    return { x: game.taxi.passenger.x, z: game.taxi.passenger.z, label: 'Drop-off' };
   }
+  if (game.taxi.waiting) {
+    return { x: 0, z: 50, label: 'Taxi stand' };
+  }
+  return null;
 }
-
-export { dist };

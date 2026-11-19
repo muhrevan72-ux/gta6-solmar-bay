@@ -1,129 +1,159 @@
-// Solmar Bay — cats and dogs. Cats wander the beach and shops;
-// press E near one to pick it up and carry it on your shoulder,
-// press E again to put it down. Dogs wander the city; press E near
-// one to pet it — it jumps and wags. Pure fun, no stats.
+// Solmar Bay — cats and dogs. Eight voxel cats wander the beach and
+// shops: press E near one to pick it up and carry it on your
+// shoulder, press E again to put it down. Six dogs wander the city:
+// press E near one to pet it (it jumps and wags). Pure fun.
 
-import { mulberry32, dist } from './config.js';
-import { moveWithCollision, collides } from './world.js';
-import { setToast } from './state.js';
+import { dist2, makeRng } from './config.js';
+import { collideCircle } from './world.js';
 
-const CAT_COLORS = [
-  [0.95, 0.6, 0.25], [0.95, 0.95, 0.95], [0.4, 0.4, 0.45], [0.85, 0.75, 0.6],
-];
-const DOG_COLORS = [
-  [0.6, 0.42, 0.25], [0.3, 0.22, 0.15], [0.85, 0.8, 0.7], [0.5, 0.5, 0.55],
+const CAT_COLOURS = [
+  [0.9, 0.55, 0.2], [0.95, 0.95, 0.95], [0.2, 0.2, 0.22],
+  [0.6, 0.6, 0.62], [0.95, 0.75, 0.4], [0.85, 0.5, 0.3],
+  [0.4, 0.35, 0.3], [0.9, 0.9, 0.85],
 ];
 
-export function createCats(city) {
-  const rng = mulberry32(31337);
-  const cats = [];
-  const dogs = [];
+export function createCats() {
+  // seeded so cat/dog spots are the same every run (and every test)
+  const rng = makeRng(777);
+  const cats = { list: [], dogs: [] };
+  const spots = [
+    [-310, 100], [-300, 160], [-320, -60], [-60, -40], [60, -40],
+    [-40, 60], [40, 120], [120, 40],
+  ];
   for (let i = 0; i < 8; i++) {
-    const x = -350 + rng() * 60 + (i % 2 === 0 ? 200 : 0);
-    const z = -330 + rng() * 660;
-    if (collides(city, x, z, 1)) continue;
-    cats.push({
-      x, z, heading: rng() * Math.PI * 2,
-      color: CAT_COLORS[i % CAT_COLORS.length],
-      picked: false, tx: x, tz: z, phase: rng() * Math.PI * 2,
+    cats.list.push({
+      id: i,
+      x: spots[i][0] + (rng() * 10 - 5),
+      z: spots[i][1] + (rng() * 10 - 5),
+      heading: rng() * Math.PI * 2,
+      targetHeading: rng() * Math.PI * 2,
+      speed: 1 + rng(),
+      colour: CAT_COLOURS[i],
+      carried: false,
+      wanderT: 2 + rng() * 4,
+      bob: rng() * 6,
     });
   }
   for (let i = 0; i < 6; i++) {
-    const x = -160 + rng() * 320;
-    const z = -160 + rng() * 320;
-    if (collides(city, x, z, 1)) continue;
-    dogs.push({
-      x, z, heading: rng() * Math.PI * 2,
-      color: DOG_COLORS[i % DOG_COLORS.length],
-      joy: 0, tx: x, tz: z, phase: rng() * Math.PI * 2,
+    cats.dogs.push({
+      id: i,
+      x: -200 + rng() * 400,
+      z: -200 + rng() * 400,
+      heading: rng() * Math.PI * 2,
+      targetHeading: rng() * Math.PI * 2,
+      speed: 1.6 + rng(),
+      happy: 0,
+      wag: 0,
+      wanderT: 2 + rng() * 4,
+      bob: rng() * 6,
     });
   }
-  return { cats, dogs };
+  return cats;
 }
 
-export function nearestCat(game, x, z, maxDist) {
-  let best = null, bd = maxDist;
-  for (const c of game.cats.cats) {
-    if (c.picked) continue;
-    const d = dist(x, z, c.x, c.z);
-    if (d < bd) { bd = d; best = c; }
-  }
-  return best;
-}
-
-export function nearestDog(game, x, z, maxDist) {
-  let best = null, bd = maxDist;
-  for (const d of game.cats.dogs) {
-    const dd = dist(x, z, d.x, d.z);
-    if (dd < bd) { bd = dd; best = d; }
-  }
-  return best;
-}
-
-export function pickUpCat(game, cat) {
-  game.player.carryingCat = cat;
-  cat.picked = true;
-  game.state.stats.catsPet += 1;
-  setToast(game.state, 'You picked up the cat! Press E to put it down.', 3);
-  if (game.audio) game.audio.blip(900, 0.12);
-}
-
-export function putDownCat(game) {
-  const cat = game.player.carryingCat;
-  if (!cat) return false;
-  cat.picked = false;
-  cat.x = game.player.x + 1;
-  cat.z = game.player.z + 1;
-  cat.tx = cat.x; cat.tz = cat.z;
-  game.player.carryingCat = null;
-  setToast(game.state, 'The cat trots off, happy.', 2);
-  return true;
-}
-
-export function petDog(game, dog) {
-  dog.joy = 2.5;
-  setToast(game.state, 'The dog wags its tail happily!', 2);
-  if (game.audio) game.audio.blip(800, 0.1);
-}
-
-function wander(dt, game, a, speed) {
-  if (dist(a.x, a.z, a.tx, a.tz) < 2) {
-    a.tx = Math.max(-390, Math.min(390, a.x + (Math.random() - 0.5) * 40));
-    a.tz = Math.max(-390, Math.min(390, a.z + (Math.random() - 0.5) * 40));
-  }
-  const want = Math.atan2(a.tx - a.x, a.tz - a.z);
-  let diff = want - a.heading;
-  while (diff > Math.PI) diff -= Math.PI * 2;
-  while (diff < -Math.PI) diff += Math.PI * 2;
-  a.heading += Math.max(-2.5 * dt, Math.min(2.5 * dt, diff));
-  moveWithCollision(game.city, a, Math.sin(a.heading) * speed * dt, Math.cos(a.heading) * speed * dt, 0.5);
-}
-
-export function updateCats(dt, game) {
-  for (const c of game.cats.cats) {
-    if (c.picked) {
-      c.x = game.player.x;
-      c.z = game.player.z;
+export function updateCats(game, dt) {
+  const p = game.player;
+  for (const cat of game.cats.list) {
+    if (cat.carried) {
+      // rides on the player's shoulder (boxes drawn by player.js)
+      cat.x = p.x;
+      cat.z = p.z;
       continue;
     }
-    wander(dt, game, c, 1.2);
+    cat.bob += dt * 3;
+    cat.wanderT -= dt;
+    if (cat.wanderT <= 0) {
+      cat.wanderT = 2 + Math.random() * 5;
+      cat.targetHeading = Math.random() * Math.PI * 2;
+    }
+    let dh = cat.targetHeading - cat.heading;
+    while (dh > Math.PI) dh -= Math.PI * 2;
+    while (dh < -Math.PI) dh += Math.PI;
+    cat.heading += dh * Math.min(1, dt * 2);
+    const nx = cat.x + Math.sin(cat.heading) * cat.speed * dt;
+    const nz = cat.z + Math.cos(cat.heading) * cat.speed * dt;
+    const fixed = collideCircle(game.city, nx, nz, 0.4);
+    cat.x = fixed.x;
+    cat.z = fixed.z;
   }
-  for (const d of game.cats.dogs) {
-    if (d.joy > 0) d.joy -= dt;
-    wander(dt, game, d, 2.2);
+  for (const dog of game.cats.dogs) {
+    dog.bob += dt * 3;
+    if (dog.happy > 0) {
+      dog.happy -= dt;
+      dog.wag += dt * 12;
+      continue; // stays put, wagging, while happy
+    }
+    dog.wanderT -= dt;
+    if (dog.wanderT <= 0) {
+      dog.wanderT = 2 + Math.random() * 5;
+      dog.targetHeading = Math.random() * Math.PI * 2;
+    }
+    let dh = dog.targetHeading - dog.heading;
+    while (dh > Math.PI) dh -= Math.PI * 2;
+    while (dh < -Math.PI) dh += Math.PI;
+    dog.heading += dh * Math.min(1, dt * 2);
+    const nx = dog.x + Math.sin(dog.heading) * dog.speed * dt;
+    const nz = dog.z + Math.cos(dog.heading) * dog.speed * dt;
+    const fixed = collideCircle(game.city, nx, nz, 0.5);
+    dog.x = fixed.x;
+    dog.z = fixed.z;
   }
 }
 
-export function drawCats(renderer, game) {
-  for (const c of game.cats.cats) {
-    if (c.picked) continue; // drawn on the player's shoulder instead
-    const bob = Math.sin(game.time * 8 + c.phase) * 0.05;
-    renderer.box(c.x, 0.3 + bob, c.z, 0.45, 0.35, 0.7, c.color, 1, c.heading, 0, 0);
-    renderer.box(c.x, 0.62 + bob, c.z + 0.3, 0.4, 0.35, 0.4, c.color, 1, c.heading, 0, 0);
+// E near a cat: pick it up (or put it down). Returns true if it acted.
+export function interactCat(game) {
+  const p = game.player;
+  if (p.carryingCat) {
+    const cat = p.carryingCat;
+    cat.carried = false;
+    cat.x = p.x + 1;
+    cat.z = p.z + 1;
+    p.carryingCat = null;
+    return true;
   }
-  for (const d of game.cats.dogs) {
-    const jump = d.joy > 0 ? Math.abs(Math.sin(game.time * 10)) * 0.5 : 0;
-    renderer.box(d.x, 0.45 + jump, d.z, 0.55, 0.55, 1.0, d.color, 1, d.heading, 0, 0);
-    renderer.box(d.x, 0.95 + jump, d.z + 0.45, 0.5, 0.5, 0.5, d.color, 1, d.heading, 0, 0);
+  for (const cat of game.cats.list) {
+    if (cat.carried) continue;
+    if (dist2(p.x, p.z, cat.x, cat.z) < 16) {
+      cat.carried = true;
+      p.carryingCat = cat;
+      return true;
+    }
   }
+  return false;
+}
+
+// E near a dog: pet it. Returns true if it acted.
+export function interactDog(game) {
+  const p = game.player;
+  for (const dog of game.cats.dogs) {
+    if (dist2(p.x, p.z, dog.x, dog.z) < 16) {
+      dog.happy = 3;
+      game.state.stats.catsPet += 1;
+      if (game.audio) game.audio.play('pickup');
+      return true;
+    }
+  }
+  return false;
+}
+
+export function catBoxes(cat) {
+  if (cat.carried) return []; // drawn on the player's shoulder
+  return [
+    { x: cat.x, y: 0.35, z: cat.z, sx: 0.5, sy: 0.5, sz: 0.9, c: cat.colour },
+    { x: cat.x, y: 0.75, z: cat.z + 0.45, sx: 0.4, sy: 0.4, sz: 0.4, c: cat.colour },
+    { x: cat.x - 0.15, y: 1.0, z: cat.z + 0.45, sx: 0.12, sy: 0.25, sz: 0.12, c: cat.colour },
+    { x: cat.x + 0.15, y: 1.0, z: cat.z + 0.45, sx: 0.12, sy: 0.25, sz: 0.12, c: cat.colour },
+    { x: cat.x, y: 0.4, z: cat.z - 0.55, sx: 0.15, sy: 0.35, sz: 0.5, c: cat.colour },
+  ];
+}
+
+export function dogBoxes(dog) {
+  const wag = dog.happy > 0 ? Math.sin(dog.wag) * 0.3 : 0;
+  return [
+    { x: dog.x, y: 0.5, z: dog.z, sx: 0.7, sy: 0.7, sz: 1.3, c: [0.55, 0.4, 0.25] },
+    { x: dog.x, y: 1.0, z: dog.z + 0.7, sx: 0.55, sy: 0.55, sz: 0.55, c: [0.55, 0.4, 0.25] },
+    { x: dog.x - 0.2, y: 1.35, z: dog.z + 0.7, sx: 0.15, sy: 0.3, sz: 0.15, c: [0.4, 0.28, 0.18] },
+    { x: dog.x + 0.2, y: 1.35, z: dog.z + 0.7, sx: 0.15, sy: 0.3, sz: 0.15, c: [0.4, 0.28, 0.18] },
+    { x: dog.x, y: 0.7 + wag, z: dog.z - 0.8, sx: 0.15, sy: 0.5, sz: 0.15, c: [0.55, 0.4, 0.25] },
+  ];
 }
