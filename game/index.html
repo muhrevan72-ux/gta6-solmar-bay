@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Solmar Bay — Open World</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1420; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #game { display: block; touch-action: none; background: #0e1420; }
+  /* Read aloud, never shown: the status line screen readers announce. */
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  /* Touch controls: hidden until a touch device is detected, then they
+     sit above the game. Desktop keeps keyboard + mouse only. */
+  #touch-ui { position: fixed; inset: 0; z-index: 10; pointer-events: none; display: none; }
+  #touch-ui.touch-on { display: block; }
+  #joy-base {
+    position: absolute; left: 18px; bottom: 18px; width: 128px; height: 128px;
+    border-radius: 50%; background: rgba(255,255,255,0.10);
+    border: 2px solid rgba(255,255,255,0.35); pointer-events: auto; touch-action: none;
+  }
+  #joy-knob {
+    position: absolute; left: 36px; top: 36px; width: 56px; height: 56px;
+    border-radius: 50%; background: rgba(242,193,78,0.9);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.45);
+  }
+  .tbtn {
+    position: absolute; width: 64px; height: 64px; border-radius: 50%;
+    background: rgba(12,16,22,0.62); color: #f2f0e8;
+    border: 2px solid rgba(255,255,255,0.45);
+    font: 700 13px system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    pointer-events: auto; touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  .tbtn:active { background: rgba(242,193,78,0.85); color: #141414; }
+  #btn-brake { right: 18px; bottom: 176px; }
+  #btn-car { right: 18px; bottom: 96px; }
+  #btn-punch { right: 96px; bottom: 18px; }
+  #btn-pause { right: 18px; top: 18px; width: 48px; height: 48px; font-size: 16px; }
+</style>
+</head>
+<body>
+<canvas id="game" width="1280" height="720" aria-label="Solmar Bay: an open-world crime game. Steal cars, lose the cops, run missions."></canvas>
+<p id="status" role="status" aria-live="polite"></p>
+<div id="touch-ui" aria-hidden="true">
+  <div id="joy-base"><div id="joy-knob"></div></div>
+  <div class="tbtn" id="btn-brake">BRAKE</div>
+  <div class="tbtn" id="btn-car">CAR</div>
+  <div class="tbtn" id="btn-punch">PUNCH</div>
+  <div class="tbtn" id="btn-pause">II</div>
+</div>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
