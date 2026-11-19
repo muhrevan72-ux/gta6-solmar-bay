@@ -1,34 +1,35 @@
-// Solmar Bay — the entrypoint for the make.fun GTA 6 bounty.
-// It hands the game in: the playable game/ folder and the
-// screenshots/ folder are copied into the output directory, and a
-// dossier.json describing the entry is written there with the kit's
-// buildDossier helper. Standard library only, no network.
+// Solmar Bay — make.fun entrypoint (gta6-01).
+// Hands the game in: copies game/ and screenshots/ from this
+// repository into the output directory and writes dossier.json with
+// buildDossier from the kit's vendored library.
 //
-// Outside the grader, MAKEFUN_OUTPUT_DIR stands in for /output:
-//   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+// Run locally with:  MAKEFUN_OUTPUT_DIR=out node main.ts
+// The grader runs it with /output as the target.
 
-import { cpSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-// This file lives at the repository root, so its folder is the root.
-const rootDir = fileURLToPath(new URL('.', import.meta.url));
-const outDir = process.env.MAKEFUN_OUTPUT_DIR || '/output';
+const here = dirname(fileURLToPath(import.meta.url));
+const out = process.env.MAKEFUN_OUTPUT_DIR || '/output';
 
-mkdirSync(outDir, { recursive: true });
+mkdirSync(out, { recursive: true });
+mkdirSync(join(out, 'game'), { recursive: true });
+mkdirSync(join(out, 'screenshots'), { recursive: true });
 
-// Copy the playable game and its screenshots into the output folder.
-cpSync(join(rootDir, 'game'), join(outDir, 'game'), { recursive: true });
-cpSync(join(rootDir, 'screenshots'), join(outDir, 'screenshots'), { recursive: true });
+// the playable game, plain static files
+cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
+// the four screenshots of the game, in dossier order
+if (existsSync(join(here, 'screenshots'))) {
+  cpSync(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+}
 
-// The scorer's own caps for this bounty (from its gate.json).
-const dossier = buildDossier(outDir, {
+const dossier = buildDossier(out, {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
   game_max_files: 993,
   game_max_bytes: 50331648,
 });
-
-writeFileSync(join(outDir, 'dossier.json'), dossier);
-console.log('Solmar Bay handed in: game/ + screenshots/ + dossier.json in ' + outDir);
+writeFileSync(join(out, 'dossier.json'), dossier);
+console.log('Solmar Bay handed in: game/ + screenshots/ + dossier.json in ' + out);

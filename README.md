@@ -1,44 +1,46 @@
-# Solmar Bay — 3D voxel open-world crime game
+# Solmar Bay — a voxel open-world crime game
 
-[![Solmar Bay](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
-[![Rank](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/rank.svg)](https://make.fun/bounty/gta6-01)
-[![Reward](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/reward.svg)](https://make.fun/bounty/gta6-01)
+[![make.fun](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
+[![rank](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/rank.svg)](https://make.fun/bounty/gta6-01)
+[![reward](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/reward.svg)](https://make.fun/bounty/gta6-01)
 
-An original 3D voxel open-world crime game in the spirit of GTA 6 — own city, names, story, art and sound, nothing from Rockstar. Built for the [make.fun GTA 6 bounty](https://make.fun/bounty/gta6-01).
+**Solmar Bay** is an original 3D voxel open-world crime game, in the
+spirit of GTA 6 — nothing from Rockstar. A sun-soaked coastal city:
+downtown towers, beach, harbour, suburbs, airport, highway loop.
+Steal cars, run story chapters, dodge the cops, live the Vice City
+life. Built for the [make.fun GTA 6 bounty](https://make.fun/bounty/gta6-01).
 
-## The city
+## Play it
 
-Solmar Bay is a sun-soaked coastal voxel city, Vice City style: a downtown grid of pastel art-deco towers with neon signs, a crowded beach with palms and umbrellas, a harbour with containers and cranes, suburbs, an airport with a runway, and a highway loop. The streets are alive — ~76 pedestrians, 32 traffic cars, traffic lights, two rival gangs (**Bay Kings** in gold downtown, **Harbour Sharks** in teal at the harbour), cats, dogs, birds, fish, clouds, and a loop train.
-
-## What you can do
-
-- **Story:** 5 chapters — First Wheels ($200), The Package ($400), Getaway ($500), Night Run ($600), The Big One ($1500).
-- **Side jobs:** taxi fares, courier runs, time trials, gang turf clear-outs and deliveries, firefighter shifts (drive the fire truck, spray the flames).
-- **Vehicles:** cars, motorbikes, boats, a flyable airplane (with parachute), taxis, the fire truck, police cars, and the loop train.
-- **Combat:** punch, pistol / SMG / shotgun (hitscan, crosshair aim), throwable bombs. Kills drop cash ($10–$50).
-- **Wanted:** 0–5 stars, per crime like real GTA — stealing a car 1 star, killing a ped 2, killing a cop 3, explosions and rampages up to 5. Lose the heat by hiding out of sight.
-- **Life:** food shops (pizza, burger, chicken, donut, taco), dating Maya (drive her to the viewpoint, eat together, drop her home), carryable cats, pettable dogs, an outfit shop (hair, shirt, pants, shoes), a shooting range, a swim challenge, a driving course, and city events (street races, beach parties, gang turf wars). Plus a glass elevator to the rooftop of the tallest tower.
-- **Tech:** raw WebGL1, no libraries, no network, plain static files. WebAudio synth sound. Save in localStorage.
+Open `game/index.html` in a desktop browser (or `node serve.ts` and
+visit http://localhost:8080). No network, no build step, no libraries
+— raw WebGL1 + plain ES modules.
 
 ## Controls
 
-| Key | Action |
-| --- | --- |
-| W A S D | Move / drive (Shift to run) |
-| Mouse drag / wheel | Orbit camera / zoom |
-| E | Enter car, interact (shops, cats, train, elevator…) |
-| F | Punch (hold F in the fire truck to spray water) |
-| Click | Shoot (hold for SMG) |
-| G | Throw bomb |
-| 1 / 2 / 3 | Pistol / SMG / Shotgun |
-| Space | Handbrake (parachute while flying) |
-| Esc | Pause (also advances chapter cards) |
-| M | Mute |
+- **WASD** move · **Shift** run · **E** interact / enter a car
+- **F** punch · **G** throw a bomb · **Click** shoot · **1/2/3** weapons
+- **Space** handbrake (driving) / parachute (falling) · **Esc** pause
+- **M** mute · mouse drag orbits the camera, wheel zooms
 
-## Play
+## What's in the city
 
-Open `game/index.html` in a desktop browser (or `node serve.ts` and visit http://localhost:8080). No build step, no install, no network.
+- **5 story chapters** ($200–$1500 each) + repeatable side jobs:
+  taxi fares, courier runs, time trials, turf clear-outs, gang runs
+- **Wanted 0–5 stars**, GTA-style crime table, police cars + foot
+  cops, out-of-sight decay, busted = hospital + 20% fine
+- **Weapons**: pistol, SMG, shotgun, throwable bombs; kills drop cash
+- **Vehicles**: cars, motorbikes, boats, a flyable airplane +
+  parachute, taxi, fire truck, police cars
+- **Living city**: two rival gangs (Bay Kings vs Harbour Sharks),
+  firefighters + fires, food shops, dating, cats you can carry,
+  dogs you can pet, outfit shop, shooting range, swim + driving
+  courses, street races, beach parties, turf wars, a loop train and
+  a glass elevator to the rooftop deck
+- **HUD + minimap**, save games (localStorage), WebAudio synth sound
 
-## License
+## Tech
 
-MIT — see [LICENSE](LICENSE).
+Raw WebGL1 (every quad is two triangles — WebGL1 has no quads),
+deterministic city generation, eased movement everywhere so nothing
+feels stiff. All art is coloured voxel boxes; all sound is synth.
