@@ -1,209 +1,166 @@
-// Solmar Bay — living city: ambient life that makes the city feel
-// like a real human city.
+// Solmar Bay — the living city: train, elevator, animals, and
+// ambient life that is not a pedestrian.
 //
-// - Train: a loop track around the city (rectangle at +-320), a voxel
-//   train (3 cars) moving along it, a station platform on the west
-//   side. Press E near the train at the station to board and ride;
-//   press E to get off at the station.
-// - Fish: small voxel fish swimming in the harbour/beach water,
-//   visible near the surface.
-// - Dogs: dog NPCs wandering the city; press E near one to pet it
-//   (it jumps/wags). Pure fun.
-// - Birds: voxel birds flying in circles above the city.
-// - Clouds: white voxel clouds drifting slowly across the sky.
-// (Trees, flowers and pots live in world.js; the elevator rides the
-// tallest downtown tower.)
+// - Train: a 3-car train loops the rectangular track (±320) and
+//   stops at the station (-320, 0). Board it with E at the station
+//   (rides are free); E again to get off at the next stop.
+// - Elevator: the tallest tower has a working elevator — E at its
+//   door rides to the roof (and back down). The roof is a viewpoint.
+// - Animals: dogs that follow their owners, birds that circle the
+//   beach, fish that swim in the harbour basin.
+// - Clouds drift; trees sway gently.
 
-import { dist2 } from './config.js';
 import { showToast } from './state.js';
-import { randomSidewalkPoint, collideCircle } from './world.js';
 
-export function createLiving(city, rng) {
-  const r = rng || Math.random;
-  const dogs = [];
-  for (let i = 0; i < 5; i++) {
-    const spot = randomSidewalkPoint(city, r);
-    dogs.push({
-      x: spot.x, z: spot.z, heading: r() * Math.PI * 2,
-      target: null, bob: r() * 6, wag: 0, happy: 0,
-      colour: [[0.6, 0.45, 0.3], [0.2, 0.2, 0.22], [0.85, 0.75, 0.6]][i % 3],
-    });
-  }
-  const fish = [];
-  for (let i = 0; i < 12; i++) {
-    fish.push({
-      x: -370 + r() * 25, z: -280 + r() * 560,
-      depth: 0.3 + r() * 0.4, phase: r() * Math.PI * 2,
-      speed: 1 + r() * 2,
-      colour: [[0.95, 0.6, 0.2], [0.3, 0.7, 0.9], [0.95, 0.85, 0.4]][i % 3],
-    });
-  }
-  const birds = [];
-  for (let i = 0; i < 8; i++) {
-    birds.push({
-      cx: -200 + r() * 400, cz: -200 + r() * 400,
-      r: 20 + r() * 30, h: 30 + r() * 25,
-      angle: r() * Math.PI * 2, speed: 0.2 + r() * 0.2,
-    });
-  }
+export function createLiving(city) {
   return {
-    train: { s: 0, speed: 12, cars: 3 }, // s = distance along the loop
-    dogs,
-    fish,
-    birds,
-    elevator: { y: 0, dir: 0, riding: false }, // platform height
+    train: { x: -320, z: -320, dir: 0, speed: 0, stopped: false, stopT: 0 },
+    elevator: { floor: 0, moving: false, t: 0 },
+    dogs: [
+      { x: -60, z: 20, heading: 0, bob: 0, owner: null },
+      { x: 80, z: -60, heading: 0, bob: 0, owner: null },
+    ],
+    birds: Array.from({ length: 8 }, (_, i) => ({
+      x: -300 + i * 10, z: 100 + (i % 4) * 20, y: 25 + (i % 3) * 5,
+      angle: (i / 8) * Math.PI * 2, r: 20 + i * 3,
+    })),
+    fish: Array.from({ length: 12 }, (_, i) => ({
+      x: 350 + (i % 4) * 10, z: -140 + (i % 3) * 20, angle: (i / 12) * Math.PI * 2,
+    })),
+    cloudDrift: 0,
   };
 }
 
-// Train loop: rectangle at +-320, perimeter 2560. s = distance along
-// it, starting at the station (-320, 0) heading north.
-export function trainPosition(s) {
-  const P = 2560;
-  let d = ((s % P) + P) % P;
-  // Sides: west going north (0..640), north going east (640..1280),
-  // east going south (1280..1920), south going west (1920..2560).
-  if (d < 640) return { x: -320, z: -320 + d, heading: 0 };
-  if (d < 1280) return { x: -320 + (d - 640), z: 320, heading: Math.PI / 2 };
-  if (d < 1920) return { x: 320, z: 320 - (d - 1280), heading: Math.PI };
-  return { x: 320 - (d - 1920), z: -320, heading: -Math.PI / 2 };
-}
+const TRACK = 320;
 
 export function stepLiving(game, dt) {
-  const lv = game.living;
-  // Train moves along the loop.
-  lv.train.s += lv.train.speed * dt;
-  // Dogs wander; a petted dog jumps and wags.
-  for (const dog of lv.dogs) {
-    if (dog.happy > 0) {
-      dog.happy -= dt;
-      dog.wag += dt * 12;
-      continue;
+  const L = game.living;
+  const s = game.state;
+  const p = s.player;
+  // Train: runs the rectangle, stops 8 s at each corner station.
+  const tr = L.train;
+  if (tr.stopped) {
+    tr.stopT -= dt;
+    if (tr.stopT <= 0) tr.stopped = false;
+  } else {
+    tr.speed = Math.min(14, tr.speed + 4 * dt);
+    const seg = tr.dir % 4;
+    if (seg === 0) { tr.x += tr.speed * dt; if (tr.x >= TRACK) { tr.dir++; tr.stopped = true; tr.stopT = 8; } }
+    else if (seg === 1) { tr.z += tr.speed * dt; if (tr.z >= TRACK) { tr.dir++; tr.stopped = true; tr.stopT = 8; } }
+    else if (seg === 2) { tr.x -= tr.speed * dt; if (tr.x <= -TRACK) { tr.dir++; tr.stopped = true; tr.stopT = 8; } }
+    else { tr.z -= tr.speed * dt; if (tr.z <= -TRACK) { tr.dir = 0; tr.stopped = true; tr.stopT = 8; } }
+  }
+  // Riding: the player moves with the train.
+  if (p.onTrain) {
+    p.x = tr.x;
+    p.z = tr.z;
+  }
+  // Elevator: rides the player between the ground and the roof.
+  const el = L.elevator;
+  if (el.moving) {
+    el.t += dt;
+    if (el.t > 3) {
+      el.moving = false;
+      el.t = 0;
+      el.floor = el.floor === 0 ? 1 : 0;
+      showToast(s, el.floor === 1 ? 'Roof — the whole city is below you.' : 'Ground floor.', 4);
     }
-    if (!dog.target || dist2(dog.x, dog.z, dog.target.x, dog.target.z) < 2) {
-      dog.target = randomSidewalkPoint(game.city, Math.random);
+  }
+  // Dogs: follow the nearest ped.
+  for (const dog of L.dogs) {
+    dog.bob += dt * 5;
+    let best = null, bestD = 30;
+    for (const ped of game.peds) {
+      if (ped.dead) continue;
+      const d = Math.hypot(ped.x - dog.x, ped.z - dog.z);
+      if (d < bestD) { bestD = d; best = ped; }
     }
-    const d = Math.sqrt(dist2(dog.x, dog.z, dog.target.x, dog.target.z)) || 1;
-    const nx = dog.x + ((dog.target.x - dog.x) / d) * 2.2 * dt;
-    const nz = dog.z + ((dog.target.z - dog.z) / d) * 2.2 * dt;
-    if (!collideCircle(game.city, nx, nz, 0.5)) {
-      dog.x = nx;
-      dog.z = nz;
+    if (best) {
+      dog.owner = best;
+      const dx = best.x - dog.x, dz = best.z - dog.z;
+      const d = Math.hypot(dx, dz) || 1;
+      if (d > 2) {
+        dog.heading = Math.atan2(dx, dz);
+        dog.x += (dx / d) * 3 * dt;
+        dog.z += (dz / d) * 3 * dt;
+      }
     }
-    dog.heading = Math.atan2(dog.target.x - dog.x, dog.target.z - dog.z);
-    dog.bob += dt * 3;
   }
-  // Fish swim back and forth near the surface.
-  for (const f of lv.fish) {
-    f.phase += dt * f.speed * 0.3;
-    f.x += Math.sin(f.phase) * dt * 2;
+  // Birds circle the beach; fish swim the basin.
+  for (const b of L.birds) {
+    b.angle += dt * 0.3;
+    b.x = -300 + Math.cos(b.angle) * b.r;
+    b.z = 120 + Math.sin(b.angle) * b.r;
   }
-  // Birds circle.
-  for (const b of lv.birds) {
-    b.angle += b.speed * dt;
+  for (const f of L.fish) {
+    f.angle += dt * 0.5;
+    f.x = 370 + Math.cos(f.angle) * 15;
+    f.z = -100 + Math.sin(f.angle) * 25;
   }
-  // Clouds drift (positions live in the city; drift here).
-  for (const c of game.city.clouds) {
-    c.x += dt * 1.5;
-    if (c.x > 420) c.x = -420;
-  }
-  // Elevator: the player rides the platform up/down the tallest tower.
-  const el = lv.elevator;
-  const tower = game.city.elevator;
-  if (el.riding && tower) {
-    el.y += el.dir * 8 * dt;
-    if (el.y >= tower.towerH) {
-      el.y = tower.towerH;
-      el.dir = 0;
-      showToast(game.state, 'Rooftop observation deck! The whole bay is below you.', 3);
-    } else if (el.y <= 0) {
-      el.y = 0;
-      el.dir = 0;
-      el.riding = false;
-      game.state.player.onElevator = false;
-    }
-    game.state.player.x = tower.x;
-    game.state.player.z = tower.z;
-  }
+  L.cloudDrift += dt * 0.5;
 }
 
-export function nearestDog(game, x, z, range) {
-  let best = null;
-  let bestD = range * range;
-  for (const dog of game.living.dogs) {
-    const d = dist2(x, z, dog.x, dog.z);
-    if (d < bestD) {
-      bestD = d;
-      best = dog;
-    }
-  }
-  return best;
-}
-
-export function petDog(game, dog) {
-  dog.happy = 2;
-  showToast(game.state, 'You pet the dog. It jumps and wags its tail!', 2);
-  return true;
-}
-
-// Board the train at the station (E near the train when it is at the
-// station), ride it, E again to get off at the station.
-export function boardTrain(game) {
-  const p = game.state.player;
-  const pos = trainPosition(game.living.train.s);
-  const nearStation = dist2(pos.x, pos.z, -320, 0) < 2500;
-  if (!p.onTrain && nearStation && dist2(p.x, p.z, pos.x, pos.z) < 100) {
-    p.onTrain = true;
-    showToast(game.state, 'You board the train. Enjoy the ride — E to get off at the station.', 3);
+// Board / leave the train (E at the station, -320, 0).
+export function tryTrain(game) {
+  const s = game.state;
+  const p = s.player;
+  const tr = game.living.train;
+  if (p.onTrain) {
+    p.onTrain = false;
+    p.x = tr.x + 3;
+    p.z = tr.z + 3;
+    showToast(s, 'You got off the train.', 3);
     return true;
   }
-  if (p.onTrain && nearStation) {
-    p.onTrain = false;
-    p.x = -318;
-    p.z = 0;
-    showToast(game.state, 'You step off the train at the station.', 2);
+  if (Math.hypot(tr.x + 320, tr.z - 0) < 8 && tr.stopped) {
+    p.onTrain = true;
+    showToast(s, 'You boarded the train. Press E to get off at the next stop.', 4);
     return true;
   }
   return false;
 }
 
+// Ride the elevator in the tallest tower (E at its door). The
+// elevator platform is on the tower's east face (city.elevator).
+export function tryElevator(game) {
+  const s = game.state;
+  const p = s.player;
+  const el = game.city.elevator;
+  if (!el) return false;
+  if (Math.hypot(p.x - el.x, p.z - el.z) < 4) {
+    const elev = game.living.elevator;
+    if (!elev.moving) {
+      elev.moving = true;
+      elev.t = 0;
+      showToast(s, elev.floor === 0 ? 'Elevator going up…' : 'Elevator going down…', 3);
+      return true;
+    }
+  }
+  return false;
+}
+
 export function livingBoxes(game, out) {
-  const lv = game.living;
-  // Train: 3 cars along the loop.
+  const L = game.living;
+  const tr = L.train;
+  // Train: 3 cars.
   for (let i = 0; i < 3; i++) {
-    const pos = trainPosition(lv.train.s - i * 14);
-    out.pushBoxRot(pos.x, 1.5, pos.z, 3, 3, 12, [0.85, 0.2, 0.25], pos.heading);
-    out.pushBoxRot(pos.x, 3.4, pos.z, 2.6, 0.8, 11, [0.4, 0.65, 0.85], pos.heading);
+    const off = i * 8;
+    const x = tr.dir % 2 === 0 ? tr.x - off : tr.x;
+    const z = tr.dir % 2 === 0 ? tr.z : tr.z - off;
+    out.pushBox(x, 1.2, z, 3, 2.4, 7, [0.8, 0.2, 0.2]);
+    out.pushBox(x, 2.6, z, 2.8, 0.4, 6.8, [0.9, 0.9, 0.9]);
   }
   // Dogs.
-  for (const dog of lv.dogs) {
-    const jump = dog.happy > 0 ? Math.abs(Math.sin(dog.wag)) * 0.5 : 0;
-    out.pushBoxRot(dog.x, 0.5 + jump, dog.z, 0.5, 0.6, 1.1, dog.colour, dog.heading);
-    out.pushBoxRot(dog.x, 0.95 + jump, dog.z + 0.5, 0.4, 0.4, 0.4, dog.colour, dog.heading);
-    const wag = dog.happy > 0 ? Math.sin(dog.wag) * 0.3 : 0;
-    out.pushBoxRot(dog.x + wag, 0.7 + jump, dog.z - 0.55, 0.1, 0.4, 0.1, dog.colour, dog.heading);
+  for (const dog of L.dogs) {
+    out.pushBoxRot(dog.x, 0.35, dog.z, 0.3, 0.3, 0.7, [0.6, 0.45, 0.3], dog.heading);
+    out.pushBoxRot(dog.x, 0.6, dog.z + 0.3, 0.2, 0.2, 0.2, [0.6, 0.45, 0.3], dog.heading);
   }
-  // Fish near the surface.
-  for (const f of lv.fish) {
-    out.pushBox(f.x, -0.1, f.z, 0.8, 0.25, 0.35, f.colour);
+  // Birds (small white boxes in the sky).
+  for (const b of L.birds) {
+    out.pushBox(b.x, b.y, b.z, 0.6, 0.1, 0.2, [1, 1, 1]);
   }
-  // Birds.
-  for (const b of lv.birds) {
-    const x = b.cx + Math.cos(b.angle) * b.r;
-    const z = b.cz + Math.sin(b.angle) * b.r;
-    const flap = Math.sin(b.angle * 6) * 0.3;
-    out.pushBox(x, b.h, z, 0.8, 0.15, 0.4, [0.15, 0.15, 0.18]);
-    out.pushBox(x - 0.5, b.h + flap, z, 0.5, 0.1, 0.3, [0.15, 0.15, 0.18]);
-    out.pushBox(x + 0.5, b.h - flap, z, 0.5, 0.1, 0.3, [0.15, 0.15, 0.18]);
-  }
-  // Clouds.
-  for (const c of game.city.clouds) {
-    out.pushBox(c.x, c.y, c.z, c.s, 2, c.s * 0.6, [1.0, 1.0, 1.0]);
-  }
-  // Elevator platform on the tallest tower.
-  const tower = game.city.elevator;
-  if (tower) {
-    const y = lv.elevator.y;
-    out.pushBox(tower.x, y + 0.4, tower.z, 4, 0.8, 4, [0.4, 0.65, 0.85]);
-    out.pushBox(tower.x, y + 1.6, tower.z, 3.6, 2, 0.2, [0.6, 0.8, 0.95]);
+  // Fish (small blue boxes under the water surface).
+  for (const f of L.fish) {
+    out.pushBox(f.x, -0.3, f.z, 0.5, 0.15, 0.2, [0.3, 0.5, 0.8]);
   }
 }

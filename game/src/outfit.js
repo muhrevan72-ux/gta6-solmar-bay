@@ -1,64 +1,53 @@
-// Solmar Bay — outfit shop: change the player's look.
-//
-// A clothing shop building; press E to open the outfit menu (number
-// keys cycle options). Changeable parts: hair, shirt, pants, shoes —
-// each with a few options, bought with cash. The player's voxel body
-// uses the chosen colours. The outfit persists in the save.
+// Solmar Bay — outfit shop: buy hair, shirts, pants and shoes and
+// wear them. The shop is at (-120, 40); E at its door steps inside
+// the interior (interiors.js), and the outfit menu opens at the
+// counter inside. Outfit changes are visible on the player model
+// (playerBoxes reads state.outfit) and persist in the save.
 
 import { OUTFIT } from './config.js';
-import { showToast } from './state.js';
-
-const PARTS = ['hair', 'shirt', 'pants', 'shoes'];
+import { showToast, addCash } from './state.js';
 
 export function createOutfit() {
   return {
     menuOpen: false,
-    part: 0, // index into PARTS
+    category: 'hair', // hair | shirt | pants | shoes
   };
 }
 
-// Cycle one part to the next option (Digit1-4 pick the part, Digit5
-// buys the current option). Called from main.js's key handling.
-export function cyclePart(game, partIdx) {
+// Buy the next item in a category (cycles through the table).
+export function buyOutfit(game, category) {
   const s = game.state;
-  const part = PARTS[partIdx];
-  if (!part) return false;
-  const opts = OUTFIT[part];
-  const cur = s.outfit[part];
-  const next = (cur + 1) % opts.length;
-  s.outfit[part] = next;
-  showToast(s, part + ': ' + opts[next].name + (opts[next].price > 0 ? ' ($' + opts[next].price + ' — press 5 to buy)' : ' (free)'), 2);
-  return true;
-}
-
-export function buyCurrent(game) {
-  const s = game.state;
-  const part = PARTS[game.outfit.part];
-  const opts = OUTFIT[part];
-  const cur = s.outfit[part];
-  const opt = opts[cur];
-  if (opt.price <= 0) {
-    showToast(s, opt.name + ' is already yours.', 2);
-    return true;
-  }
-  if (s.cash < opt.price) {
-    showToast(s, 'Not enough cash for ' + opt.name + ' ($' + opt.price + ').', 2);
+  const table = OUTFIT[category];
+  if (!table) return false;
+  const next = (s.outfit[category] + 1) % table.length;
+  const item = table[next];
+  if (s.cash < item.price) {
+    showToast(s, 'Not enough cash for ' + item.name + ' ($' + item.price + ').', 3);
     return false;
   }
-  s.cash -= opt.price;
-  showToast(s, 'Bought ' + opt.name + ' for $' + opt.price + '!', 2);
+  addCash(s, -item.price);
+  s.outfit[category] = next;
+  showToast(s, 'You bought ' + item.name + ' (-$' + item.price + '). Looking sharp!', 4);
   return true;
 }
 
-// The outfit menu data for the HUD (part names + current option).
-export function outfitMenuData(game) {
+export function outfitMenuText(game) {
   const s = game.state;
-  return PARTS.map((part, i) => ({
-    part,
-    current: OUTFIT[part][s.outfit[part]].name,
-    price: OUTFIT[part][s.outfit[part]].price,
-    selected: i === game.outfit.part,
-  }));
+  const lines = [];
+  for (const cat of ['hair', 'shirt', 'pants', 'shoes']) {
+    const table = OUTFIT[cat];
+    const cur = table[s.outfit[cat]];
+    const next = table[(s.outfit[cat] + 1) % table.length];
+    lines.push(cat + ': ' + cur.name + ' → next ' + next.name + ' ($' + next.price + ')');
+  }
+  return lines.join(' · ');
 }
 
-export { PARTS, OUTFIT };
+export function outfitBoxes(game, out) {
+  // Racks inside the outfit shop interior (room coordinates).
+  const room = { x: 0, z: 380 };
+  out.pushBox(room.x - 5, 0.7, room.z - 3, 1, 1.4, 0.5, [0.8, 0.6, 0.4]);
+  out.pushBox(room.x + 5, 0.7, room.z - 3, 1, 1.4, 0.5, [0.6, 0.8, 0.4]);
+  out.pushBox(room.x - 5, 0.7, room.z + 3, 1, 1.4, 0.5, [0.4, 0.6, 0.8]);
+  out.pushBox(room.x + 5, 0.7, room.z + 3, 1, 1.4, 0.5, [0.8, 0.4, 0.6]);
+}

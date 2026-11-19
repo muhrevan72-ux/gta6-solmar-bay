@@ -1,195 +1,228 @@
-// Solmar Bay — HUD: the dense top-4 style interface.
+// Solmar Bay — the HUD.
 //
-// Mission panel (chapter + stage + objective + NEXT + respect +
-// location + completion %), police response list (named units +
-// distance + status), Day N · HH:MM · phase · weather clock, weapon
-// slots with ammo, car name + condition while driving, radio
-// station + song, district name, dialogue box with a named NPC +
-// role. All the data comes from pure functions (headless-testable);
-// updateHud writes it into the DOM. drawMinimap is exported and
-// called in the menu branch too, so the title screen never shows an
-// empty green box.
+// THE TITLE FIX (play-test #5, Blocker A): the title screen
+// (#hud-menu) is STATIC HTML in index.html. updateHud NEVER
+// overwrites its innerHTML and NEVER hides it except when the mode
+// is not 'menu'. The old build did `menu.innerHTML = ...` for every
+// menu and set `menu.style.display = m ? 'block' : 'none'` where m
+// was null at boot — so the title was hidden on frame 1 and its
+// buttons were destroyed from the DOM (a DOM search for "SOLMAR"
+// found nothing). The modal (pause / busted / wasted / mission
+// passed) is a SEPARATE element (#hud-modal) driven by
+// state.hud.menu, and the chapter intro card is a third element
+// (#hud-card), always rendered as a CENTRED flex panel (play-test
+// #5: it was left-aligned and overlapped the HUD).
+//
+// updateHud is DOM-safe: every element access is guarded, so the
+// game still runs (and tests still pass) when an element is missing.
+// In headless tests the DOM is a stub object (see test-render7 /
+// test-qa) — the same code path runs, so the boot test proves the
+// real behaviour.
 
-import { districtAt, respectLevel } from './config.js';
-import { missionPanelData } from './missions.js';
-import { policeListData } from './police.js';
+import { RESPECT, districtAt, respectLevel } from './config.js';
 import { clockText } from './weather.js';
 import { radioNow } from './audio.js';
-import { completionPct } from './missions.js';
+import { policeResponseList } from './police.js';
 
-export const HUD_IDS = [
-  'hud-cash', 'hud-health', 'hud-armour', 'hud-wanted', 'hud-objective',
-  'hud-speed', 'hud-mission', 'hud-police', 'hud-respect', 'hud-clock',
-  'hud-weapons', 'hud-car', 'hud-radio', 'hud-district', 'hud-dialogue',
-  'hud-toast', 'hud-menu', 'hud-card', 'hud-minimap', 'hud-phone',
-];
-
-export function weaponSlots(game) {
+export function updateHud(game) {
+  const dom = game.dom;
+  if (!dom) return;
   const s = game.state;
-  const slots = [];
-  slots.push({ key: '1', name: 'Pistol', ammo: '∞', owned: true, active: s.weapon === 'pistol' });
-  slots.push({ key: '2', name: 'SMG', ammo: String(s.ammo.smg), owned: s.weapons.smg, active: s.weapon === 'smg' });
-  slots.push({ key: '3', name: 'Shotgun', ammo: String(s.ammo.shotgun), owned: s.weapons.shotgun, active: s.weapon === 'shotgun' });
-  return slots;
+  // --- title screen: static HTML, shown iff mode === 'menu' ---
+  if (dom.menu) {
+    dom.menu.style.display = s.mode === 'menu' ? 'flex' : 'none';
+    // innerHTML is NEVER touched here. The buttons live in the
+    // static HTML and keep working.
+  }
+  // --- modal: pause / busted / wasted / mission passed ---
+  if (dom.modal) {
+    if (s.hud.menu) {
+      dom.modal.style.display = 'flex';
+      dom.modal.innerHTML =
+        '<h2>' + s.hud.menu.title + '</h2>' +
+        '<p>' + s.hud.menu.body + '</p>' +
+        '<p class="hint">' + s.hud.menu.hint + '</p>';
+    } else {
+      dom.modal.style.display = 'none';
+    }
+  }
+  // --- chapter intro card: a centred panel ---
+  if (dom.card) {
+    if (s.hud.card) {
+      dom.card.style.display = 'flex';
+      // The content goes into the .card-inner panel (its CSS centres
+      // and borders it); #hud-card itself is only the flex overlay.
+      const inner = dom.cardInner || dom.card;
+      inner.innerHTML =
+        '<h2>' + s.hud.card.title + '</h2>' +
+        '<p>' + s.hud.card.text + '</p>' +
+        '<p class="hint">Press Enter to start.</p>';
+    } else {
+      dom.card.style.display = 'none';
+    }
+  }
+  // --- toasts (never an empty black oval: hidden when empty) ---
+  if (dom.toast) {
+    const texts = s.hud.toasts.map((t) => t.text);
+    dom.toast.textContent = texts.join(' · ');
+    dom.toast.style.display = texts.length > 0 ? 'block' : 'none';
+  }
+  // --- dialogue box (named NPC + role) ---
+  if (dom.dialogue) {
+    if (s.hud.dialogue) {
+      dom.dialogue.style.display = 'block';
+      dom.dialogue.innerHTML =
+        '<b>' + s.hud.dialogue.name + '</b> <span>' + s.hud.dialogue.role + '</span><br>' +
+        s.hud.dialogue.text;
+    } else {
+      dom.dialogue.style.display = 'none';
+    }
+  }
+  if (dom.cash) dom.cash.textContent = '$' + s.cash + ' · Bank $' + s.bank;
+  if (dom.health) dom.health.textContent = 'HP ' + Math.round(s.health) + ' · Armour ' + Math.round(s.armour);
+  if (dom.wanted) {
+    dom.wanted.textContent = '★'.repeat(s.wanted) + '☆'.repeat(5 - s.wanted);
+  }
+  if (dom.weapons) {
+    // Weapon names are proper nouns/acronyms (SMG is an acronym, not
+    // title case — the old code rendered "Smg").
+    const names = { pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun' };
+    const slots = ['pistol', 'smg', 'shotgun'].map((w) => {
+      if (!s.weapons[w]) return names[w] + ' —';
+      const ammo = s.ammo[w] === Infinity ? '∞' : s.ammo[w];
+      const cur = s.weapon === w ? '[' + names[w] + ' ' + ammo + ']' : names[w] + ' ' + ammo;
+      return cur;
+    });
+    dom.weapons.textContent = slots.join(' ');
+  }
+  if (dom.bombs) dom.bombs.textContent = 'Bombs: ' + s.bombs;
+  if (dom.clock) dom.clock.textContent = clockText(game);
+  if (dom.radio) {
+    const r = radioNow(game.radio);
+    dom.radio.textContent = r.station + ' / \'' + r.song + '\'';
+  }
+  if (dom.respect) {
+    dom.respect.textContent = 'REP ' + respectLevel(s.respect).name + ' · ' + s.respect;
+  }
+  if (dom.location) {
+    dom.location.textContent = districtAt(s.player.x, s.player.z) + ' · ' + completionPct(s) + '% complete';
+  }
+  if (dom.mission) {
+    const ch = game.missions;
+    const chapter = game.state.chapter;
+    const obj = missionObjective(game);
+    dom.mission.innerHTML =
+      '<b>CH. ' + chapter + '</b> — ' + obj + '<br>' +
+      '<span>NEXT: ' + nextHint(game) + '</span>';
+  }
+  if (dom.police) {
+    const list = policeResponseList(game);
+    dom.police.innerHTML = list.length === 0
+      ? 'No police response'
+      : list.map((u) => u.name + ' ' + u.dist + 'm ' + u.status).join('<br>');
+  }
+  if (dom.car) {
+    const car = s.player.inCar;
+    if (car) {
+      dom.car.textContent = car.name + ' · Condition ' + Math.round(car.condition) + '% · ' + Math.round(Math.abs(car.speed) * 3.6) + ' km/h';
+    } else {
+      dom.car.textContent = Math.round(s.player.speed * 3.6) + ' km/h';
+    }
+  }
+  if (dom.minimap && dom.minimap.getContext) {
+    const ctx = dom.minimap.getContext('2d');
+    if (ctx) drawMinimap(game, ctx);
+  }
 }
 
-export function respectInfo(game) {
+function completionPct(s) {
+  const story = Math.min(5, s.chapter - 1) * 12;
+  const side = Math.min(20, s.stats.sideJobsDone * 4);
+  const garage = Math.min(8, s.ownedCars.length * 2);
+  const rep = Math.min(12, Math.floor(s.respect / 100));
+  return Math.min(100, story + side + garage + rep);
+}
+
+function missionObjective(game) {
   const s = game.state;
-  const lvl = respectLevel(s.respect);
-  return {
-    name: lvl.name,
-    rep: s.respect,
-    next: lvl.next,
-    nextMin: lvl.nextMin,
-    pct: lvl.nextMin ? Math.round(((s.respect - lvl.min) / (lvl.nextMin - lvl.min)) * 100) : 100,
-  };
+  const m = game.missions;
+  switch (s.chapter) {
+    case 1: return m.stage === 0 ? 'Steal a car' : 'Drive to the garage';
+    case 2: return 'Deliver the package (' + Math.max(0, Math.ceil(m.timer)) + 's)';
+    case 3: return 'Lose the heat (wanted ' + s.wanted + ')';
+    case 4: return 'Pick up passengers ' + m.passengers + '/3';
+    case 5: return m.stage === 0 ? 'Grab the cash at the harbour' : 'Lose the heat, reach the safehouse';
+    default: return 'Free roam';
+  }
 }
 
-export function carInfo(game) {
-  const v = game.state.player.inCar;
-  if (!v) return null;
-  return {
-    name: v.name,
-    condition: Math.max(0, 100 - v.damage),
-    speed: Math.round(Math.abs(v.speed) * 3.6), // km/h
-  };
+function nextHint(game) {
+  const t = game.missions.target;
+  if (!t) return '—';
+  return t.label + ' (' + Math.round(t.x) + ', ' + Math.round(t.z) + ')';
 }
 
-export function hudData(game) {
-  const s = game.state;
-  return {
-    cash: s.cash,
-    bank: s.bank,
-    health: Math.round(s.health),
-    armour: Math.round(s.armour),
-    wanted: s.wanted,
-    speed: Math.round(Math.abs(s.player.speed) * 3.6),
-    mission: missionPanelData(game),
-    police: policeListData(game),
-    respect: respectInfo(game),
-    clock: clockText(game),
-    weapons: weaponSlots(game),
-    car: carInfo(game),
-    radio: radioNow(game.radio),
-    district: districtAt(s.player.x, s.player.z),
-    dialogue: s.hud.dialogue,
-    completion: completionPct(game),
-    bombs: s.bombs,
-    relationship: game.dating.relationship,
-  };
-}
-
-// Minimap (2D canvas, top-down): player, mission marker, police
-// blips, gang turf, car. Exported so the title screen can draw it
-// behind the menu.
-export function drawMinimap(ctx, game, w, h) {
-  if (!ctx) return;
-  const size = Math.min(w, h);
-  const scale = size / 800;
-  const cx = w / 2;
-  const cy = h / 2;
-  ctx.fillStyle = '#0d2b1a';
-  ctx.fillRect(0, 0, w, h);
-  // Water + sand (west edge).
-  ctx.fillStyle = '#2a6a8a';
-  ctx.fillRect(0, 0, (400 - 340) * scale * 0 + 30 * scale, h);
-  ctx.fillStyle = '#c8a86a';
-  ctx.fillRect(30 * scale, 0, 40 * scale, h);
+// The round minimap: city grid, beach, downtown, roads, the player
+// (white dot), the garage (yellow diamond), the mission target
+// (yellow ring), police (red dots), the called taxi (yellow dot).
+export function drawMinimap(game, ctx) {
+  const W = 140, H = 140;
+  const scale = W / 800;
+  const toX = (x) => (x + 400) * scale;
+  const toZ = (z) => (z + 400) * scale;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#16222e';
+  ctx.fillRect(0, 0, W, H);
+  // Beach + water (west).
+  ctx.fillStyle = '#c2a878';
+  ctx.fillRect(toX(-400), 0, 80 * scale, H);
+  ctx.fillStyle = '#2a6a9a';
+  ctx.fillRect(toX(-400), 0, 20 * scale, H);
+  // Downtown.
+  ctx.fillStyle = '#3a3a22';
+  ctx.fillRect(toX(-100), toZ(-300), 300 * scale, 400 * scale);
   // Roads.
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = 7 * scale;
-  for (const l of [-300, -200, -100, 0, 100, 200, 300]) {
-    const px = cx + l * scale;
-    const py = cy + l * scale;
-    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(w, py); ctx.stroke();
-  }
-  // Gang turf.
-  ctx.fillStyle = 'rgba(240, 190, 40, 0.25)';
-  ctx.fillRect(cx - 160 * scale, cy - 240 * scale, 320 * scale, 280 * scale);
-  ctx.fillStyle = 'rgba(40, 180, 180, 0.25)';
-  ctx.fillRect(cx + 230 * scale, cy - 210 * scale, 180 * scale, 220 * scale);
-  // Buildings.
-  ctx.fillStyle = '#777';
-  for (const b of game.city.buildings) {
-    ctx.fillRect(cx + (b.x - b.sx / 2) * scale, cy + (b.z - b.sz / 2) * scale, b.sx * scale, b.sz * scale);
-  }
-  // Mission marker (yellow).
-  const m = game.missions.marker;
-  if (m) {
-    ctx.fillStyle = '#ffd21f';
+  ctx.strokeStyle = '#666';
+  ctx.lineWidth = 1;
+  for (const r of game.city.roads) {
     ctx.beginPath();
-    ctx.arc(cx + m.x * scale, cy + m.z * scale, 6, 0, Math.PI * 2);
-    ctx.fill();
+    if (r.vertical) { ctx.moveTo(toX(r.coord), 0); ctx.lineTo(toX(r.coord), H); }
+    else { ctx.moveTo(0, toZ(r.coord)); ctx.lineTo(W, toZ(r.coord)); }
+    ctx.stroke();
   }
-  // Police blips (blue).
-  ctx.fillStyle = '#3a6cff';
+  // Mission target.
+  const t = game.missions.target;
+  if (t) {
+    ctx.strokeStyle = '#f5d020';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(toX(t.x), toZ(t.z), 5, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // Garage.
+  ctx.fillStyle = '#f5a623';
+  const gx = toX(150), gz = toZ(-150);
+  ctx.beginPath();
+  ctx.moveTo(gx, gz - 4); ctx.lineTo(gx + 4, gz); ctx.lineTo(gx, gz + 4); ctx.lineTo(gx - 4, gz);
+  ctx.fill();
+  // Police (red dots).
+  ctx.fillStyle = '#ff3030';
+  for (const c of game.police.cars) {
+    ctx.fillRect(toX(c.x) - 1.5, toZ(c.z) - 1.5, 3, 3);
+  }
   for (const c of game.police.cops) {
+    ctx.fillRect(toX(c.x) - 1, toZ(c.z) - 1, 2, 2);
+  }
+  // Called taxi (yellow dot).
+  if (game.taxi.called) {
+    ctx.fillStyle = '#ffe14d';
     ctx.beginPath();
-    ctx.arc(cx + c.x * scale, cy + c.z * scale, 3, 0, Math.PI * 2);
+    ctx.arc(toX(game.taxi.called.x), toZ(game.taxi.called.z), 3, 0, Math.PI * 2);
     ctx.fill();
   }
-  // Player (white triangle).
-  const p = game.state.player;
+  // Player (white dot).
   ctx.fillStyle = '#fff';
   ctx.beginPath();
-  ctx.arc(cx + p.x * scale, cy + p.z * scale, 5, 0, Math.PI * 2);
+  ctx.arc(toX(game.state.player.x), toZ(game.state.player.z), 3, 0, Math.PI * 2);
   ctx.fill();
-}
-
-export function updateHud(game, els) {
-  if (typeof document === 'undefined' || !els) return;
-  const d = hudData(game);
-  const set = (id, text) => {
-    const el = els[id];
-    if (el) el.textContent = text;
-  };
-  set('hud-cash', '$' + d.cash + (d.bank ? '  ·  bank $' + d.bank : ''));
-  set('hud-health', 'HP ' + d.health + (d.armour ? ' · Armour ' + d.armour : ''));
-  set('hud-wanted', '★'.repeat(d.wanted) + '☆'.repeat(5 - d.wanted));
-  set('hud-objective', d.mission.objective);
-  set('hud-speed', d.car ? d.car.speed + ' km/h' : Math.round(d.speed) + ' km/h');
-  set('hud-clock', d.clock);
-  set('hud-district', d.district);
-  set('hud-respect', d.respect.name + ' · ' + d.respect.rep + ' REP' + (d.respect.next ? ' → ' + d.respect.next + ' (' + d.respect.nextMin + ')' : ''));
-  set('hud-radio', d.radio.station + ' ' + d.radio.freq + ' — ' + d.radio.song);
-  set('hud-car', d.car ? d.car.name + ' · ' + d.car.condition + '%' : '');
-  const wEl = els['hud-weapons'];
-  if (wEl) {
-    wEl.innerHTML = d.weapons.map((w) => (w.active ? '<b>' : '') + '[' + w.name + ' ' + (w.owned ? w.ammo : '—') + ']' + (w.active ? '</b>' : '')).join(' ');
-  }
-  const mEl = els['hud-mission'];
-  if (mEl) {
-    mEl.innerHTML = '<b>' + d.mission.chapter + '</b><br>' + d.mission.objective +
-      (d.mission.next ? '<br>NEXT: ' + d.mission.next : '') +
-      (d.mission.sideJob ? '<br>JOB: ' + d.mission.sideJob : '') +
-      '<br>Complete: ' + d.mission.completion + '%';
-  }
-  const pEl = els['hud-police'];
-  if (pEl) {
-    pEl.innerHTML = d.police.length
-      ? d.police.map((u) => u.name + ' ' + u.status + ' ' + u.dist + 'm').join('<br>')
-      : 'No police response';
-  }
-  const dg = els['hud-dialogue'];
-  if (dg) {
-    dg.style.display = d.dialogue ? 'block' : 'none';
-    if (d.dialogue) dg.innerHTML = '<b>' + d.dialogue.name + '</b> <i>' + d.dialogue.role + '</i><br>' + d.dialogue.text;
-  }
-  const tEl = els['hud-toast'];
-  if (tEl) {
-    tEl.innerHTML = game.state.hud.toasts.map((t) => '<div>' + t.text + '</div>').join('');
-  }
-  const menu = els['hud-menu'];
-  if (menu) {
-    const m = game.state.hud.menu;
-    menu.style.display = m ? 'block' : 'none';
-    if (m) menu.innerHTML = '<h2>' + m.title + '</h2><p>' + m.body + '</p><p><i>' + m.hint + '</i></p>';
-  }
-  const card = els['hud-card'];
-  if (card) {
-    const c = game.state.hud.card;
-    card.style.display = c ? 'block' : 'none';
-    if (c) card.innerHTML = '<h2>' + c.title + '</h2><p>' + c.text + '</p><p><i>Press Enter to start.</i></p>';
-  }
 }

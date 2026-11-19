@@ -1,4 +1,4 @@
-// Solmar Bay — interiors: 2-3 enterable shops.
+// Solmar Bay — interiors: enterable shops.
 //
 // Pizza Palace, Burger Barn and the outfit shop have a door: press E
 // at the door to step into a small interior room (floor, counter,
@@ -8,12 +8,14 @@
 // full buildings. While inside, the camera switches to close mode,
 // police/gangs don't update, and the player is clamped to the room.
 
-import { dist2 } from './config.js';
+import { dist2, FOOD_SHOPS } from './config.js';
 import { showToast } from './state.js';
+import { openFoodMenu } from './food.js';
+import { outfitMenuText } from './outfit.js';
 
 // Door points (just outside the shop buildings, on standable ground).
-// Pizza/Burger doors sit 5m north of their food-shop points so the
-// 5m food radius and the 4m door radius do not overlap.
+// Pizza/Burger doors sit 5 m north of their food-shop points so the
+// 5 m food radius and the 4 m door radius do not overlap.
 export const INTERIOR_DOORS = [
   { shop: 'Pizza Palace', x: -60, z: -32, kind: 'food', menu: 'pizza' },
   { shop: 'Burger Barn', x: 60, z: -28, kind: 'food', menu: 'burger' },
@@ -80,50 +82,91 @@ export function roomDoorPoint() {
   return { x: ROOM.x, z: ROOM.z + ROOM.d / 2 - 1 };
 }
 
-// Clamp the player to the room while inside.
+// Keep the player inside the room while in it.
 export function clampToRoom(game) {
-  const it = game.interiors;
-  if (!it.inside) return;
+  if (!game.interiors.inside) return;
   const p = game.state.player;
-  const hx = ROOM.w / 2 - 1;
-  const hz = ROOM.d / 2 - 1;
-  if (p.x < ROOM.x - hx) p.x = ROOM.x - hx;
-  if (p.x > ROOM.x + hx) p.x = ROOM.x + hx;
-  if (p.z < ROOM.z - hz) p.z = ROOM.z - hz;
-  if (p.z > ROOM.z + hz) p.z = ROOM.z + hz;
+  const hw = ROOM.w / 2 - 1;
+  const hd = ROOM.d / 2 - 1;
+  if (p.x < ROOM.x - hw) p.x = ROOM.x - hw;
+  if (p.x > ROOM.x + hw) p.x = ROOM.x + hw;
+  if (p.z < ROOM.z - hd) p.z = ROOM.z - hd;
+  if (p.z > ROOM.z + hd) p.z = ROOM.z + hd;
 }
 
-export function interiorBoxes(game, out) {
-  const it = game.interiors;
-  if (!it.inside) return;
-  // Floor, walls, ceiling.
-  out.pushBox(ROOM.x, -0.1, ROOM.z, ROOM.w, 0.2, ROOM.d, [0.7, 0.6, 0.5]);
-  out.pushBox(ROOM.x, ROOM.h / 2, ROOM.z - ROOM.d / 2, ROOM.w, ROOM.h, 0.4, [0.85, 0.8, 0.75]);
-  out.pushBox(ROOM.x, ROOM.h / 2, ROOM.z + ROOM.d / 2, ROOM.w, ROOM.h, 0.4, [0.85, 0.8, 0.75]);
-  out.pushBox(ROOM.x - ROOM.w / 2, ROOM.h / 2, ROOM.z, 0.4, ROOM.h, ROOM.d, [0.85, 0.8, 0.75]);
-  out.pushBox(ROOM.x + ROOM.w / 2, ROOM.h / 2, ROOM.z, 0.4, ROOM.h, ROOM.d, [0.85, 0.8, 0.75]);
-  out.pushBox(ROOM.x, ROOM.h + 0.1, ROOM.z, ROOM.w, 0.2, ROOM.d, [0.6, 0.55, 0.5]);
-  // Counter + shelves + shopkeeper + sign.
+// Per-frame: clamp the player to the room while inside.
+export function stepInteriors(game, dt) {
+  clampToRoom(game);
+}
+
+// True while the player is inside an interior room.
+export function isInside(game) {
+  return !!game.interiors.inside;
+}
+
+// E at a door: enter it (outside) or leave it (inside, at the room
+// door point). Returns true if a door was used.
+export function tryInteriorDoor(game) {
+  const p = game.state.player;
+  if (game.interiors.inside) {
+    const dp = roomDoorPoint();
+    if (Math.hypot(p.x - dp.x, p.z - dp.z) < 3) {
+      return exitInterior(game);
+    }
+    return false;
+  }
+  const door = nearestDoor(game, p.x, p.z, 4);
+  if (door) return enterInterior(game, door);
+  return false;
+}
+
+// E at the counter inside a room: open that shop's menu.
+export function tryInteriorCounter(game) {
+  if (!game.interiors.inside) return false;
+  const p = game.state.player;
   const cp = counterPoint();
-  out.pushBox(cp.x, 0.6, cp.z, 6, 1.2, 1.2, [0.5, 0.35, 0.2]);
-  out.pushBox(ROOM.x - 4, 1.5, ROOM.z - ROOM.d / 2 + 1, 3, 3, 0.8, [0.6, 0.45, 0.3]);
-  out.pushBox(ROOM.x + 4, 1.5, ROOM.z - ROOM.d / 2 + 1, 3, 3, 0.8, [0.6, 0.45, 0.3]);
-  out.pushBox(cp.x + 2, 1.25, cp.z - 1.5, 0.8, 2.5, 0.5, [0.9, 0.9, 0.9]);
-  out.pushBox(cp.x + 2, 2.2, cp.z - 1.5, 0.55, 0.55, 0.5, [0.95, 0.8, 0.65]);
-  out.pushBox(ROOM.x, 4, ROOM.z - ROOM.d / 2 + 0.5, 8, 1, 0.3, [0.95, 0.75, 0.15]);
-  // Dining table + chairs, a plant by the door, a menu board on the
-  // back wall, a rug, and two pendant lights (visual overhaul).
-  out.pushBox(ROOM.x - 3, 0.5, ROOM.z + 1.5, 3, 0.3, 2, [0.55, 0.4, 0.25]); // table
-  out.pushBox(ROOM.x - 3, 0.9, ROOM.z - 0.2, 2.6, 0.8, 0.3, [0.55, 0.4, 0.25]); // chair back
-  out.pushBox(ROOM.x - 3, 0.35, ROOM.z - 0.2, 2.6, 0.3, 1, [0.55, 0.4, 0.25]); // chair seat
-  out.pushBox(ROOM.x - 3, 0.9, ROOM.z + 3.2, 2.6, 0.8, 0.3, [0.55, 0.4, 0.25]); // chair back 2
-  out.pushBox(ROOM.x - 3, 0.35, ROOM.z + 3.2, 2.6, 0.3, 1, [0.55, 0.4, 0.25]); // chair seat 2
-  out.pushBox(ROOM.x + 5.5, 0.4, ROOM.z + 3.5, 1, 0.8, 1, [0.7, 0.4, 0.25]); // plant pot
-  out.pushBox(ROOM.x + 5.5, 1.1, ROOM.z + 3.5, 0.9, 0.9, 0.9, [0.2, 0.55, 0.25]); // plant
-  out.pushBox(ROOM.x - 3, 3.2, ROOM.z - ROOM.d / 2 + 0.6, 4, 1.6, 0.2, [0.15, 0.2, 0.3]); // menu board
-  out.pushBox(ROOM.x, 0.05, ROOM.z + 1.5, 6, 0.06, 4, [0.75, 0.3, 0.3]); // rug
-  out.pushBox(ROOM.x - 3, 4.2, ROOM.z, 0.8, 0.8, 0.8, [1.0, 0.9, 0.6]); // pendant light
-  out.pushBox(ROOM.x + 3, 4.2, ROOM.z, 0.8, 0.8, 0.8, [1.0, 0.9, 0.6]); // pendant light 2
+  if (Math.hypot(p.x - cp.x, p.z - cp.z) > 3) return false;
+  const it = game.interiors.inside;
+  if (it.kind === 'food') {
+    const shop = FOOD_SHOPS.find((s) => s.name === it.shop);
+    if (shop) {
+      openFoodMenu(game, shop);
+      return true;
+    }
+    return false;
+  }
+  if (it.kind === 'outfit') {
+    game.outfit.menuOpen = true;
+    showToast(game.state, 'Outfit Shop — 1 hair · 2 shirt · 3 pants · 4 shoes. ' + outfitMenuText(game), 5);
+    return true;
+  }
+  return false;
 }
 
-export { ROOM, INTERIOR_DOORS as DOORS };
+// Draw the interior room (only when inside): floor, walls, counter,
+// shelves, shopkeeper, sign.
+export function interiorBoxes(game, out) {
+  if (!game.interiors.inside) return;
+  const it = game.interiors.inside;
+  const floorCol = it.kind === 'food' ? [0.85, 0.75, 0.6] : [0.6, 0.4, 0.7];
+  // Floor + ceiling + walls.
+  out.pushBox(ROOM.x, -0.3, ROOM.z, ROOM.w, 0.6, ROOM.d, floorCol);
+  out.pushBox(ROOM.x, ROOM.h + 0.3, ROOM.z, ROOM.w, 0.6, ROOM.d, [0.9, 0.9, 0.92]);
+  out.pushBox(ROOM.x, ROOM.h / 2, ROOM.z - ROOM.d / 2, ROOM.w, ROOM.h, 0.4, [0.8, 0.75, 0.7]);
+  out.pushBox(ROOM.x, ROOM.h / 2, ROOM.z + ROOM.d / 2, ROOM.w, ROOM.h, 0.4, [0.8, 0.75, 0.7]);
+  out.pushBox(ROOM.x - ROOM.w / 2, ROOM.h / 2, ROOM.z, 0.4, ROOM.h, ROOM.d, [0.8, 0.75, 0.7]);
+  out.pushBox(ROOM.x + ROOM.w / 2, ROOM.h / 2, ROOM.z, 0.4, ROOM.h, ROOM.d, [0.8, 0.75, 0.7]);
+  // Counter (north end) + shelves + shopkeeper + sign.
+  const cp = counterPoint();
+  out.pushBox(cp.x, 0.6, cp.z, 8, 1.2, 1.2, [0.5, 0.35, 0.2]);
+  out.pushBox(cp.x - 3, 1.5, cp.z, 1.6, 2, 1, [0.9, 0.3, 0.2]);
+  out.pushBox(cp.x + 3, 1.5, cp.z, 1.6, 2, 1, [0.95, 0.6, 0.1]);
+  out.pushBox(cp.x, 1.9, cp.z - 1.2, 0.7, 1.6, 0.5, [0.95, 0.8, 0.65]); // shopkeeper
+  out.pushBox(cp.x, 2.6, cp.z - 1.2, 0.6, 0.5, 0.5, [0.2, 0.2, 0.25]); // hair
+  out.pushBox(ROOM.x, 4.2, ROOM.z - ROOM.d / 2 + 0.3, 6, 1, 0.3, [0.95, 0.8, 0.15]); // sign
+  // Extra furniture: tables + chairs.
+  for (const [tx, tz] of [[-4, 2], [4, 2], [-4, -1], [4, -1]]) {
+    out.pushBox(ROOM.x + tx, 0.5, ROOM.z + tz, 1.6, 0.2, 1.6, [0.6, 0.45, 0.3]);
+    out.pushBox(ROOM.x + tx, 0.9, ROOM.z + tz + 1.2, 0.8, 0.8, 0.4, [0.5, 0.35, 0.2]);
+  }
+}

@@ -14,6 +14,10 @@
 //   `down()` or a prev-keys comparison. Repeat keydown events must
 //   NOT re-add to `pressed`.
 //
+// Mouse deltas: some browsers (and the cloud play-test browser) do
+// not report movementX/movementY on drags, so the listener also
+// derives the delta from the absolute pointer position as a fallback.
+//
 // Pure logic — no DOM at import time, so headless tests can drive it.
 
 export function createInput() {
@@ -24,6 +28,7 @@ export function createInput() {
       x: 0, y: 0, dx: 0, dy: 0,
       down: false, clicked: false, wheel: 0,
       dragging: false,
+      lastX: 0, lastY: 0, // absolute-position fallback for deltas
     },
     eCooldown: 0, // interact cooldown; gate with `<= 0`
   };
@@ -51,10 +56,19 @@ export function pressedKey(inp, code) {
 }
 
 export function mouseMove(inp, x, y, dx, dy) {
+  // Prefer the browser's movement deltas; fall back to the absolute
+  // position difference when they are missing (0 on both axes while
+  // the pointer actually moved).
+  if ((dx === 0 || dx === undefined) && (dy === 0 || dy === undefined)) {
+    dx = x - inp.mouse.lastX;
+    dy = y - inp.mouse.lastY;
+  }
   inp.mouse.x = x;
   inp.mouse.y = y;
-  inp.mouse.dx += dx;
-  inp.mouse.dy += dy;
+  inp.mouse.lastX = x;
+  inp.mouse.lastY = y;
+  inp.mouse.dx += dx || 0;
+  inp.mouse.dy += dy || 0;
 }
 
 export function mouseDown(inp) {
@@ -80,7 +94,10 @@ export function endFrame(inp, dt) {
   inp.mouse.dx = 0;
   inp.mouse.dy = 0;
   inp.mouse.wheel = 0;
-  if (inp.eCooldown > 0) inp.eCooldown -= dt;
+  // Clamp at 0: the old code let the cooldown decay slightly
+  // negative, which made `!cooldown` false forever (the round-3
+  // E bug). The gate everywhere is `cooldown <= 0`.
+  if (inp.eCooldown > 0) inp.eCooldown = Math.max(0, inp.eCooldown - dt);
   else if (inp.eCooldown < 0) inp.eCooldown = 0;
 }
 
@@ -95,6 +112,8 @@ export function attachInput(inp, el) {
   el.addEventListener('mousedown', (e) => {
     inp.mouse.x = e.offsetX;
     inp.mouse.y = e.offsetY;
+    inp.mouse.lastX = e.offsetX;
+    inp.mouse.lastY = e.offsetY;
     mouseDown(inp);
   });
   window.addEventListener('mouseup', () => mouseUp(inp));

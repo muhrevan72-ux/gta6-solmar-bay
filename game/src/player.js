@@ -1,153 +1,166 @@
 // Solmar Bay — the player on foot.
 //
-// WASD/arrows move relative to the camera, Shift runs, E enters /
-// exits the nearest car, F punches, G throws a bomb, click shoots,
-// 1/2/3 switch weapons, Space is the handbrake (driving) or the
-// parachute (falling). Movement is eased: acceleration ramps up,
-// friction eases down, the body leans into turns, the walk cycle
-// bobs. The player swims (slowly) in the water instead of drowning.
+// WASD moves relative to the camera yaw, Shift runs, the walk cycle
+// (bob) drives the leg/arm swing in playerBoxes. Movement reads HELD
+// keys (input.down); all tap actions (E/F/G/...) use pressedKey in
+// main.js, never here. Collision uses the city's bbox collider —
+// the player is a circle of radius TUNE.playerRadius.
 
-import { TUNE, OUTFIT, clamp, dist2 } from './config.js';
-import { collideCircle, clearSpot } from './world.js';
-import { isDown, pressedKey } from './input.js';
-import { exitVehicle } from './vehicles.js';
-import { cameraForward } from './shots.js';
-import { switchWeapon, shoot, punch, throwBomb } from './combat.js';
+import { TUNE, COL } from './config.js';
+import { isDown } from './input.js';
+import { isWaterAt } from './world.js';
+import { addCash, showToast } from './state.js';
+
+export function createPlayer(spawn) {
+  return {
+    x: spawn.x, z: spawn.z, heading: 0,
+    vx: 0, vz: 0, speed: 0, bob: 0, lean: 0,
+    inCar: null,
+    swimming: false,
+    carryingCat: null,
+    onTrain: false,
+    onElevator: false,
+    alt: 0, // height above the ground (parachute)
+    parachute: false,
+    nearCar: null, // nearest car within interact range (HUD hint)
+  };
+}
 
 export function stepPlayer(game, dt) {
   const s = game.state;
   const p = s.player;
-  const input = game.input;
-  if (s.mode !== 'play') return;
-  // Phone open: the world keeps running, but E/F/G/weapon keys are
-  // blocked while the phone is up (Esc closes the phone first).
-  const phoneOpen = game.phone && game.phone.open;
-  // In a car: the vehicle system drives; the player just rides.
-  if (p.inCar) {
-    // E exits the car (cooldown-gated with `<= 0`, never `!cooldown`).
-    if (!phoneOpen && pressedKey(input, 'KeyE') && input.eCooldown <= 0) {
-      input.eCooldown = 0.4;
-      exitVehicle(game);
+  if (p.inCar) return; // vehicles.js drives the car instead
+  // Parachute: a slow descent after jumping out of a plane.
+  if (p.alt > 0) {
+    p.alt = Math.max(0, p.alt - (p.parachute ? 3 : 9) * dt);
+    if (p.alt === 0) {
+      p.parachute = false;
+      showToast(s, 'You landed safely.', 3);
     }
-    return;
   }
-  // Riding the train / elevator: no on-foot movement.
-  if (p.onTrain || p.onElevator) return;
-
-  // --- movement (camera-relative) ---
-  const fwd = cameraForward(game.camera);
-  let mx = 0;
-  let mz = 0;
-  if (isDown(input, 'KeyW') || isDown(input, 'ArrowUp')) { mx += fwd.x; mz += fwd.z; }
-  if (isDown(input, 'KeyS') || isDown(input, 'ArrowDown')) { mx -= fwd.x; mz -= fwd.z; }
-  if (isDown(input, 'KeyA') || isDown(input, 'ArrowLeft')) { mx += fwd.z; mz -= fwd.x; }
-  if (isDown(input, 'KeyD') || isDown(input, 'ArrowRight')) { mx -= fwd.z; mz += fwd.x; }
-  const mLen = Math.sqrt(mx * mx + mz * mz);
-  if (mLen > 0) {
-    mx /= mLen;
-    mz /= mLen;
+  const inp = game.input;
+  const cam = game.camera;
+  // Camera-relative movement: forward is the camera yaw.
+  const fx = Math.sin(cam.yaw), fz = Math.cos(cam.yaw);
+  const rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
+  let mx = 0, mz = 0;
+  if (isDown(inp, 'KeyW')) { mx += fx; mz += fz; }
+  if (isDown(inp, 'KeyS')) { mx -= fx; mz -= fz; }
+  if (isDown(inp, 'KeyD')) { mx += rx; mz += rz; }
+  if (isDown(inp, 'KeyA')) { mx -= rx; mz -= rz; }
+  const len = Math.hypot(mx, mz);
+  const maxSpeed = isDown(inp, 'ShiftLeft') || isDown(inp, 'ShiftRight')
+    ? TUNE.runSpeed : TUNE.walkSpeed;
+  if (len > 0) {
+    mx /= len; mz /= len;
+    p.vx += mx * TUNE.accel * dt;
+    p.vz += mz * TUNE.accel * dt;
+    p.heading = Math.atan2(mx, mz);
   }
-  const running = isDown(input, 'ShiftLeft') || isDown(input, 'ShiftRight');
-  const inWater = p.x < -340 || (p.x > 340 && p.x < 400 && p.z > -160 && p.z < -40);
-  const topSpeed = inWater ? TUNE.swimSpeed : running ? TUNE.runSpeed : TUNE.walkSpeed;
-  p.swimming = inWater;
-  // Eased acceleration: ramp toward the target velocity.
-  const tx = mx * topSpeed;
-  const tz = mz * topSpeed;
-  const k = Math.min(1, dt * (mLen > 0 ? TUNE.accel / topSpeed : TUNE.friction / topSpeed));
-  p.vx += (tx - p.vx) * k;
-  p.vz += (tz - p.vz) * k;
-  // Friction when no input.
-  if (mLen === 0) {
-    p.vx -= p.vx * Math.min(1, dt * 8);
-    p.vz -= p.vz * Math.min(1, dt * 8);
+  // Friction + speed cap.
+  const sp = Math.hypot(p.vx, p.vz);
+  const cap = p.swimming ? TUNE.swimSpeed : maxSpeed;
+  if (sp > cap) { p.vx *= cap / sp; p.vz *= cap / sp; }
+  const fr = Math.max(0, 1 - TUNE.friction * dt / Math.max(sp, 0.001));
+  if (len === 0) { p.vx *= fr; p.vz *= fr; }
+  // Move with collision (slide along walls).
+  const nx = p.x + p.vx * dt;
+  const nz = p.z + p.vz * dt;
+  if (!game.city.collidesCircle(nx, p.z, TUNE.playerRadius)) p.x = nx;
+  if (!game.city.collidesCircle(p.x, nz, TUNE.playerRadius)) p.z = nz;
+  p.speed = Math.hypot(p.vx, p.vz);
+  p.bob += p.speed * dt * 1.6;
+  // Lean into turns.
+  const targetLean = len > 0 ? Math.sin(p.bob) * 0.08 : 0;
+  p.lean += (targetLean - p.lean) * Math.min(1, dt * 8);
+  // Swimming: the harbour basin is water.
+  p.swimming = isWaterAt(game.city, p.x, p.z);
+  if (p.swimming) p.bob += dt * 2;
+  // Nearest car (for the HUD "E — Enter car" hint).
+  p.nearCar = null;
+  let best = TUNE.interactRange;
+  for (const c of game.vehicles.traffic) {
+    const d = Math.hypot(c.x - p.x, c.z - p.z);
+    if (d < best) { best = d; p.nearCar = c; }
   }
-  let nx = p.x + p.vx * dt;
-  let nz = p.z + p.vz * dt;
-  // Collide with buildings (slide along walls).
-  const hit = collideCircle(game.city, nx, nz, TUNE.playerRadius);
-  if (hit) {
-    nx = hit.x;
-    nz = hit.z;
-    // Kill the velocity component into the wall.
-    p.vx *= 0.4;
-    p.vz *= 0.4;
+  for (const c of game.vehicles.parked) {
+    const d = Math.hypot(c.x - p.x, c.z - p.z);
+    if (d < best) { best = d; p.nearCar = c; }
   }
-  // City bounds.
-  nx = clamp(nx, -395, 395);
-  nz = clamp(nz, -395, 395);
-  p.x = nx;
-  p.z = nz;
-  p.speed = Math.sqrt(p.vx * p.vx + p.vz * p.vz);
-  // Face the movement direction; lean into turns; walk-cycle bob.
-  if (p.speed > 0.3) {
-    const target = Math.atan2(p.vx, p.vz);
-    let d = target - p.heading;
-    while (d > Math.PI) d -= Math.PI * 2;
-    while (d < -Math.PI) d += Math.PI * 2;
-    p.lean = clamp(d * 2, -0.4, 0.4);
-    p.heading += d * Math.min(1, dt * 10);
-    p.bob += p.speed * dt * 1.6;
-  } else {
-    p.lean *= Math.max(0, 1 - dt * 6);
-  }
-  // --- tap actions (all via pressedKey, never polling `down`) ---
-  // E is NOT handled here on foot: main.js's interaction dispatcher
-  // owns it (vehicle / food / cat / door / garage / ... priority).
-  if (!phoneOpen) {
-    if (pressedKey(input, 'KeyF')) punch(game);
-    if (pressedKey(input, 'KeyG')) throwBomb(game);
-    if (pressedKey(input, 'Digit1')) switchWeapon(game, 'pistol');
-    if (pressedKey(input, 'Digit2')) switchWeapon(game, 'smg');
-    if (pressedKey(input, 'Digit3')) switchWeapon(game, 'shotgun');
-  }
-  if (input.mouse.clicked && !phoneOpen) shoot(game);
 }
 
-// Voxel boxes for the player: articulated humanoid — head with hair,
-// torso (outfit shirt), arms and legs that swing with the walk
-// cycle, shoes. Colours come from the outfit + skin.
+export function enterCar(game, car) {
+  const s = game.state;
+  s.player.inCar = car;
+  car.driver = 'player';
+  car.speed = 0;
+  s.player.vx = 0;
+  s.player.vz = 0;
+}
+
+export function exitCar(game) {
+  const s = game.state;
+  const car = s.player.inCar;
+  if (!car) return;
+  car.driver = null;
+  s.player.inCar = null;
+  // Step out to the side of the car, clear of its collider.
+  const side = 2.5;
+  const sx = Math.cos(car.heading), sz = -Math.sin(car.heading);
+  s.player.x = car.x + sx * side;
+  s.player.z = car.z + sz * side;
+  s.player.heading = car.heading;
+}
+
+// The player as a humanoid: legs + arms swing with the walk cycle,
+// torso + head, a different shirt from the outfit. Near LOD: eyes.
 export function playerBoxes(game, out) {
   const s = game.state;
   const p = s.player;
-  const hair = OUTFIT.hair[s.outfit.hair];
-  const shirt = OUTFIT.shirt[s.outfit.shirt];
-  const pants = OUTFIT.pants[s.outfit.pants];
-  const shoes = OUTFIT.shoes[s.outfit.shoes];
-  const skin = [0.95, 0.8, 0.65];
-  const swing = Math.sin(p.bob) * (p.speed > 0.3 ? 0.5 : 0);
-  const bobY = Math.abs(Math.sin(p.bob)) * 0.08 * (p.speed > 0.3 ? 1 : 0);
-  const y = bobY;
-  // Legs (swing opposite).
-  out.pushBoxRot(p.x - 0.22, y + 0.45, p.z + swing * 0.4, 0.34, 0.9, 0.34, pants.colour, p.heading);
-  out.pushBoxRot(p.x + 0.22, y + 0.45, p.z - swing * 0.4, 0.34, 0.9, 0.34, pants.colour, p.heading);
-  // Shoes.
-  out.pushBoxRot(p.x - 0.22, y + 0.08, p.z + swing * 0.4 + 0.05, 0.36, 0.16, 0.5, shoes.colour, p.heading);
-  out.pushBoxRot(p.x + 0.22, y + 0.08, p.z - swing * 0.4 + 0.05, 0.36, 0.16, 0.5, shoes.colour, p.heading);
-  // Torso.
-  out.pushBoxRot(p.x, y + 1.25, p.z, 0.85, 0.75, 0.45, shirt.colour, p.heading);
-  // Arms (swing with the walk cycle).
-  out.pushBoxRot(p.x - 0.55, y + 1.25, p.z - swing * 0.35, 0.26, 0.7, 0.26, shirt.colour, p.heading);
-  out.pushBoxRot(p.x + 0.55, y + 1.25, p.z + swing * 0.35, 0.26, 0.7, 0.26, shirt.colour, p.heading);
-  // Head + hair (one box; the outfit's hair style changes its shape)
-  // + eyes (two tiny dark boxes on the front of the face).
-  out.pushBoxRot(p.x, y + 1.95, p.z, 0.55, 0.55, 0.5, skin, p.heading);
-  const fx = Math.sin(p.heading);
-  const fz = Math.cos(p.heading);
-  const rx = Math.cos(p.heading);
-  const rz = -Math.sin(p.heading);
-  if (hair.name === 'Blonde buzz') out.pushBoxRot(p.x, y + 2.23, p.z, 0.57, 0.08, 0.52, hair.colour, p.heading);
-  else if (hair.name === 'Red mohawk') out.pushBoxRot(p.x, y + 2.28, p.z, 0.12, 0.45, 0.52, hair.colour, p.heading);
-  else if (hair.name === 'Blue spikes') out.pushBoxRot(p.x, y + 2.3, p.z, 0.57, 0.35, 0.52, hair.colour, p.heading);
-  else out.pushBoxRot(p.x, y + 2.2, p.z, 0.57, 0.2, 0.52, hair.colour, p.heading); // Black crop
-  out.pushBox(p.x + fx * 0.27 + rx * 0.13, y + 1.98, p.z + fz * 0.27 + rz * 0.13, 0.09, 0.12, 0.06, [0.08, 0.08, 0.1]);
-  out.pushBox(p.x + fx * 0.27 - rx * 0.13, y + 1.98, p.z + fz * 0.27 - rz * 0.13, 0.09, 0.12, 0.06, [0.08, 0.08, 0.1]);
-  // Carried cat rides on the shoulder.
-  if (p.carryingCat) {
-    out.pushBoxRot(p.x + 0.3, y + 2.5, p.z, 0.4, 0.3, 0.5, [0.9, 0.85, 0.7], p.heading);
+  if (p.inCar) return;
+  const y0 = p.alt || 0; // parachute altitude
+  const h = 1.9;
+  const swing = p.speed > 0.5 ? Math.sin(p.bob) * 0.5 : 0;
+  const shirt = COL.shirt[s.outfit.shirt % COL.shirt.length];
+  const pants = COL.pants[s.outfit.pants % COL.pants.length];
+  const skin = COL.skin[0];
+  const hair = COL.hair[s.outfit.hair % COL.hair.length];
+  const legSwing = swing * 0.35;
+  out.pushBoxRot(p.x - 0.11, 0.45 + y0, p.z, 0.18, 0.9, 0.18, pants, p.heading + legSwing * 0.3);
+  out.pushBoxRot(p.x + 0.11, 0.45 + y0, p.z, 0.18, 0.9, 0.18, pants, p.heading - legSwing * 0.3);
+  out.pushBoxRot(p.x, 1.25 + y0, p.z, 0.5, 0.7, 0.28, shirt, p.heading);
+  out.pushBoxRot(p.x - 0.32, 1.25 + y0, p.z, 0.14, 0.65, 0.14, skin, p.heading + swing * 0.4);
+  out.pushBoxRot(p.x + 0.32, 1.25 + y0, p.z, 0.14, 0.65, 0.14, skin, p.heading - swing * 0.4);
+  out.pushBoxRot(p.x, 1.82 + y0, p.z, 0.34, 0.36, 0.32, skin, p.heading);
+  out.pushBoxRot(p.x, 2.02 + y0, p.z, 0.36, 0.12, 0.34, hair, p.heading);
+  // Eyes (near LOD only — the dynamic batch is culled at range anyway).
+  out.pushBoxRot(p.x - 0.08, 1.84 + y0, p.z + 0.17, 0.05, 0.05, 0.02, [0.1, 0.1, 0.1], p.heading);
+  out.pushBoxRot(p.x + 0.08, 1.84 + y0, p.z + 0.17, 0.05, 0.05, 0.02, [0.1, 0.1, 0.1], p.heading);
+  if (p.parachute) {
+    // Parachute canopy above the player.
+    out.pushBoxRot(p.x, 3.2 + y0, p.z, 1.8, 0.15, 1.8, [1, 0.4, 0.2], p.heading);
   }
-  // Blob shadow.
-  out.pushBox(p.x, 0.05, p.z, 1.1, 0.08, 1.1, [0.05, 0.05, 0.06]);
+  if (p.carryingCat) {
+    out.pushBoxRot(p.x, 1.5 + y0, p.z + 0.2, 0.25, 0.2, 0.35, [0.9, 0.85, 0.7], p.heading);
+  }
 }
 
-export { dist2, clearSpot };
+// Picking up a cash drop: walk over it and it is collected with a
+// toast (never silently — the round-4 "cash anomaly" was silent
+// auto-collect, so every income path must show a toast).
+export function collectPickups(game) {
+  const s = game.state;
+  const p = s.player;
+  if (p.inCar) return;
+  const left = [];
+  for (const pk of game.pickups) {
+    const d = Math.hypot(pk.x - p.x, pk.z - p.z);
+    if (d < TUNE.pickupRadius) {
+      addCash(s, pk.amount);
+      showToast(s, '+$' + pk.amount + (pk.label ? ' — ' + pk.label : ''), 3);
+    } else {
+      left.push(pk);
+    }
+  }
+  game.pickups = left;
+}

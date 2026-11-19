@@ -102,32 +102,45 @@ export async function loadGLB(url) {
   }
 }
 
-// Emit one model's triangles into a BoxBatch, transformed by
-// (x, z) + yaw + uniform scale, in one flat colour. Shading follows
-// the face normal's dominant axis, the same order as pushBox
-// (top 1.0, +/-X 0.85, +/-Z 0.75, bottom 0.6), so the model reads as
-// part of the voxel world instead of a lit foreign object. The model's
-// own Y is up; y0 is the ground height under the model.
+// Emit a parsed model into a BoxBatch at (x, z) with a yaw and a
+// scale, in one flat colour. Each triangle is shaded by its face
+// normal's dominant axis (top 1.0, +/-X 0.85, +/-Z 0.75, bottom
+// 0.6) so the model reads like the voxel boxes around it.
 export function addGLBToBatch(batch, model, opts) {
-  const { x, z, y0 = 0, yaw = 0, scale = 1, color } = opts;
+  if (!model) return 0;
+  const { x, z, yaw = 0, scale = 1, color } = opts;
   const cos = Math.cos(yaw), sin = Math.sin(yaw);
-  const p = model.positions;
+  const pos = model.positions;
   const idx = model.indices;
+  let emitted = 0;
   for (let t = 0; t < idx.length; t += 3) {
-    const a = idx[t] * 3, b = idx[t + 1] * 3, c = idx[t + 2] * 3;
-    const v = [[p[a], p[a + 1], p[a + 2]], [p[b], p[b + 1], p[b + 2]], [p[c], p[c + 1], p[c + 2]]];
-    // Face normal (cross product of two edges), in model space.
-    const ux = v[1][0] - v[0][0], uy = v[1][1] - v[0][1], uz = v[1][2] - v[0][2];
-    const vx = v[2][0] - v[0][0], vy = v[2][1] - v[0][1], vz = v[2][2] - v[0][2];
-    const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-    const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
-    const shade = ay >= ax && ay >= az ? (ny >= 0 ? 1.0 : 0.6) : ax >= az ? 0.85 : 0.75;
-    const col = [Math.min(1.4, color[0] * shade), Math.min(1.4, color[1] * shade), Math.min(1.4, color[2] * shade)];
-    const w = [];
+    const pts = [];
     for (let k = 0; k < 3; k++) {
-      const mx = v[k][0] * scale, my = v[k][1] * scale, mz = v[k][2] * scale;
-      w.push(x + mx * cos - mz * sin, y0 + my, z + mx * sin + mz * cos);
+      const vi = idx[t + k] * 3;
+      const px = pos[vi] * scale;
+      const py = pos[vi + 1] * scale;
+      const pz = pos[vi + 2] * scale;
+      pts.push([x + px * cos - pz * sin, py, z + px * sin + pz * cos]);
     }
-    batch.pushTri(w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], col);
+    // Face normal (unnormalised is fine — only the dominant axis
+    // matters for the shade).
+    const ux = pts[1][0] - pts[0][0], uy = pts[1][1] - pts[0][1], uz = pts[1][2] - pts[0][2];
+    const vx = pts[2][0] - pts[0][0], vy = pts[2][1] - pts[0][1], vz = pts[2][2] - pts[0][2];
+    const nx = uy * vz - uz * vy;
+    const ny = uz * vx - ux * vz;
+    const nz = ux * vy - uy * vx;
+    const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+    let shade = 0.75;
+    if (ay >= ax && ay >= az) shade = ny > 0 ? 1.0 : 0.6;
+    else if (ax >= az) shade = 0.85;
+    else shade = 0.75;
+    const c = [
+      Math.min(1.4, color[0] * shade),
+      Math.min(1.4, color[1] * shade),
+      Math.min(1.4, color[2] * shade),
+    ];
+    batch.pushTri(pts[0][0], pts[0][1], pts[0][2], pts[1][0], pts[1][1], pts[1][2], pts[2][0], pts[2][1], pts[2][2], c);
+    emitted++;
   }
+  return emitted;
 }
