@@ -1,98 +1,43 @@
 # Solmar Bay — 3D voxel open-world crime game
 
-[![Make GTA 6](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
+[![Solmar Bay](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
 [![Rank](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/rank.svg)](https://make.fun/bounty/gta6-01)
 [![Reward](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/reward.svg)](https://make.fun/bounty/gta6-01)
 
-An original 3D voxel open-world crime game, built for the
-[Make GTA 6](https://make.fun/bounty/gta6-01) bounty on make.fun.
-Nothing from Rockstar: our own city, story, art and sound.
+An original 3D voxel open-world crime game in the spirit of GTA 6 — own city, names, story, art and sound, nothing from Rockstar. Built for the [make.fun GTA 6 bounty](https://make.fun/bounty/gta6-01).
 
-**Solmar Bay** is a sun-soaked coastal voxel city — downtown towers,
-a beach, a harbour, suburbs, an airport and a highway loop — rendered
-with raw WebGL1 (no libraries) in a blocky Minecraft/Roblox style,
-with a third-person GTA-like camera.
+## The city
 
-## How to play
+Solmar Bay is a sun-soaked coastal voxel city, Vice City style: a downtown grid of pastel art-deco towers with neon signs, a crowded beach with palms and umbrellas, a harbour with containers and cranes, suburbs, an airport with a runway, and a highway loop. The streets are alive — ~76 pedestrians, 32 traffic cars, traffic lights, two rival gangs (**Bay Kings** in gold downtown, **Harbour Sharks** in teal at the harbour), cats, dogs, birds, fish, clouds, and a loop train.
 
-Serve the game and open it in a desktop browser:
+## What you can do
 
-```sh
-node serve.ts
-# then open http://localhost:8080
-```
+- **Story:** 5 chapters — First Wheels ($200), The Package ($400), Getaway ($500), Night Run ($600), The Big One ($1500).
+- **Side jobs:** taxi fares, courier runs, time trials, gang turf clear-outs and deliveries, firefighter shifts (drive the fire truck, spray the flames).
+- **Vehicles:** cars, motorbikes, boats, a flyable airplane (with parachute), taxis, the fire truck, police cars, and the loop train.
+- **Combat:** punch, pistol / SMG / shotgun (hitscan, crosshair aim), throwable bombs. Kills drop cash ($10–$50).
+- **Wanted:** 0–5 stars, per crime like real GTA — stealing a car 1 star, killing a ped 2, killing a cop 3, explosions and rampages up to 5. Lose the heat by hiding out of sight.
+- **Life:** food shops (pizza, burger, chicken, donut, taco), dating Maya (drive her to the viewpoint, eat together, drop her home), carryable cats, pettable dogs, an outfit shop (hair, shirt, pants, shoes), a shooting range, a swim challenge, a driving course, and city events (street races, beach parties, gang turf wars). Plus a glass elevator to the rooftop of the tallest tower.
+- **Tech:** raw WebGL1, no libraries, no network, plain static files. WebAudio synth sound. Save in localStorage.
 
-Or just open `game/index.html` directly — the game is plain static
-files, no build step, no network.
-
-### Controls
+## Controls
 
 | Key | Action |
 | --- | --- |
-| WASD | Move on foot / drive |
-| Mouse drag | Orbit the camera |
-| Mouse wheel | Zoom |
-| Shift | Run |
-| E | Enter / exit car, bike, boat, plane |
-| F | Punch |
-| Click | Shoot (crosshair) |
+| W A S D | Move / drive (Shift to run) |
+| Mouse drag / wheel | Orbit camera / zoom |
+| E | Enter car, interact (shops, cats, train, elevator…) |
+| F | Punch (hold F in the fire truck to spray water) |
+| Click | Shoot (hold for SMG) |
+| G | Throw bomb |
 | 1 / 2 / 3 | Pistol / SMG / Shotgun |
-| G | Throw a bomb |
-| Space | Handbrake (driving) / parachute (falling) |
-| Plane | W/S throttle, Arrow keys pitch, A/D turn |
-| Esc | Pause |
+| Space | Handbrake (parachute while flying) |
+| Esc | Pause (also advances chapter cards) |
 | M | Mute |
 
-## What's in the game
+## Play
 
-- **Open voxel world** (~800×800): downtown skyline, beach with
-  animated water, harbour with docks and containers, suburbs,
-  airport with a runway, and a highway loop.
-- **Vehicles**: cars, fast motorbikes, boats on the water, and a
-  flyable airplane — plus a parachute for bailing out mid-air.
-- **Weapons**: pistol (start), SMG and shotgun pickups, throwable
-  bombs. Killed peds and cops drop cash ($10–$50).
-- **Wanted system**: 0–5 stars. Police cars chase and ram, foot
-  cops chase and grab you. Lose the heat to drop stars. Getting
-  busted means the hospital and a fine.
-- **Story — 5 chapters**: First Wheels ($200), The Package ($400),
-  Getaway ($500), Night Run ($600), The Big One ($1,500), with
-  chapter titles and story text.
-- **Side jobs**: repeatable taxi fares, courier deliveries and time
-  trials from green markers, with cash rewards.
-- **Traffic and pedestrians**: NPC cars drive the road network,
-  pedestrians walk the sidewalks and flee from danger.
-- **HUD + minimap**: cash, health, armour, wanted stars, weapon and
-  ammo, speed, objective text, and a live top-down minimap.
-- **Save**: progress (cash, chapter, position) in localStorage.
-- **Sound**: WebAudio synth — engine hum, sirens, gunshots,
-  explosions, mission jingles, ambient bass.
-
-## Structure
-
-```
-game/
-  index.html        canvas + HUD
-  src/
-    config.js       tuning + palette
-    render.js       raw WebGL1 engine (shaders, boxes, camera)
-    world.js        voxel city generation + collision
-    input.js        keyboard + mouse
-    shots.js        third-person camera
-    state.js        game state + progression
-    player.js       on-foot movement, parachute
-    vehicles.js     cars, bikes, boats, plane, traffic, stealing
-    pedestrians.js  ped AI
-    police.js       wanted level + police AI
-    missions.js     5 chapters + side missions
-    combat.js       weapons, bombs, cash drops, pickups
-    hud.js          HUD + minimap
-    audio.js        WebAudio synth
-    save.js         localStorage save/load
-    main.js         game loop + wiring
-main.ts             entrypoint (hands the game in)
-screenshots/       4 real renders of the game
-```
+Open `game/index.html` in a desktop browser (or `node serve.ts` and visit http://localhost:8080). No build step, no install, no network.
 
 ## License
 

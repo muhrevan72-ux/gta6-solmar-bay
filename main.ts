@@ -1,7 +1,8 @@
-// Solmar Bay — entrypoint for the make.fun GTA 6 bounty (gta6-01).
-// Hands the game in: copies game/ and screenshots/ from this repository
-// into the output directory and writes dossier.json for the scorer.
-// Runs on Node 22 with the standard library only; no install, no network.
+// Solmar Bay — the entrypoint for the make.fun GTA 6 bounty.
+// It hands the game in: the playable game/ folder and the
+// screenshots/ folder are copied into the output directory, and a
+// dossier.json describing the entry is written there with the kit's
+// buildDossier helper. Standard library only, no network.
 //
 // Outside the grader, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
@@ -11,18 +12,15 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { buildDossier } from './vendor/makefun-game.ts';
 
-// The repository root is the directory this file lives in.
-const repoRoot = fileURLToPath(new URL('.', import.meta.url));
+// This file lives at the repository root, so its folder is the root.
+const rootDir = fileURLToPath(new URL('.', import.meta.url));
 const outDir = process.env.MAKEFUN_OUTPUT_DIR || '/output';
-
-const gameDir = join(repoRoot, 'game');
-const shotsDir = join(repoRoot, 'screenshots');
 
 mkdirSync(outDir, { recursive: true });
 
 // Copy the playable game and its screenshots into the output folder.
-cpSync(gameDir, join(outDir, 'game'), { recursive: true });
-cpSync(shotsDir, join(outDir, 'screenshots'), { recursive: true });
+cpSync(join(rootDir, 'game'), join(outDir, 'game'), { recursive: true });
+cpSync(join(rootDir, 'screenshots'), join(outDir, 'screenshots'), { recursive: true });
 
 // The scorer's own caps for this bounty (from its gate.json).
 const dossier = buildDossier(outDir, {
