@@ -3,115 +3,65 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Bay — 3D voxel open world</title>
+<title>Solmar Bay — voxel open-world crime game</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1210; font-family: system-ui, sans-serif; color: #fff; }
-  #game { display: block; width: 100vw; height: 100vh; }
-  #hud { position: fixed; inset: 0; pointer-events: none; z-index: 5; }
-  #hud-top { position: absolute; top: 12px; left: 14px; font-size: 20px; text-shadow: 0 2px 4px #000; line-height: 1.5; }
-  #hud-cash { font-size: 26px; font-weight: 800; color: #7dff8a; }
-  .bar { width: 220px; height: 12px; background: rgba(0,0,0,.55); border: 1px solid #fff3; border-radius: 6px; overflow: hidden; margin: 3px 0; }
-  .bar > div { height: 100%; }
-  #hud-health-bar { background: #3ddc5a; width: 100%; }
-  #hud-armour-bar { background: #4aa8ff; width: 0%; }
-  #hud-stars { color: #ffd21f; font-size: 24px; letter-spacing: 2px; }
-  #hud-objective { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); font-size: 18px; background: rgba(0,0,0,.5); padding: 6px 14px; border-radius: 8px; }
-  #hud-bottom { position: absolute; bottom: 12px; left: 14px; font-size: 18px; text-shadow: 0 2px 4px #000; line-height: 1.5; }
-  #minimap { position: absolute; top: 12px; right: 14px; width: 200px; height: 200px; border: 2px solid rgba(255,255,255,.6); border-radius: 6px; background: #1d3320; }
-  #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 22px; color: rgba(255,255,255,.85); text-shadow: 0 0 4px #000; }
-  #hud-toast { position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%); font-size: 20px; background: rgba(0,0,0,.65); padding: 8px 18px; border-radius: 8px; display: none; }
-  #hud-rel { position: absolute; bottom: 130px; left: 14px; color: #ff6b9d; font-size: 18px; text-shadow: 0 2px 4px #000; }
-  #hud-event { position: absolute; top: 60px; left: 50%; transform: translateX(-50%); color: #ff9ff3; font-size: 18px; font-weight: 700; text-shadow: 0 2px 4px #000; }
-  .menu-box { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(10,10,16,.88); border: 1px solid #ffffff33; border-radius: 12px; padding: 18px 22px; max-width: 520px; max-height: 88vh; overflow-y: auto; font-size: 15px; line-height: 1.5; }
-  .menu-box h1 { font-size: 30px; margin-bottom: 4px; }
-  .menu-box h2 { font-size: 20px; margin-bottom: 8px; }
-  .menu-box p { margin-bottom: 10px; color: #ddd; }
-  .menu-box button { pointer-events: auto; display: inline-block; margin: 4px 6px 4px 0; padding: 10px 18px; font-size: 16px; font-weight: 700; border: none; border-radius: 8px; background: #ffb02e; color: #221100; cursor: pointer; }
-  .menu-box button:hover { background: #ffc95e; }
-  .menu-box button.secondary { background: #3a3f4a; color: #fff; }
-  .overlay { position: fixed; inset: 0; z-index: 10; display: none; background: rgba(0,0,0,.35); }
-  #food-menu, #outfit-menu { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(10,10,16,.92); border: 1px solid #ffffff33; border-radius: 10px; padding: 14px 18px; font-size: 16px; line-height: 1.7; display: none; z-index: 8; }
-  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 6; }
-  kbd { background: #333; border-radius: 4px; padding: 1px 6px; font-family: inherit; }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #f9b57e; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #wrap { position: relative; width: 100%; height: 100%; }
+  #game { display: block; width: 100%; height: 100%; }
+  #hud { position: absolute; top: 12px; left: 12px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.7); pointer-events: none; }
+  #cash { font-size: 28px; font-weight: 800; }
+  #healthbar-wrap { width: 180px; height: 10px; background: rgba(0,0,0,.5); border-radius: 5px; margin-top: 4px; }
+  #healthbar { height: 100%; width: 100%; background: #46d160; border-radius: 5px; }
+  #health, #armour { font-size: 14px; }
+  #wanted { font-size: 26px; letter-spacing: 2px; margin-top: 2px; }
+  #objective { font-size: 15px; margin-top: 6px; max-width: 320px; }
+  #speed { font-size: 20px; font-weight: 700; margin-top: 4px; }
+  #weapon, #bombs, #relationship { font-size: 14px; }
+  #toast { position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%); color: #fff; background: rgba(0,0,0,.55); padding: 8px 16px; border-radius: 8px; font-size: 16px; pointer-events: none; }
+  #minimap { position: absolute; top: 12px; right: 12px; width: 200px; height: 200px; border: 2px solid rgba(255,255,255,.6); border-radius: 6px; background: #1d2b1d; }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; pointer-events: none; }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #fff; box-shadow: 0 0 3px #000; }
+  #crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
+  #crosshair::after { left: 0; top: 8px; width: 18px; height: 2px; }
+  #menu { position: absolute; inset: 0; display: none; background: rgba(20, 12, 30, .55); color: #fff; text-align: center; padding-top: 12vh; }
+  #menu-title { font-size: 52px; font-weight: 900; letter-spacing: 4px; color: #ffd75e; text-shadow: 0 3px 0 #c22, 0 6px 18px rgba(0,0,0,.6); }
+  #menu-body { font-size: 17px; line-height: 1.6; max-width: 640px; margin: 18px auto; }
+  #menu-hint { font-size: 14px; opacity: .85; margin-top: 14px; }
+  #menu button { pointer-events: auto; font-size: 18px; padding: 10px 26px; margin: 6px; border: 0; border-radius: 8px; background: #ffd75e; color: #222; font-weight: 700; cursor: pointer; }
+  #menu button:hover { background: #ffe08a; }
+  #controls { position: absolute; bottom: 10px; left: 12px; color: #fff; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,.8); opacity: .9; }
 </style>
 </head>
 <body>
-<canvas id="game"></canvas>
-<div id="flash"></div>
-<div id="hud">
-  <div id="hud-top">
-    <div id="hud-cash">$150</div>
-    <div class="bar"><div id="hud-health-bar"></div></div>
-    <div class="bar"><div id="hud-armour-bar"></div></div>
-    <div id="hud-stars">☆☆☆☆☆</div>
-    <div id="hud-health-text" style="display:none">100</div>
+<div id="wrap">
+  <canvas id="game" width="1280" height="720"></canvas>
+  <div id="hud">
+    <div id="cash">$150</div>
+    <div id="healthbar-wrap"><div id="healthbar"></div></div>
+    <div id="health">100 HP</div>
+    <div id="armour"></div>
+    <div id="wanted">&#9734;&#9734;&#9734;&#9734;&#9734;</div>
+    <div id="objective">Steal a car and drive to the garage.</div>
+    <div id="speed">0 km/h</div>
+    <div id="weapon">Weapon: Pistol</div>
+    <div id="bombs">Bombs: 3</div>
+    <div id="relationship"></div>
   </div>
-  <div id="hud-objective">Start a new game.</div>
-  <div id="hud-event"></div>
   <canvas id="minimap" width="200" height="200"></canvas>
-  <div id="crosshair">+</div>
-  <div id="hud-bottom">
-    <div id="hud-weapon">pistol ∞ 💣 3</div>
-    <div id="hud-speed">0 km/h</div>
+  <div id="crosshair"></div>
+  <div id="toast"></div>
+  <div id="menu">
+    <div id="menu-title">SOLMAR BAY</div>
+    <div id="menu-body"></div>
+    <div>
+      <button id="btn-new">New Game</button>
+      <button id="btn-continue">Continue</button>
+      <button id="btn-resume" style="display:none">Resume</button>
+    </div>
+    <div id="menu-hint"></div>
   </div>
-  <div id="hud-rel"></div>
-  <div id="hud-toast"></div>
-  <div id="food-menu"><b>Food — press 1/2/3 to buy, Esc to leave</b><div id="food-items"></div></div>
-  <div id="outfit-menu"><b>Outfit shop — 1 hair, 2 shirt, 3 pants, 4 shoes. Esc to leave</b><div id="outfit-items"></div></div>
+  <div id="controls">WASD move &middot; Shift run &middot; E interact / enter car &middot; F punch &middot; G bomb &middot; Click shoot &middot; 1/2/3 weapons &middot; Space handbrake / parachute &middot; Esc pause &middot; M mute</div>
 </div>
-
-<div class="overlay" id="overlay-menu">
-  <div class="menu-box">
-    <h1>Solmar Bay</h1>
-    <h2>3D voxel open world</h2>
-    <p>A sun-soaked coastal city, Vice City style: downtown towers, a crowded beach, the harbour, the airport — and two rival gangs fighting over it. Steal cars, run the story, or just live in the city.</p>
-    <p id="menu-save-info">No save yet — start a new game.</p>
-    <button id="btn-new">New Game</button>
-    <button id="btn-continue" class="secondary">Continue</button>
-    <p><b>Controls</b><br>
-    <kbd>W A S D</kbd> move / drive &nbsp; <kbd>Shift</kbd> run &nbsp; <kbd>Mouse drag</kbd> orbit camera &nbsp; <kbd>Wheel</kbd> zoom<br>
-    <kbd>E</kbd> enter car / interact &nbsp; <kbd>F</kbd> punch &nbsp; <kbd>Click</kbd> shoot &nbsp; <kbd>G</kbd> throw bomb<br>
-    <kbd>1</kbd>/<kbd>2</kbd>/<kbd>3</kbd> weapons &nbsp; <kbd>Space</kbd> handbrake / parachute &nbsp; <kbd>Esc</kbd> pause &nbsp; <kbd>M</kbd> mute</p>
-    <p><b>Things to do:</b> 5 story chapters, taxi fares, courier runs, time trials, gang jobs, firefighter shifts, food shops, dating, cats to carry, outfit shop, shooting range, swim challenge, driving course, street races, beach parties, the loop train and the rooftop elevator.</p>
-  </div>
-</div>
-
-<div class="overlay" id="overlay-pause">
-  <div class="menu-box">
-    <h2>Paused</h2>
-    <p>Take a breath. The city will wait.</p>
-    <button id="btn-resume">Resume</button>
-    <button id="btn-menu-quit" class="secondary">Save &amp; quit to menu</button>
-  </div>
-</div>
-
-<div class="overlay" id="overlay-chapter">
-  <div class="menu-box">
-    <h2 id="chapter-title">Chapter 1 — First Wheels</h2>
-    <p id="chapter-text"></p>
-    <button id="btn-chapter">Start</button>
-  </div>
-</div>
-
-<div class="overlay" id="overlay-busted">
-  <div class="menu-box">
-    <h2>Busted!</h2>
-    <p id="busted-reason"></p>
-    <p>You wake up at the hospital, 20% lighter.</p>
-    <button id="btn-busted">Respawn</button>
-  </div>
-</div>
-
-<div class="overlay" id="overlay-complete">
-  <div class="menu-box">
-    <h2>Story complete!</h2>
-    <p>Solmar Bay is yours.</p>
-    <p id="complete-stats"></p>
-    <button id="btn-roam">Keep roaming</button>
-  </div>
-</div>
-
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
