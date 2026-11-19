@@ -1,48 +1,57 @@
-# Solmar Bay — an open-world crime game
+# Solmar Bay
 
 [![make.fun](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
 [![rank](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/rank.svg)](https://make.fun/bounty/gta6-01)
 [![reward](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/reward.svg)](https://make.fun/bounty/gta6-01)
 
-An original 3D voxel open-world crime game in the spirit of GTA 6 — built for the
-[make.fun "Make GTA 6" bounty](https://make.fun/bounty/gta6-01). Nothing from Rockstar:
-own city, names, story, art, sounds and music.
+A 3D voxel open-world crime game (GTA-style), built for the make.fun "Make GTA 6" bounty. Steal cars, run 5 story chapters, dodge the police, and live in a city that never sits still. Vanilla JavaScript + WebGL1 — no dependencies, no network at runtime, plays offline in a desktop browser from static files.
 
-## The city
+**Play it:** https://muhrevan72-ux.github.io/gta6-solmar-bay/game/
 
-Solmar Bay is a sun-soaked coastal voxel city: a downtown grid with neon towers, a
-beach road with palms, a harbour with containers, suburbs, an airport with a flyable
-plane, and a highway loop. 76 pedestrians with daily activities (walking, sitting,
-chatting, queuing, vending), 32 traffic cars, two rival gangs (gold Bay Kings downtown
-vs teal Harbour Sharks at the harbour), a train loop, dogs, cats, fish, birds, clouds,
-a glass elevator up the tallest tower, and a living weather + day/night cycle with a
-golden-hour sunset.
+## What is in the city
 
-## Play
+- **Story:** 5 chapters (First Wheels, The Package, Getaway, Night Run, The Big One) with a mission-passed screen, rewards, respect and a completion %.
+- **Driving:** cars, bikes, a boat in the harbour, a plane on the runway (Space = parachute), traffic that stops at red lights, a train that loops the city.
+- **Police:** wanted 0–5 stars, foot cops, cop cars that ram, roadblocks at 3+ stars, and a helicopter at 4–5 stars with real line-of-sight through tall buildings. Busted and wasted screens, 20% fines, hospital respawn.
+- **Living city:** 76 pedestrians with routines (walking, sitting, chatting, queuing, vending), two rival gangs with turf (Bay Kings vs Harbour Sharks), cats you can carry home, dogs, birds, fish, a beach party, street races and market days.
+- **Systems:** weather + a 720-second day/night cycle with a golden hour, a smartphone (Tab: contacts, messages, map), a garage (store cars, repaint for $50), enterable interiors (pizza, burger, outfit shop), food shops, a shooting range, swimming and driving trials, fishing, vending machines, ATMs, dating, and a fire service.
+- **Sound:** 4 original radio stations (BAY FM 94.7, PALM 102.3, NEON 89.1, CORAL 105.5) with 8 original synth songs, engine hum, sirens — all synthesized, no audio files.
+- **Visuals:** a runtime-generated procedural texture atlas, a minimal static .glb loader (one CC0 model: Barrel_01 by Jorge Camacho, Poly Haven), per-face shading, blob shadows, frustum + distance culling, near/far LOD.
 
-- **On foot:** WASD move, Shift run, E interact / enter car, F punch, G bomb, click to
-  shoot, 1/2/3 switch weapons (pistol, SMG, shotgun), Space handbrake / parachute.
-- **Driving:** W/S accelerate / brake, A/D steer, Space handbrake. Cars, bikes, boats,
-  a plane, a fire truck, a taxi.
-- **Wanted 0–5 stars:** a crime table (steal 1, punch 1, kill 2, kill a cop 3,
-  explosion 3, rampage 4–5). Police cars chase and ram, foot cops chase, a helicopter
-  hunts you at 4–5 stars, roadblocks at 3+. Busted = hospital respawn, 20% fine.
-- **Story:** 5 chapters — First Wheels ($200), The Package ($400), Getaway ($500),
-  Night Run ($600), The Big One ($1500) — plus repeatable side jobs (taxi fares,
-  courier runs, time trials, turf clear-outs, gang deliveries), a firefighter job,
-  food shops, dating Maya, an outfit shop, training (shooting range, swim challenge,
-  slalom), fishing, vending machines, ATMs, a garage (store cars, repaint $50),
-  a smartphone (Tab: contacts, messages, map), 4 radio stations with 8 original
-  synth songs (R to change station), respect levels (Nobody → Legend) with unlocks,
-  and city events (street races, beach parties, turf wars).
-- **Save:** progress autosaves to localStorage; Continue on the title screen.
+## Controls
+
+| Key | Action |
+| --- | --- |
+| WASD | Move (camera-relative) |
+| Shift | Run |
+| E | Interact / enter car / store car in garage |
+| F | Punch |
+| G | Throw a bomb |
+| Click | Shoot |
+| 1 / 2 / 3 | Pistol / SMG / Shotgun |
+| Space | Handbrake (car) / parachute (plane) |
+| Esc / P | Pause |
+| M | Mute |
+| Tab | Phone (4 taxi, 5 Maya, 6 Rico) |
+| R | Next radio station |
+| Mouse drag | Orbit camera · Wheel: zoom |
+
+## Run it locally
+
+```sh
+# any static server, e.g.
+npx serve .
+# then open http://localhost:3000/game/
+```
+
+Or just open `game/index.html` — the game needs no build step. `node main.ts` prints the build dossier (file inventory, line counts, checks).
 
 ## Tech
 
-Vanilla JavaScript + raw WebGL1, no libraries, no build step, no network at runtime.
-All art is coloured voxel boxes; all sound is WebAudio synth. Play it by serving
-`game/` with any static server and opening `game/index.html` in desktop Chrome.
+- Vanilla JS (ES modules) + WebGL1. No libraries, no build, no network.
+- `game/src/` holds 33 modules: config, texture, render, shots, world, interiors, state, input, audio, save, weather, gltf, player, vehicles, pedestrians, gangs, police, combat, missions, taxi, fire, food, dating, outfit, training, events, cats, living, phone, garage, activities, hud, main.
+- `game/assets/barrel.glb` — Barrel_01, Poly Haven, CC0.
 
 ## License
 
-MIT — see LICENSE.
+MIT. All art is procedural code and one CC0 model; no Rockstar assets, no copyrighted music.
