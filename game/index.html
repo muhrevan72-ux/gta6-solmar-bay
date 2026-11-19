@@ -16,8 +16,20 @@
   #wanted { font-size: 26px; letter-spacing: 2px; margin-top: 2px; }
   #objective { font-size: 15px; margin-top: 6px; max-width: 320px; }
   #speed { font-size: 20px; font-weight: 700; margin-top: 4px; }
-  #weapon, #bombs, #relationship { font-size: 14px; }
+  #weapon, #bombs, #relationship, #clock { font-size: 14px; }
+  #clock { color: #bfe3ff; }
+  #phone { position: absolute; top: 12px; right: 224px; width: 300px; display: none; background: rgba(16, 16, 28, .92); color: #fff; border: 2px solid #555; border-radius: 14px; padding: 10px; z-index: 5; }
+  #phone-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  #phone-tabs button { flex: 1; font-size: 14px; padding: 6px 0; border: 0; border-radius: 6px; background: #333; color: #fff; cursor: pointer; }
+  #phone-tabs button:hover { background: #555; }
+  #phone-body { font-size: 14px; line-height: 1.5; min-height: 120px; }
+  #phone-body canvas { display: block; margin: 0 auto; border-radius: 8px; }
+  .phone-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #333; }
+  .phone-row button { font-size: 13px; padding: 4px 12px; border: 0; border-radius: 6px; background: #46d160; color: #111; font-weight: 700; cursor: pointer; }
+  .phone-msg { padding: 5px 0; border-bottom: 1px solid #333; }
+  .phone-hint, .phone-empty { font-size: 12px; opacity: .75; margin-top: 8px; }
   #toast { position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%); color: #fff; background: rgba(0,0,0,.55); padding: 8px 16px; border-radius: 8px; font-size: 16px; pointer-events: none; }
+  #toast:empty { display: none; } /* an empty toast rendered as a small black oval at bottom-centre */
   #minimap { position: absolute; top: 12px; right: 12px; width: 200px; height: 200px; border: 2px solid rgba(255,255,255,.6); border-radius: 6px; background: #1d2b1d; }
   #crosshair { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; pointer-events: none; }
   #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #fff; box-shadow: 0 0 3px #000; }
@@ -30,6 +42,23 @@
   #menu button { pointer-events: auto; font-size: 18px; padding: 10px 26px; margin: 6px; border: 0; border-radius: 8px; background: #ffd75e; color: #222; font-weight: 700; cursor: pointer; }
   #menu button:hover { background: #ffe08a; }
   #controls { position: absolute; bottom: 10px; left: 12px; color: #fff; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,.8); opacity: .9; }
+  /* dense HUD panels (graphics pass, top-4 formula) */
+  .panel { position: absolute; background: rgba(10, 10, 20, .62); border: 1px solid rgba(255,255,255,.25); border-radius: 8px; color: #fff; padding: 8px 12px; font-size: 13px; line-height: 1.45; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,.8); display: none; }
+  #mission-panel { left: 340px; top: 12px; width: 320px; }
+  #mission-panel .mp-title { font-size: 15px; font-weight: 800; color: #ffd75e; }
+  #mission-panel .mp-next { color: #bfe3ff; }
+  #mission-panel .mp-repbar { height: 6px; background: rgba(0,0,0,.5); border-radius: 3px; margin-top: 2px; }
+  #mission-panel .mp-repfill { height: 100%; background: #ffd75e; border-radius: 3px; }
+  #police-list { top: 224px; right: 12px; width: 200px; }
+  #police-list .pl-title { font-size: 13px; font-weight: 800; color: #ff8888; }
+  #police-list .pl-row { display: flex; justify-content: space-between; gap: 6px; }
+  #police-list .pl-status { color: #ffb0b0; }
+  #radio { bottom: 36px; right: 12px; text-align: right; }
+  #radio .r-station { font-weight: 800; color: #ffd75e; }
+  #carinfo { bottom: 66px; right: 12px; text-align: right; }
+  #carinfo .c-name { font-weight: 800; }
+  #dialogue { bottom: 150px; left: 50%; transform: translateX(-50%); max-width: 520px; text-align: center; }
+  #dialogue .d-from { font-weight: 800; color: #ffd75e; }
 </style>
 </head>
 <body>
@@ -46,7 +75,17 @@
     <div id="weapon">Weapon: Pistol</div>
     <div id="bombs">Bombs: 3</div>
     <div id="relationship"></div>
+    <div id="clock"></div>
   </div>
+  <div id="phone">
+    <div id="phone-tabs"></div>
+    <div id="phone-body"></div>
+  </div>
+  <div id="mission-panel" class="panel"></div>
+  <div id="police-list" class="panel"></div>
+  <div id="radio" class="panel"></div>
+  <div id="carinfo" class="panel"></div>
+  <div id="dialogue" class="panel"></div>
   <canvas id="minimap" width="200" height="200"></canvas>
   <div id="crosshair"></div>
   <div id="toast"></div>
@@ -60,7 +99,7 @@
     </div>
     <div id="menu-hint"></div>
   </div>
-  <div id="controls">WASD move &middot; Shift run &middot; E interact / enter car &middot; F punch &middot; G bomb &middot; Click shoot &middot; 1/2/3 weapons &middot; Space handbrake / parachute &middot; Esc pause &middot; M mute</div>
+  <div id="controls">WASD move &middot; Shift run &middot; E interact / enter car &middot; F punch &middot; G bomb &middot; Click shoot &middot; 1/2/3 weapons &middot; Space handbrake / parachute &middot; Tab phone &middot; R radio &middot; Esc pause &middot; M mute</div>
 </div>
 <script type="module" src="./src/main.js"></script>
 </body>
