@@ -1,185 +1,186 @@
-// Solmar Bay — tuning constants and colour palette.
-// 3D voxel rebuild (round 3). Every number here is original tuning.
+// Solmar Bay — tuning, colours and shared constants.
+// Written fresh for the round-4 rebuild (recording 01a1f333).
 
-export const WORLD = {
+export const MAP = {
   size: 800,
   half: 400,
-  groundY: 0,
-  waterY: -0.35,
-  skyTop: [0.45, 0.72, 0.95],
-  fogColor: [0.62, 0.76, 0.9],
-  fogNear: 120,
-  fogFar: 520,
+  waterEdgeX: -360, // water is west of this x
+  sandEdgeX: -320, // beach sand strip between waterEdgeX and sandEdgeX
 };
-
-// Convert '#rrggbb' to [r, g, b] floats 0..1.
-export function hex(h) {
-  const n = parseInt(h.slice(1), 16);
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
-}
 
 export const COL = {
-  grass: hex('#5da244'),
-  grassDark: hex('#4c8a38'),
-  sand: hex('#e8d28a'),
-  asphalt: hex('#33363d'),
-  asphaltLight: hex('#43474f'),
-  lane: hex('#e8e4c8'),
-  sidewalk: hex('#9aa0a8'),
-  concrete: hex('#8d9299'),
-  water: hex('#2f7fc9'),
-  waterDeep: hex('#1f5fa8'),
-  building: [
-    hex('#c8b8a0'), hex('#b0a89a'), hex('#8fa3b8'), hex('#a89a80'),
-    hex('#7d8aa0'), hex('#c0a080'), hex('#9a8a70'),
+  sky: [0.96, 0.58, 0.38], // warm Vice City sunset
+  fog: [0.93, 0.62, 0.45],
+  fogNear: 120,
+  fogFar: 620,
+  road: [0.13, 0.13, 0.16],
+  roadDash: [0.85, 0.8, 0.5],
+  sidewalk: [0.62, 0.66, 0.72],
+  sand: [0.92, 0.82, 0.6],
+  water: [0.15, 0.45, 0.65],
+  grass: [0.35, 0.62, 0.3],
+  runway: [0.16, 0.16, 0.18],
+  // pastel art-deco downtown palette
+  buildings: [
+    [0.85, 0.72, 0.58], [0.72, 0.72, 0.7], [0.78, 0.6, 0.5],
+    [0.6, 0.68, 0.72], [0.88, 0.8, 0.66], [0.66, 0.58, 0.62],
+    [0.9, 0.75, 0.62], [0.58, 0.64, 0.58],
   ],
-  towerGlass: hex('#7fb8d8'),
-  windowLit: hex('#ffd98a'),
-  windowDark: hex('#2c3e55'),
-  roof: hex('#6b5d4f'),
-  house: [hex('#d8a878'), hex('#c98f6a'), hex('#e0c090'), hex('#b08858')],
-  treeTrunk: hex('#6a4a28'),
-  treeLeaf: hex('#3e8a2f'),
-  treeLeaf2: hex('#57a83c'),
-  container: [hex('#c84a3a'), hex('#3a7ac8'), hex('#d8a03a'), hex('#4aa86a')],
-  dockWood: hex('#8a6a44'),
-  runway: hex('#2e3138'),
-  runwayMark: hex('#f0ead0'),
-  hangar: hex('#a8b0b8'),
-  tower: hex('#d8d8d8'),
-  hospital: hex('#e8e8e8'),
-  hospitalCross: hex('#e04040'),
-  playerSkin: hex('#e8b88a'),
-  playerShirt: hex('#2e7ad8'),
-  playerPants: hex('#2a2f38'),
-  pedShirt: [hex('#d84a4a'), hex('#4aa84a'), hex('#d8a03a'), hex('#8a5ad8'), hex('#38b8b8')],
-  copShirt: hex('#1e3a6e'),
-  copHat: hex('#16294e'),
-  carBody: [
-    hex('#c83a2e'), hex('#2e6ac8'), hex('#e8c832'), hex('#38a858'),
-    hex('#c86a2e'), hex('#8a3ac8'), hex('#d8d8d8'), hex('#22262c'),
+  house: [
+    [0.9, 0.75, 0.6], [0.75, 0.8, 0.85], [0.85, 0.65, 0.55],
+    [0.7, 0.75, 0.6], [0.88, 0.82, 0.7],
   ],
-  bikeBody: [hex('#e03a3a'), hex('#e8a03a'), hex('#3a9ad8')],
-  boatBody: hex('#e8e8e8'),
-  planeBody: hex('#e8e8e8'),
-  planeStripe: hex('#c83a2e'),
-  policeCar: hex('#e8e8e8'),
-  policeStripe: hex('#1e3a6e'),
-  marker: hex('#ffd23a'),
-  markerGreen: hex('#4ae08a'),
-  cash: hex('#4ae08a'),
-  health: hex('#ff5a5a'),
-  armor: hex('#5a9aff'),
-  wrench: hex('#c8c8c8'),
-  weapon: hex('#3a3f48'),
-  bomb: hex('#222222'),
-  smoke: hex('#888888'),
+  windowLit: [1.0, 0.85, 0.45],
+  windowDark: [0.25, 0.3, 0.38],
+  neon: [
+    [1.0, 0.25, 0.55], [0.25, 0.9, 1.0], [1.0, 0.85, 0.2],
+    [0.55, 1.0, 0.4], [0.9, 0.4, 1.0],
+  ],
+  palmTrunk: [0.5, 0.38, 0.22],
+  palmLeaf: [0.25, 0.65, 0.3],
+  treeTrunk: [0.45, 0.32, 0.18],
+  treeLeaf: [0.3, 0.6, 0.28],
+  lampPole: [0.25, 0.25, 0.28],
+  lampGlow: [1.0, 0.9, 0.55],
+  gangKing: [1.0, 0.8, 0.15], // Bay Kings — gold
+  gangShark: [0.15, 0.75, 0.8], // Harbour Sharks — teal
+  cop: [0.15, 0.25, 0.85],
+  taxi: [1.0, 0.85, 0.1],
+  fire: [0.9, 0.15, 0.1],
 };
 
-export const PLAYER = {
-  walkSpeed: 6.5,
+// Player / vehicle tuning
+export const TUNE = {
+  walkSpeed: 6,
   runSpeed: 11,
-  radius: 0.55,
-  height: 1.8,
-  accel: 40,
-  health: 100,
+  swimSpeed: 3.2,
+  playerAccel: 14, // eased approach rate (per second)
+  playerRadius: 0.9,
+  carAccel: 16,
+  carBrake: 30,
+  carMaxSpeed: 38,
+  carMaxReverse: 12,
+  carTurn: 1.9,
+  bikeAccel: 22,
+  bikeMaxSpeed: 48,
+  bikeTurn: 2.6,
+  boatAccel: 12,
+  boatMaxSpeed: 26,
+  boatTurn: 1.4,
+  planeAccel: 18,
+  planeMaxSpeed: 70,
+  planeTurn: 1.2,
+  trafficSpeed: 9,
+  enterRadius: 5.0,
+  punchRange: 2.6,
   punchDamage: 12,
-  punchRange: 1.6,
   punchCooldown: 0.45,
+  bombCooldown: 0.8,
+  shootCooldownPistol: 0.28,
+  shootCooldownSmg: 0.09,
+  shootCooldownShotgun: 0.7,
+  shootRange: 70,
+  bombRadius: 9,
+  bombDamage: 200,
+  wantedDecayTime: 14, // seconds out of sight to drop a star
+  bustedFine: 0.2, // 20% of cash lost when busted
 };
 
-export const CAR = {
-  accel: 16,
-  brake: 30,
-  maxSpeed: 38,
-  reverseSpeed: 13,
-  steer: 1.9,
-  grip: 8,
-  radius: 1.6,
-  health: 100,
-  damageSmoke: 35,
+// Story chapter rewards
+export const CHAPTERS = [
+  { id: 0, title: 'First Wheels', text: 'No wheels, no name. Steal a car and drive it to the garage on the east side.', reward: 200 },
+  { id: 1, title: 'The Package', text: 'Pick up the package downtown and deliver it to the harbour before the timer runs out. Stay off the cops\' radar.', reward: 400 },
+  { id: 2, title: 'Getaway', text: 'The heat is on — 3 stars and climbing. Lose the cops and reach the safehouse in the suburbs.', reward: 500 },
+  { id: 3, title: 'Night Run', text: 'The taxi stand needs a driver. Pick up 3 passengers across the city.', reward: 600 },
+  { id: 4, title: 'The Big One', text: 'The harbour heist. Grab the cash from the dock office, lose 4 stars of heat, and reach the safehouse.', reward: 1500 },
+];
+
+// Wanted stars per crime, like real GTA (crime table).
+// commitCrime(type) maps a crime to the wanted level it sets (minimum).
+export const CRIME_STARS = {
+  stealCar: 1,
+  punchPed: 1,
+  assaultPed: 1,
+  killPed: 2,
+  killGang: 2,
+  armedRobbery: 2,
+  killCop: 3,
+  explosion: 3,
+  massRampage: 4,
+  copMassacre: 5,
 };
 
-export const BIKE = {
-  accel: 22,
-  brake: 32,
-  maxSpeed: 48,
-  reverseSpeed: 10,
-  steer: 2.6,
-  grip: 6,
-  radius: 1.1,
-  health: 70,
-  wobble: 0.35,
+// Food shops (original names — no real brands)
+export const FOOD_SHOPS = [
+  { name: 'Pizza Palace', kind: 'pizza', color: [0.95, 0.55, 0.25] },
+  { name: 'Burger Barn', kind: 'burger', color: [0.9, 0.35, 0.2] },
+  { name: 'Clucky Chicken', kind: 'chicken', color: [0.95, 0.8, 0.3] },
+  { name: 'Donut Dock', kind: 'donut', color: [0.95, 0.6, 0.75] },
+  { name: 'Taco Tide', kind: 'taco', color: [0.5, 0.85, 0.35] },
+];
+
+export const FOOD_MENU = [
+  { name: 'Snack', price: 5, heal: 10, armour: 0 },
+  { name: 'Meal', price: 10, heal: 25, armour: 0 },
+  { name: 'Feast', price: 15, heal: 100, armour: 25 },
+];
+
+// Outfit shop options (hair / shirt / pants / shoes)
+export const OUTFIT = {
+  hair: [
+    { name: 'Black crop', color: [0.1, 0.1, 0.1], price: 0 },
+    { name: 'Blond buzz', color: [0.95, 0.8, 0.4], price: 20 },
+    { name: 'Red mohawk', color: [0.9, 0.2, 0.15], price: 40 },
+    { name: 'Teal spikes', color: [0.1, 0.75, 0.8], price: 60 },
+  ],
+  shirt: [
+    { name: 'White tee', color: [0.92, 0.92, 0.9], price: 0 },
+    { name: 'Gold jacket', color: [1.0, 0.8, 0.15], price: 30 },
+    { name: 'Teal hoodie', color: [0.15, 0.7, 0.75], price: 30 },
+    { name: 'Neon pink', color: [1.0, 0.3, 0.6], price: 50 },
+  ],
+  pants: [
+    { name: 'Blue jeans', color: [0.25, 0.35, 0.6], price: 0 },
+    { name: 'Black cargos', color: [0.15, 0.15, 0.18], price: 25 },
+    { name: 'White shorts', color: [0.9, 0.88, 0.8], price: 25 },
+    { name: 'Camo', color: [0.4, 0.5, 0.3], price: 45 },
+  ],
+  shoes: [
+    { name: 'Sneakers', color: [0.9, 0.9, 0.9], price: 0 },
+    { name: 'Red runners', color: [0.9, 0.2, 0.2], price: 20 },
+    { name: 'Gold boots', color: [1.0, 0.75, 0.2], price: 35 },
+    { name: 'Teal kicks', color: [0.1, 0.7, 0.75], price: 35 },
+  ],
 };
 
-export const BOAT = {
-  accel: 10,
-  brake: 14,
-  maxSpeed: 26,
-  steer: 1.4,
-  radius: 1.8,
-  health: 90,
+export const SIDE_REWARDS = {
+  taxiFare: 60,
+  courier: 120,
+  timeTrial: 150,
+  turf: 250,
+  gangRun: 200,
+  fire: 150,
+  range: 100,
+  swim: 120,
+  driveCourse: 150,
+  streetRace: 300,
+  beachParty: 50,
+  turfWar: 250,
+  trainRide: 20,
 };
 
-export const PLANE = {
-  accel: 12,
-  maxSpeed: 72,
-  takeoffSpeed: 30,
-  climbRate: 9,
-  steer: 1.1,
-  radius: 2.2,
-  health: 120,
-};
+export function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+export function lerp(a, b, t) { return a + (b - a) * t; }
+export function dist2(ax, az, bx, bz) { const dx = ax - bx, dz = az - bz; return dx * dx + dz * dz; }
+export function dist(ax, az, bx, bz) { return Math.sqrt(dist2(ax, az, bx, bz)); }
 
-export const WEAPONS = {
-  pistol: { name: 'Pistol', damage: 26, rate: 0.22, range: 95, spread: 0.012, ammo: Infinity, auto: false, color: hex('#3a3f48') },
-  smg: { name: 'SMG', damage: 14, rate: 0.07, range: 75, spread: 0.05, ammo: 150, auto: true, color: hex('#2a2e36') },
-  shotgun: { name: 'Shotgun', damage: 11, pellets: 6, rate: 0.95, range: 42, spread: 0.11, ammo: 30, auto: false, color: hex('#5a3a28') },
-};
-
-export const BOMB = {
-  count: 3,
-  maxCount: 6,
-  fuse: 1.2,
-  radius: 9,
-  damage: 200,
-  throwSpeed: 16,
-};
-
-export const WANTED = {
-  decayTime: 22,        // seconds out of sight before one star drops
-  hideTime: 8,          // seconds hidden before decay starts ticking faster
-  stealStars: 1,
-  killStars: 1,
-  explosionStars: 1,
-  maxStars: 5,
-  // police cars chasing per star level (index = stars)
-  copCars: [0, 1, 2, 3, 4, 5],
-  // on-foot cops per star level
-  footCops: [0, 0, 1, 2, 3, 4],
-  bustFine: 0.2,        // fraction of cash lost when busted
-};
-
-export const PICKUPS = {
-  cashMin: 10,
-  cashMax: 50,
-  healthAmount: 30,
-  armorAmount: 50,
-  wrenchAmount: 45,
-  smgAmmo: 150,
-  shotgunAmmo: 30,
-  bombAdd: 2,
-};
-
-export const MISSION_REWARDS = {
-  chapter1: 200,
-  chapter2: 400,
-  chapter3: 500,
-  chapter4: 600,
-  chapter5: 1500,
-  taxi: 120,
-  courier: 160,
-  timeTrial: 200,
-};
-
-export const SAVE_KEY = 'solmar-bay-3d-save-v1';
+// Deterministic seeded RNG (mulberry32)
+export function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}

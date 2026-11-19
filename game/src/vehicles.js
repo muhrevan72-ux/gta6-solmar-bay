@@ -1,404 +1,359 @@
-// Solmar Bay — vehicles: cars, motorbikes, boats, the airplane, plus
-// traffic AI and stealing. Physics live on the XZ plane (y for the
-// plane); collisions slide along building AABBs.
+// Solmar Bay — vehicles: player driving, traffic AI, stealing,
+// traffic lights, cars, bikes, boats, planes, taxis, fire trucks.
+// Smooth and fluid: eased throttle and steering, body roll and
+// pitch, momentum — never snappy.
 
-import { CAR, BIKE, BOAT, PLANE, COL, WANTED } from './config.js';
-import { resolveCollision, inWater, pointInBuilding } from './world.js';
+import { TUNE, COL, clamp, lerp, dist, mulberry32 } from './config.js';
+import { collides, inWater, moveWithCollision } from './world.js';
 
-let nextId = 1;
+export const CAR_COLORS = [
+  [0.9, 0.2, 0.2], [0.2, 0.4, 0.9], [0.7, 0.3, 0.85], [0.2, 0.8, 0.3],
+  [0.95, 0.6, 0.15], [0.9, 0.9, 0.9], [0.2, 0.2, 0.25], [0.95, 0.85, 0.2],
+  [0.3, 0.75, 0.8], [0.85, 0.45, 0.6],
+];
 
-function makeVehicle(kind, x, z, color, extra = {}) {
-  const base = {
-    id: nextId++,
-    kind, x, y: 0, z,
-    heading: Math.random() * Math.PI * 2,
-    speed: 0,
-    color,
-    health: 100,
-    driver: null,       // null | 'player' | 'npc' | 'cop'
-    traffic: null,      // {node, prev} for NPC cars
-    throttle: 0,
-    pitch: 0,
-    airborne: false,
-    wrecked: false,
-    smokeT: 0,
-    ...extra,
+// ---- traffic lights ----
+export function createLights() {
+  const lights = [];
+  for (const x of [-150, -50, 50, 150]) {
+    for (const z of [-150, -50, 50, 150]) {
+      lights.push({ x, z, phase: ((x + z) / 100) % 3, t: 0 });
+    }
+  }
+  for (const z of [-200, 200]) {
+    lights.push({ x: -300, z, phase: 1, t: 0 });
+    lights.push({ x: 200, z, phase: 2, t: 0 });
+  }
+  for (const x of [-200, 200]) {
+    lights.push({ x, z: -350, phase: 0, t: 0 });
+    lights.push({ x, z: 350, phase: 1, t: 0 });
+  }
+  return lights; // 24 lights
+}
+
+// green 8s, yellow 2s, red 8s — 18s cycle
+export function lightCycle(t) {
+  const c = ((t % 18) + 18) % 18;
+  if (c < 8) return 'green';
+  if (c < 10) return 'yellow';
+  return 'red';
+}
+
+export function updateLights(lights, dt) {
+  for (const l of lights) l.t += dt;
+}
+
+// State of the nearest light within 14 units, or null.
+export function lightStateAt(lights, x, z) {
+  let best = null, bd = Infinity;
+  for (const l of lights) {
+    const d = dist(x, z, l.x, l.z);
+    if (d < bd) { bd = d; best = l; }
+  }
+  if (!best || bd > 14) return null;
+  return lightCycle(best.t + best.phase * 6);
+}
+
+function makeVehicle(kind, x, z, heading, color) {
+  return {
+    kind, x, z, y: 0,
+    heading, speed: 0, steer: 0, throttle: 0,
+    color, damage: 0,
+    driver: null, traffic: false, parked: false,
+    lane: -1, wp: 0, dir: 1,
+    pitch: 0, roll: 0, airborne: false, climb: 0,
+    spray: 0, // fire truck water spray timer
   };
-  if (kind === 'bike') base.health = BIKE.health;
-  if (kind === 'boat') base.health = BOAT.health;
-  if (kind === 'plane') base.health = PLANE.health;
-  return base;
 }
 
 export function createVehicles(city) {
+  const rng = mulberry32(777);
   const list = [];
-  const rng = Math.random;
-  // parked cars on roads and the airport apron (heading along the road)
-  const spots = [
-    [0, 30, 0], [0, -30, Math.PI], [44, 60, 0], [-44, -60, Math.PI],
-    [88, 10, 0], [-88, -10, Math.PI], [0, 100, 0], [132, 30, 0],
-    [-132, -30, Math.PI], [60, -270, Math.PI / 2], [-120, -320, Math.PI / 2],
-    [180, -365, -Math.PI / 2], [0, 70, 0], [-200, 210, 0], [200, -210, Math.PI],
-    [260, 240, 0], [340, -120, Math.PI / 2],
-  ];
-  for (const [x, z, heading] of spots) {
-    const v = makeVehicle('car', x + rng() * 2 - 1, z + rng() * 2 - 1,
-      COL.carBody[Math.floor(rng() * COL.carBody.length)]);
-    v.heading = heading;
+  // traffic cars on random lanes
+  for (let i = 0; i < 32; i++) {
+    const lane = Math.floor(rng() * city.lanes.length);
+    const pts = city.lanes[lane].points;
+    const wp = Math.floor(rng() * pts.length);
+    const v = makeVehicle('car', pts[wp][0], pts[wp][1], rng() * Math.PI * 2,
+      CAR_COLORS[i % CAR_COLORS.length]);
+    v.traffic = true;
+    v.driver = 'traffic';
+    v.lane = lane;
+    v.wp = wp;
     list.push(v);
   }
-  // motorbikes: beach road + downtown
-  list.push(makeVehicle('bike', -284, 60, COL.bikeBody[0]));
-  list.push(makeVehicle('bike', -284, -140, COL.bikeBody[1]));
-  list.push(makeVehicle('bike', 44, 44, COL.bikeBody[2]));
-  // boats: beach water + harbour bay, facing along open water
-  const boat1 = makeVehicle('boat', -360, 60, COL.boatBody);
-  boat1.heading = 0;
-  list.push(boat1);
-  const boat2 = makeVehicle('boat', -355, -100, COL.boatBody);
-  boat2.heading = 0;
-  list.push(boat2);
-  const boat3 = makeVehicle('boat', 360, 330, COL.boatBody);
-  boat3.heading = 0;
-  list.push(boat3);
-  // the airplane, parked ON the runway facing down it (-z)
-  const plane = makeVehicle('plane', city.spawns.plane.x, city.spawns.plane.z, COL.planeBody);
-  plane.heading = Math.PI;
+  // parked cars
+  for (let i = 0; i < city.parkedSpots.length; i++) {
+    const s = city.parkedSpots[i];
+    const v = makeVehicle('car', s.x, s.z, rng() * Math.PI * 2,
+      CAR_COLORS[(i + 3) % CAR_COLORS.length]);
+    v.parked = true;
+    list.push(v);
+  }
+  // motorbikes near downtown
+  for (const [x, z] of [[-44, -60], [56, 60], [-140, -60], [140, 140]]) {
+    const v = makeVehicle('bike', x, z, rng() * Math.PI * 2, [0.85, 0.15, 0.3]);
+    v.parked = true;
+    list.push(v);
+  }
+  // boats at the harbour and beach
+  for (const [x, z] of [[-380, 200], [-380, -100], [-380, 320]]) {
+    const v = makeVehicle('boat', x, z, rng() * Math.PI * 2, [0.9, 0.9, 0.95]);
+    v.parked = true;
+    v.y = 0.4;
+    list.push(v);
+  }
+  // airplane on the runway — clear of the hangar at (140,330), facing
+  // east down the runway so it has room to build takeoff speed
+  const plane = makeVehicle('plane', 170, 330, Math.PI / 2, [0.95, 0.95, 0.95]);
+  plane.parked = true;
   list.push(plane);
-  // traffic cars on the road graph
-  for (let i = 0; i < 12; i++) {
-    const node = Math.floor(rng() * city.nodes.length);
-    const n = city.nodes[node];
-    const v = makeVehicle('car', n.x, n.z, COL.carBody[Math.floor(rng() * COL.carBody.length)],
-      { driver: 'npc', traffic: { node, prev: -1 } });
+  // taxis near the taxi stand
+  for (const [x, z] of [[-6, 160], [6, 166]]) {
+    const v = makeVehicle('taxi', x, z, 0, COL.taxi);
+    v.parked = true;
     list.push(v);
   }
-  return { list };
+  // fire truck at the fire station
+  const fire = makeVehicle('fire', -100, 210, Math.PI, COL.fire);
+  fire.parked = true;
+  list.push(fire);
+  return { list, lights: createLights() };
 }
 
 export function nearestVehicle(game, x, z, maxDist) {
-  let best = null, bestD = maxDist;
+  let best = null, bd = maxDist;
   for (const v of game.vehicles.list) {
-    if (v.wrecked || v.driver === 'player') continue;
-    const d = Math.hypot(v.x - x, v.z - z);
-    if (d < bestD) { bestD = d; best = v; }
+    if (v.damage >= 100) continue;
+    const d = dist(x, z, v.x, v.z);
+    if (d < bd) { bd = d; best = v; }
   }
   return best;
 }
 
-export function enterVehicle(game, v) {
-  const p = game.player;
-  const state = game.state;
-  p.inVehicle = v;
-  p.y = 0; p.falling = false; p.parachute = false;
-  if (v.driver === 'npc') {
-    // the owner flees on foot
-    game.peds.fleeFrom(v.x, v.z, 14);
-    v.driver = 'player';
-    state.wanted = Math.min(WANTED.maxStars, state.wanted + WANTED.stealStars);
-    state.stats.carsStolen++;
-    game.toast('Car stolen! Wanted level up.');
-    game.audio.sirenBlip();
-  } else if (v.driver === 'cop') {
-    v.driver = 'player';
-    state.wanted = Math.min(WANTED.maxStars, state.wanted + WANTED.stealStars);
-    state.stats.carsStolen++;
-    game.toast('You stole a police car!');
-  } else {
-    v.driver = 'player';
-  }
-  if (v.kind === 'boat') game.toast('Boat — W/S throttle, A/D steer.');
-  if (v.kind === 'plane') game.toast('Plane — W/S throttle, arrows pitch, A/D turn.');
-  if (v.kind === 'bike') game.toast('Bike — fast but twitchy!');
-  game.audio.engineStart();
-}
-
-export function exitVehicle(game) {
-  const p = game.player;
-  const v = p.inVehicle;
-  if (!v) return;
-  v.driver = null;
-  v.speed = 0;
-  if (v.kind === 'plane' && v.airborne) {
-    // bail out mid-air: the player falls, Space opens the chute
-    p.x = v.x; p.z = v.z; p.y = v.y;
-    p.falling = true;
-    p.vy = -2;
-    p.inVehicle = null;
-    game.toast('You bailed out! Press SPACE for the parachute.');
-    return;
-  }
-  // step out to the side
-  const sx = v.x + Math.cos(v.heading) * 2.2;
-  const sz = v.z - Math.sin(v.heading) * 2.2;
-  const fixed = resolveCollision(sx, sz, 0.6, game.city.buildings);
-  p.x = fixed.x; p.z = fixed.z; p.y = 0;
-  p.heading = v.heading;
-  p.inVehicle = null;
+function kindTune(kind) {
+  if (kind === 'bike') return { accel: TUNE.bikeAccel, max: TUNE.bikeMaxSpeed, rev: 12, turn: TUNE.bikeTurn };
+  if (kind === 'boat') return { accel: TUNE.boatAccel, max: TUNE.boatMaxSpeed, rev: 8, turn: TUNE.boatTurn };
+  if (kind === 'plane') return { accel: TUNE.planeAccel, max: TUNE.planeMaxSpeed, rev: 6, turn: TUNE.planeTurn };
+  if (kind === 'fire') return { accel: 13, max: 30, rev: 10, turn: 1.6 };
+  return { accel: TUNE.carAccel, max: TUNE.carMaxSpeed, rev: TUNE.carMaxReverse, turn: TUNE.carTurn };
 }
 
 // ---- player driving ----
-
-function drivePlayer(dt, game, v) {
+function updatePlayerVehicle(dt, game, v) {
   const input = game.input;
-  const axes = input.moveAxes();
-  const handbrake = input.down('Space');
-  const tune = v.kind === 'bike' ? BIKE : v.kind === 'boat' ? BOAT : v.kind === 'plane' ? PLANE : CAR;
+  const state = game.state;
+  const kt = kindTune(v.kind);
+  const wantThrottle = (input.down('KeyW') || input.down('ArrowUp')) ? 1
+    : (input.down('KeyS') || input.down('ArrowDown')) ? -0.6 : 0;
+  const wantSteer = (input.down('KeyA') || input.down('ArrowLeft')) ? 1
+    : (input.down('KeyD') || input.down('ArrowRight')) ? -1 : 0;
+  // eased throttle + steering (glide toward the key state)
+  v.throttle += (wantThrottle - v.throttle) * Math.min(1, 3 * dt);
+  v.steer += (wantSteer - v.steer) * Math.min(1, 4.5 * dt);
 
+  const handbrake = input.down('Space') && v.kind !== 'plane';
+  let accel = v.throttle * kt.accel * (1 + (state.handlingBonus || 0));
+  v.speed += accel * dt;
+  v.speed -= v.speed * 0.35 * dt; // drag
+  if (handbrake) v.speed *= Math.max(0, 1 - 3 * dt);
+  if (v.speed > kt.max) v.speed = kt.max;
+  if (v.speed < -kt.rev) v.speed = -kt.rev;
+
+  const turnRate = kt.turn * (handbrake ? 1.6 : 1) * clamp(Math.abs(v.speed) / 12, 0, 1);
+  v.heading += v.steer * turnRate * dt * (v.speed >= 0 ? 1 : -1);
+  // body roll + pitch from the smoothed inputs
+  const targetRoll = v.kind === 'bike'
+    ? clamp(-v.steer * Math.abs(v.speed) / 48, -0.38, 0.38)
+    : clamp(-v.steer * Math.abs(v.speed) / 120, -0.12, 0.12);
+  v.roll += (targetRoll - v.roll) * Math.min(1, 5 * dt);
+  v.pitch += (clamp(v.throttle * 0.05, -0.05, 0.05) - v.pitch) * Math.min(1, 4 * dt);
+
+  const nx = v.x + Math.sin(v.heading) * v.speed * dt;
+  const nz = v.z + Math.cos(v.heading) * v.speed * dt;
+
+  // planes: take off, fly, land
   if (v.kind === 'plane') {
-    // throttle with W/S, pitch with arrows, yaw with A/D
-    if (axes.y > 0) v.throttle = Math.min(1, v.throttle + dt * 0.5);
-    if (axes.y < 0) v.throttle = Math.max(0, v.throttle - dt * 0.7);
-    if (input.down('ArrowUp')) v.pitch = Math.min(0.5, v.pitch + dt * 0.6);
-    if (input.down('ArrowDown')) v.pitch = Math.max(-0.45, v.pitch - dt * 0.6);
-    if (!input.down('ArrowUp') && !input.down('ArrowDown')) v.pitch *= (1 - dt * 1.5);
-    const targetSpeed = v.throttle * PLANE.maxSpeed;
-    v.speed += (targetSpeed - v.speed) * Math.min(1, dt * 0.8);
-    v.heading += axes.x * PLANE.steer * dt * (0.4 + v.speed / PLANE.maxSpeed);
-    if (!v.airborne && v.speed > PLANE.takeoffSpeed && v.pitch > 0.06) {
-      v.airborne = true;
-      game.toast('Airborne!');
-      game.audio.blip(660, 0.2);
-    }
+    if (v.speed > 45 && !v.airborne) v.airborne = true;
     if (v.airborne) {
-      v.y += Math.sin(v.pitch) * v.speed * dt;
-      if (v.speed < 18) { v.pitch = Math.max(v.pitch - dt * 0.8, -0.4); } // stall: nose drops
-      if (v.y <= 0) {
-        v.y = 0;
-        if (Math.abs(Math.sin(v.pitch) * v.speed) > 9) {
-          damageVehicle(game, v, 35, 'crash landing');
-          game.toast('Hard landing!');
-        }
-        v.airborne = false;
-        v.pitch = 0;
-      }
+      const climbInput = (input.down('KeyW') ? 1 : 0) - (input.down('KeyS') ? 1 : 0);
+      v.climb += (climbInput * 6 - v.climb) * Math.min(1, 2 * dt);
+      v.y += (v.climb + 2) * dt;
       if (v.y > 120) v.y = 120;
+      if (v.speed < 30) { v.y -= 6 * dt; if (v.y <= 0) { v.y = 0; v.airborne = false; } }
     }
-    // building collision while low
-    const b = pointInBuilding(v.x, v.z, game.city.buildings);
-    if (b && v.y < b.h) {
-      damageVehicle(game, v, 30, 'building');
-      const fixed = resolveCollision(v.x, v.z, PLANE.radius, game.city.buildings);
-      v.x = fixed.x; v.z = fixed.z;
+  }
+  // boats only move on water; land vehicles cannot enter water
+  if (v.kind === 'boat') {
+    if (!inWater(game.city, nx, nz)) {
       v.speed *= 0.5;
+      return;
     }
-  } else if (v.kind === 'boat') {
-    if (axes.y > 0) v.speed += BOAT.accel * dt;
-    if (axes.y < 0) v.speed -= BOAT.brake * dt;
-    v.speed *= (1 - 0.5 * dt);
-    v.speed = Math.max(-8, Math.min(BOAT.maxSpeed, v.speed));
-    v.heading += axes.x * BOAT.steer * dt * (0.3 + Math.abs(v.speed) / BOAT.maxSpeed);
-    v.y = -0.1;
-    if (!inWater(v.x, v.z, game.city.water)) {
-      // beached: heavy drag, cannot move on land
-      v.speed *= (1 - 4 * dt);
-    }
-  } else {
-    // car / bike
-    if (axes.y > 0) v.speed += tune.accel * dt;
-    else if (axes.y < 0) v.speed -= tune.brake * dt;
-    else v.speed *= (1 - 0.5 * dt);
-    if (handbrake) {
-      v.speed *= (1 - 3.2 * dt);
-    }
-    const max = tune.maxSpeed, rev = tune.reverseSpeed;
-    v.speed = Math.max(-rev, Math.min(max, v.speed));
-    const steerFactor = Math.min(1, Math.abs(v.speed) / 10);
-    const steer = tune.steer * (handbrake ? 1.5 : 1) * steerFactor * (v.speed >= 0 ? 1 : -1);
-    v.heading += axes.x * steer * dt;
-    if (v.kind === 'bike') {
-      // wobble at speed — less stable
-      v.heading += Math.sin(game.time * 9) * BIKE.wobble * (Math.abs(v.speed) / BIKE.maxSpeed) * dt;
+    v.y = 0.4 + Math.sin(game.time * 1.5) * 0.1;
+  } else if (v.kind !== 'plane' || !v.airborne) {
+    if (inWater(game.city, nx, nz)) {
+      v.speed = 0;
+      return;
     }
   }
-
-  if (v.kind !== 'plane' || !v.airborne) {
-    const nx = v.x + Math.sin(v.heading) * v.speed * dt;
-    const nz = v.z + Math.cos(v.heading) * v.speed * dt;
-    const before = { x: v.x, z: v.z };
-    const fixed = resolveCollision(nx, nz, tune.radius, game.city.buildings);
-    v.x = fixed.x; v.z = fixed.z;
-    const hitWall = (fixed.x !== nx || fixed.z !== nz);
-    if (hitWall && Math.abs(v.speed) > 8) {
-      damageVehicle(game, v, Math.round(Math.abs(v.speed) * 0.9), 'wall');
-      game.audio.thud();
-      v.speed *= -0.25;
-    }
-    if (v.kind !== 'boat') {
-      game.state.stats.distanceDriven += Math.hypot(v.x - before.x, v.z - before.z);
-    }
+  if (v.kind === 'plane' && v.airborne) {
+    v.x = nx; v.z = nz;
+  } else if (collides(game.city, nx, nz, 1.7)) {
+    // crash: bounce back, take damage
+    const impact = Math.abs(v.speed);
+    v.speed *= -0.25;
+    v.damage += impact * 0.9;
+    if (impact > 8 && game.audio) game.audio.thud();
   } else {
-    v.x += Math.sin(v.heading) * v.speed * dt;
-    v.z += Math.cos(v.heading) * v.speed * dt;
-    v.x = Math.max(-395, Math.min(395, v.x));
-    v.z = Math.max(-395, Math.min(395, v.z));
-    game.state.stats.distanceDriven += v.speed * dt;
+    v.x = nx; v.z = nz;
   }
+  if (v.damage >= 100) { v.damage = 100; v.speed = 0; }
+  if (v.driver === 'player') state.stats.distanceDriven += Math.abs(v.speed) * dt;
 }
 
 // ---- traffic AI ----
-
-function driveTraffic(dt, game, v) {
-  const city = game.city;
-  const t = v.traffic;
-  if (!t || !city.adj[t.node]) return;
-  const target = city.nodes[t.node];
-  const dx = target.x - v.x, dz = target.z - v.z;
-  const dist = Math.hypot(dx, dz);
-  const wantHeading = Math.atan2(dx, dz);
-  let d = (wantHeading - v.heading) % (Math.PI * 2);
-  if (d > Math.PI) d -= Math.PI * 2;
-  if (d < -Math.PI) d += Math.PI * 2;
-  v.heading += d * Math.min(1, dt * 3);
-  const cruise = 11 + (v.id % 4);
-  // slow down if the player is right ahead
-  const p = game.player;
-  const ahead = (p.x - v.x) * Math.sin(v.heading) + (p.z - v.z) * Math.cos(v.heading);
-  const side = Math.abs((p.x - v.x) * Math.cos(v.heading) - (p.z - v.z) * Math.sin(v.heading));
-  const blocked = ahead > 0 && ahead < 9 && side < 2.5;
-  const targetSpeed = blocked ? 0 : cruise;
-  v.speed += (targetSpeed - v.speed) * Math.min(1, dt * 1.2);
-  v.x += Math.sin(v.heading) * v.speed * dt;
-  v.z += Math.cos(v.heading) * v.speed * dt;
-  const fixed = resolveCollision(v.x, v.z, CAR.radius, city.buildings);
-  v.x = fixed.x; v.z = fixed.z;
-  if (dist < 3.5) {
-    const options = (city.adj[t.node] || []).filter((n) => n !== t.prev);
-    const next = options.length ? options[Math.floor(Math.random() * options.length)]
-      : (city.adj[t.node][0] ?? t.node);
-    t.prev = t.node;
-    t.node = next;
-  }
-}
-
-export function damageVehicle(game, v, amount, cause) {
-  if (v.wrecked) return;
-  v.health -= amount;
-  if (v.health <= 0) {
-    v.health = 0;
-    v.wrecked = true;
-    v.speed = 0;
-    if (v.driver === 'player') {
-      game.toast('Your vehicle is wrecked!');
+function updateTraffic(dt, game, v) {
+  const lanes = game.city.lanes;
+  const lane = lanes[v.lane];
+  if (!lane) return;
+  const pts = lane.points;
+  let target = pts[v.wp];
+  // reached the waypoint?
+  if (dist(v.x, v.z, target[0], target[1]) < 6) {
+    v.wp += v.dir;
+    if (v.wp >= pts.length || v.wp < 0) {
+      if (lane.loop) {
+        v.wp = v.dir > 0 ? 0 : pts.length - 1;
+      } else {
+        // find another lane starting near here
+        let next = -1;
+        const cands = [];
+        for (let i = 0; i < lanes.length; i++) {
+          if (i === v.lane) continue;
+          const s = lanes[i].points[0];
+          if (dist(v.x, v.z, s[0], s[1]) < 30) cands.push(i);
+        }
+        if (cands.length > 0) next = cands[Math.floor(Math.random() * cands.length)];
+        if (next >= 0) {
+          v.lane = next;
+          v.wp = 0;
+          v.dir = 1;
+        } else {
+          // turn around and drive back along the same lane
+          v.dir = -v.dir;
+          v.wp += v.dir * 2;
+        }
+      }
     }
+    target = pts[Math.max(0, Math.min(pts.length - 1, v.wp))];
+  }
+  const wantHeading = Math.atan2(target[0] - v.x, target[1] - v.z);
+  let diff = wantHeading - v.heading;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  v.heading += clamp(diff, -1.6 * dt, 1.6 * dt);
+
+  // stop at red/yellow lights, for the player in front, and for cars ahead
+  let wantSpeed = TUNE.trafficSpeed;
+  const light = lightStateAt(game.vehicles.lights, v.x + Math.sin(v.heading) * 8, v.z + Math.cos(v.heading) * 8);
+  if (light === 'red' || light === 'yellow') wantSpeed = 0;
+  const p = game.player;
+  if (!p.inVehicle) {
+    const pdx = p.x - v.x, pdz = p.z - v.z;
+    const ahead = (pdx * Math.sin(v.heading) + pdz * Math.cos(v.heading)) / (Math.hypot(pdx, pdz) || 1);
+    if (Math.hypot(pdx, pdz) < 7 && ahead > 0.6) wantSpeed = 0;
+  } else if (p.inVehicle && p.inVehicle !== v) {
+    const pv = p.inVehicle;
+    const pdx = pv.x - v.x, pdz = pv.z - v.z;
+    const ahead = (pdx * Math.sin(v.heading) + pdz * Math.cos(v.heading)) / (Math.hypot(pdx, pdz) || 1);
+    if (Math.hypot(pdx, pdz) < 6 && ahead > 0.6) wantSpeed = 0;
+  }
+  v.speed += (wantSpeed - v.speed) * Math.min(1, 2.5 * dt);
+  const nx = v.x + Math.sin(v.heading) * v.speed * dt;
+  const nz = v.z + Math.cos(v.heading) * v.speed * dt;
+  if (!collides(game.city, nx, nz, 1.7) && !inWater(game.city, nx, nz)) {
+    v.x = nx; v.z = nz;
+  } else {
+    v.speed = 0;
   }
 }
 
 export function updateVehicles(dt, game) {
-  const p = game.player;
-  // enter / exit with E (edge-triggered via keys set + a cooldown on the player)
-  if (game.input.down('KeyE') && !game.eCooldown) {
-    game.eCooldown = 0.35;
-    if (p.inVehicle) exitVehicle(game);
-    else {
-      const v = nearestVehicle(game, p.x, p.z, 4.5);
-      if (v) enterVehicle(game, v);
-    }
-  }
-  if (game.eCooldown > 0) game.eCooldown -= dt;
-
+  updateLights(game.vehicles.lights, dt);
   for (const v of game.vehicles.list) {
-    if (v.wrecked) {
-      v.speed *= (1 - 2 * dt);
-      v.x += Math.sin(v.heading) * v.speed * dt;
-      v.z += Math.cos(v.heading) * v.speed * dt;
-      continue;
-    }
-    if (v.ramCd > 0) v.ramCd -= dt;
-    if (v.driver === 'player') {
-      drivePlayer(dt, game, v);
-    } else if (v.driver === 'npc' && v.kind === 'car') {
-      driveTraffic(dt, game, v);
-    } else if (v.driver === 'cop') {
-      // police driving is handled by the police module
-    }
-    // smoke timer for damaged vehicles
-    if (v.health < CAR.damageSmoke) v.smokeT += dt;
-    // boat drifts back to water level
-    if (v.kind === 'boat' && v.driver !== 'player') v.y = -0.1;
-  }
-
-  // vehicle-vehicle shoves (cheap: player vehicle vs others)
-  const pv = p.inVehicle;
-  if (pv) {
-    for (const v of game.vehicles.list) {
-      if (v === pv || v.wrecked) continue;
-      const d = Math.hypot(v.x - pv.x, v.z - pv.z);
-      if (d < 3.2 && d > 0.01) {
-        const push = (3.2 - d) * 0.5;
-        const nx = (v.x - pv.x) / d, nz = (v.z - pv.z) / d;
-        v.x += nx * push; v.z += nz * push;
-        if (Math.abs(pv.speed) > 6 && (!v.ramCd || v.ramCd <= 0) && (!pv.ramCd || pv.ramCd <= 0)) {
-          damageVehicle(game, v, Math.round(Math.abs(pv.speed) * 0.7), 'ram');
-          damageVehicle(game, pv, Math.round(Math.abs(pv.speed) * 0.3), 'ram');
-          v.ramCd = 0.7; pv.ramCd = 0.7;
-          if (v.driver === 'npc') {
-            game.peds.fleeFrom(v.x, v.z, 12);
-            v.driver = null; v.traffic = null;
-          }
-          game.audio.thud();
-        }
-      }
+    if (v.damage >= 100) continue; // wrecked
+    if (v.driver === 'player') updatePlayerVehicle(dt, game, v);
+    else if (v.traffic) updateTraffic(dt, game, v);
+    else if (v.kind === 'plane' && v.airborne) {
+      // driverless plane (pilot bailed with a parachute): it glides
+      // down and crashes
+      v.y -= 4 * dt;
+      v.x += Math.sin(v.heading) * v.speed * 0.5 * dt;
+      v.z += Math.cos(v.heading) * v.speed * 0.5 * dt;
+      if (v.y <= 0) { v.y = 0; v.airborne = false; v.damage = 100; }
     }
   }
 }
 
 // ---- drawing ----
-
-function drawCarShape(renderer, v, bodyColor, isPolice) {
-  const y = v.y;
-  const h = v.heading;
-  const fx = Math.sin(h), fz = Math.cos(h);
-  // body + cabin + windows + wheels
-  renderer.box(v.x, y + 0.55, v.z, 1.9, 0.75, 3.7, h, bodyColor, bodyColor);
-  renderer.box(v.x - fx * 0.3, y + 1.15, v.z - fz * 0.3, 1.65, 0.6, 1.9, h, COL.towerGlass, COL.towerGlass);
-  if (isPolice) {
-    renderer.box(v.x, y + 0.62, v.z, 1.94, 0.22, 3.72, h, COL.policeStripe, COL.policeStripe);
-    const flash = (Math.floor(performance.now() / 280) % 2 === 0) ? [1, 0.15, 0.15] : [0.15, 0.3, 1];
-    renderer.box(v.x - fx * 0.3, y + 1.55, v.z - fz * 0.3, 0.9, 0.18, 0.4, h, flash, flash);
+function drawCar(renderer, game, v) {
+  const t = game.time;
+  const body = v.color;
+  const dark = [0.12, 0.12, 0.14];
+  const top = v.kind === 'cop' ? [0.95, 0.95, 0.95] : body;
+  renderer.box(v.x, v.y + 0.7, v.z, 2.2, 0.9, 4.4, body, 1, v.heading, v.roll, v.pitch);
+  renderer.box(v.x, v.y + 1.45, v.z - 0.2, 1.9, 0.75, 2.4, top, 1, v.heading, v.roll, v.pitch);
+  // wheels (local offsets rotated by the heading)
+  const ch = Math.cos(v.heading), sh = Math.sin(v.heading);
+  for (const [sx, sz] of [[-1.05, 1.4], [1.05, 1.4], [-1.05, -1.4], [1.05, -1.4]]) {
+    renderer.box(v.x + sx * ch + sz * sh, v.y + 0.35, v.z - sx * sh + sz * ch,
+      0.4, 0.7, 0.7, dark, 1, v.heading, 0, 0);
   }
-  // wheels
-  const rx = Math.cos(h), rz = -Math.sin(h);
-  for (const s of [-1, 1]) {
-    for (const f of [1.15, -1.15]) {
-      renderer.box(v.x + rx * s * 0.95 + fx * f, y + 0.3, v.z + rz * s * 0.95 + fz * f,
-        0.32, 0.55, 0.6, h, COL.weapon, COL.weapon);
-    }
+  if (v.kind === 'taxi') {
+    renderer.box(v.x, v.y + 2.05, v.z - 0.2, 0.9, 0.35, 0.9, [1, 0.9, 0.2], 1, v.heading, 0, 0);
   }
-  if (v.health < CAR.damageSmoke && Math.random() < 0.5) {
-    renderer.box(v.x - fx * 1.2, y + 1.4, v.z - fz * 1.2, 0.8, 0.8, 0.8, h, COL.smoke, COL.smoke);
+  if (v.kind === 'cop') {
+    renderer.box(v.x - 0.5, v.y + 2.0, v.z - 0.2, 0.7, 0.3, 0.6, [1, 0.1, 0.1], 1, v.heading, 0, 0);
+    renderer.box(v.x + 0.5, v.y + 2.0, v.z - 0.2, 0.7, 0.3, 0.6, [0.1, 0.3, 1], 1, v.heading, 0, 0);
+  }
+  if (v.kind === 'fire') {
+    renderer.box(v.x, v.y + 1.6, v.z - 0.6, 1.6, 0.5, 3.4, [0.8, 0.8, 0.85], 1, v.heading, 0, 0);
+  }
+  if (v.damage > 60) {
+    const s = Math.sin(t * 9 + v.x) * 0.4;
+    renderer.box(v.x + s, v.y + 2.6, v.z, 1.2, 1.2, 1.2, [0.35, 0.35, 0.35], 0.6, v.heading, 0, 0);
   }
 }
 
 export function drawVehicles(renderer, game) {
   for (const v of game.vehicles.list) {
-    if (v.kind === 'car') {
-      drawCarShape(renderer, v, v.police ? COL.policeCar : v.color, !!v.police);
-    } else if (v.kind === 'bike') {
-      const h = v.heading;
-      const fx = Math.sin(h), fz = Math.cos(h);
-      renderer.box(v.x, v.y + 0.55, v.z, 0.55, 0.5, 2.3, h, v.color, v.color);
-      renderer.box(v.x - fx * 0.4, v.y + 0.95, v.z - fz * 0.4, 0.5, 0.35, 0.6, h, COL.weapon, COL.weapon);
-      renderer.box(v.x + fx * 1.0, v.y + 0.4, v.z + fz * 1.0, 0.4, 0.7, 0.4, h, COL.weapon, COL.weapon);
-      renderer.box(v.x - fx * 1.0, v.y + 0.4, v.z - fz * 1.0, 0.4, 0.7, 0.4, h, COL.weapon, COL.weapon);
-      // rider (player or nobody)
-      if (v.driver) {
-        renderer.box(v.x, v.y + 1.15, v.z, 0.55, 0.6, 0.4, h, COL.playerShirt, COL.playerShirt);
-        renderer.box(v.x, v.y + 1.6, v.z, 0.42, 0.4, 0.42, h, COL.playerSkin, COL.playerSkin);
-      }
+    if (v.kind === 'bike') {
+      renderer.box(v.x, v.y + 0.7, v.z, 0.6, 0.7, 2.2, v.color, 1, v.heading, v.roll, 0);
+      renderer.box(v.x, v.y + 1.15, v.z - 0.2, 0.5, 0.4, 0.8, [0.15, 0.15, 0.15], 1, v.heading, v.roll, 0);
+      renderer.box(v.x, v.y + 0.35, v.z + 1.0, 0.5, 0.7, 0.25, [0.1, 0.1, 0.1], 1, v.heading, 0, 0);
+      renderer.box(v.x, v.y + 0.35, v.z - 1.0, 0.5, 0.7, 0.25, [0.1, 0.1, 0.1], 1, v.heading, 0, 0);
     } else if (v.kind === 'boat') {
-      const h = v.heading;
-      renderer.box(v.x, v.y + 0.5, v.z, 2.1, 0.8, 4.6, h, v.color, v.color);
-      renderer.box(v.x, v.y + 1.1, v.z - Math.cos(h) * 0.6, 1.6, 0.7, 1.8, h, COL.towerGlass, COL.towerGlass);
+      renderer.box(v.x, v.y + 0.5, v.z, 2.6, 0.9, 5.2, v.color, 1, v.heading, v.roll, 0);
+      renderer.box(v.x, v.y + 1.3, v.z - 0.6, 2.0, 0.8, 2.0, [0.25, 0.35, 0.5], 1, v.heading, 0, 0);
     } else if (v.kind === 'plane') {
-      const h = v.heading;
-      const fx = Math.sin(h), fz = Math.cos(h);
-      const y = v.y + 1.2;
-      renderer.box(v.x, y, v.z, 1.7, 1.5, 7.2, h, v.color, v.color, v.pitch);
-      renderer.box(v.x, y + 0.1, v.z, 8.5, 0.28, 1.7, h, v.color, v.color, v.pitch);
-      renderer.box(v.x - fx * 3.2, y + 0.9, v.z - fz * 3.2, 3.2, 0.22, 1.2, h, v.color, v.color, v.pitch);
-      renderer.box(v.x + fx * 2.6, y + 0.55, v.z + fz * 2.6, 1.4, 0.7, 1.4, h, COL.planeStripe, COL.planeStripe, v.pitch);
-      renderer.box(v.x, y + 1.15, v.z - fz * 2.2, 0.25, 1.1, 0.9, h, COL.planeStripe, COL.planeStripe, v.pitch);
+      renderer.box(v.x, v.y + 0.8, v.z, 2.2, 1.2, 9, v.color, 1, v.heading, v.roll, v.pitch);
+      renderer.box(v.x, v.y + 0.9, v.z, 11, 0.3, 2.2, v.color, 1, v.heading, v.roll, v.pitch);
+      renderer.box(v.x, v.y + 1.6, v.z - 4.2, 0.4, 1.4, 1.6, v.color, 1, v.heading, 0, 0);
+    } else {
+      drawCar(renderer, game, v);
     }
   }
+  drawLights(renderer, game);
 }
+
+export function drawLights(renderer, game) {
+  for (const l of game.vehicles.lights) {
+    const state = lightCycle(l.t + l.phase * 6);
+    const col = state === 'green' ? [0.2, 0.9, 0.3] : state === 'yellow' ? [1, 0.8, 0.1] : [1, 0.15, 0.15];
+    renderer.box(l.x + 7, 3, l.z, 0.5, 6, 0.5, COL.lampPole);
+    renderer.box(l.x + 7, 6.2, l.z, 1.2, 1.8, 1.2, [0.2, 0.2, 0.22]);
+    renderer.box(l.x + 7, 6.4, l.z + 0.7, 0.8, 0.8, 0.3, col);
+  }
+}
+
+export { moveWithCollision };

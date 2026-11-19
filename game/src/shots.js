@@ -1,66 +1,79 @@
-// Solmar Bay — third-person camera helpers. The camera follows behind
-// the player or the driven vehicle; mouse drag orbits it (yaw/pitch),
-// the wheel zooms. Yaw is measured so that yaw=0 looks toward -z.
+// Solmar Bay — third-person follow camera with mouse orbit.
+// Smooth and fluid: eased yaw/pitch/zoom, a soft spring on the eye,
+// snap only on new game / continue / respawn.
+
+import { clamp, lerp } from './config.js';
 
 export function createCamera() {
   return {
-    yaw: Math.PI,       // behind the player at spawn (player faces -z... see note)
-    pitch: 0.32,        // radians above horizontal
-    dist: 8.5,
-    eye: [0, 6, 12],
-    target: [0, 1.6, 0],
-    // smooth-follow state
-    smoothEye: [0, 6, 12],
+    yaw: Math.PI, // eye offset angle (behind the player by default)
+    pitch: 0.38,
+    dist: 13,
+    eye: [0, 12, 0],
+    target: [0, 2, 0],
+    lastDragT: -10,
+    time: 0,
   };
 }
 
-function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-function lerpAngle(a, b, t) {
-  let d = (b - a) % (Math.PI * 2);
-  if (d > Math.PI) d -= Math.PI * 2;
-  if (d < -Math.PI) d += Math.PI * 2;
-  return a + d * t;
-}
-
-// Apply mouse orbit + wheel to the camera, then place it behind the
-// focus point. mode: 'foot' | 'drive' | 'fly'. heading is the focus
-// object's facing (radians) — in drive/fly the camera eases behind it.
+// focus: {x, y, z} to follow. heading: the facing angle of the
+// followed thing (player or vehicle). mode: 'foot' | 'drive' | 'fly'.
 export function updateCamera(cam, dt, input, focus, heading, mode) {
-  cam.yaw += input.orbitX * 0.005;
-  cam.pitch = clamp(cam.pitch + input.orbitY * 0.004, 0.05, 1.15);
-  cam.dist = clamp(cam.dist + input.wheel * 0.01, 5, 16);
-
-  if (mode === 'drive' || mode === 'fly') {
-    // ease the camera behind the vehicle unless the player is orbiting
-    if (Math.abs(input.orbitX) < 0.5) {
-      cam.yaw = lerpAngle(cam.yaw, heading + Math.PI, Math.min(1, dt * 1.6));
-    }
-    if (mode === 'fly') cam.dist = Math.max(cam.dist, 13);
+  cam.time += dt;
+  const drag = input.takeDrag();
+  if (drag.x !== 0 || drag.y !== 0) {
+    cam.yaw -= drag.x * 0.005;
+    cam.pitch = clamp(cam.pitch + drag.y * 0.003, 0.06, 1.15);
+    cam.lastDragT = cam.time;
   }
+  const wheel = input.takeWheel();
+  if (wheel !== 0) cam.dist = clamp(cam.dist + wheel * 0.01, 6, 26);
 
-  const d = mode === 'fly' ? Math.max(cam.dist, 13) : (mode === 'drive' ? cam.dist + 2.5 : cam.dist);
-  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
-  const eye = [
-    focus.x + Math.sin(cam.yaw) * cp * d,
-    focus.y + 1.6 + sp * d,
-    focus.z + Math.cos(cam.yaw) * cp * d,
+  // Ease the yaw behind the followed heading when the player is not
+  // actively orbiting (GTA-style follow). Vehicles pull harder.
+  const sinceDrag = cam.time - cam.lastDragT;
+  if (sinceDrag > 0.6) {
+    const want = heading + Math.PI;
+    let diff = want - cam.yaw;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    const rate = mode === 'foot' ? 1.4 : 2.4;
+    cam.yaw += diff * Math.min(1, rate * dt);
+  }
+  const wantPitch = mode === 'fly' ? 0.25 : 0.38;
+  cam.pitch += (wantPitch - cam.pitch) * Math.min(1, 2 * dt);
+  const wantDist = mode === 'drive' ? 16 : mode === 'fly' ? 20 : 13;
+  cam.dist += (wantDist - cam.dist) * Math.min(1, 2 * dt);
+
+  const fx = focus.x, fy = (focus.y || 0) + 2, fz = focus.z;
+  const cp = Math.cos(cam.pitch);
+  const wantEye = [
+    fx + Math.sin(cam.yaw) * cp * cam.dist,
+    fy + Math.sin(cam.pitch) * cam.dist,
+    fz + Math.cos(cam.yaw) * cp * cam.dist,
   ];
-  // keep the camera out of the ground
-  if (eye[1] < 0.6) eye[1] = 0.6;
-  // smooth the eye so it doesn't snap
-  const k = Math.min(1, dt * 10);
-  cam.smoothEye[0] += (eye[0] - cam.smoothEye[0]) * k;
-  cam.smoothEye[1] += (eye[1] - cam.smoothEye[1]) * k;
-  cam.smoothEye[2] += (eye[2] - cam.smoothEye[2]) * k;
-  cam.eye = cam.smoothEye;
-  cam.target = [focus.x, focus.y + 1.6, focus.z];
-  return cam;
+  // soft spring on the eye — no snapping, no stiffness
+  const k = Math.min(1, 7 * dt);
+  cam.eye[0] = lerp(cam.eye[0], wantEye[0], k);
+  cam.eye[1] = lerp(cam.eye[1], wantEye[1], k);
+  cam.eye[2] = lerp(cam.eye[2], wantEye[2], k);
+  cam.target[0] = lerp(cam.target[0], fx, Math.min(1, 10 * dt));
+  cam.target[1] = lerp(cam.target[1], fy, Math.min(1, 10 * dt));
+  cam.target[2] = lerp(cam.target[2], fz, Math.min(1, 10 * dt));
 }
 
-// Forward direction on the ground from the camera yaw (for WASD).
-export function cameraForward(cam) {
-  return [-Math.sin(cam.yaw), -Math.cos(cam.yaw)];
-}
-export function cameraRight(cam) {
-  return [-Math.cos(cam.yaw), Math.sin(cam.yaw)];
+// Place the camera immediately behind the focus (first frames of a
+// new game / continue / respawn must not fly in from the origin).
+export function snapCamera(cam, focus, heading) {
+  cam.yaw = heading + Math.PI;
+  cam.pitch = 0.38;
+  const fx = focus.x, fy = (focus.y || 0) + 2, fz = focus.z;
+  const cp = Math.cos(cam.pitch);
+  cam.eye = [
+    fx + Math.sin(cam.yaw) * cp * cam.dist,
+    fy + Math.sin(cam.pitch) * cam.dist,
+    fz + Math.cos(cam.yaw) * cp * cam.dist,
+  ];
+  cam.target = [fx, fy, fz];
+  cam.lastDragT = -10;
 }

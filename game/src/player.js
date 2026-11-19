@@ -1,138 +1,188 @@
-// Solmar Bay — the player character on foot. WASD moves relative to
-// the camera, Shift runs, E enters/exits vehicles, F punches, Space
-// deploys the parachute while falling. Falls use simple gravity.
+// Solmar Bay — on-foot player: movement, swimming, interaction,
+// entering/exiting vehicles. Smooth and fluid: eased acceleration,
+// eased turns, body lean, walk bob. No stiffness.
 
-import { PLAYER } from './config.js';
-import { resolveCollision, inWater } from './world.js';
-import { cameraForward, cameraRight } from './shots.js';
+import { TUNE, OUTFIT, clamp, dist } from './config.js';
+import { moveWithCollision, inWater } from './world.js';
+import { nearestVehicle } from './vehicles.js';
 
 export function createPlayer(spawn) {
   return {
-    x: spawn.x,
-    y: 0,
-    z: spawn.z,
-    heading: Math.PI,     // facing -z at start
-    speed: 0,
-    vy: 0,                // vertical velocity while falling
-    falling: false,
-    parachute: false,
-    inVehicle: null,      // vehicle object when driving/riding
-    punchCd: 0,
-    punchAnim: 0,
-    walkPhase: 0,
-    onGround: true,
+    x: spawn.x, z: spawn.z, y: 0,
+    heading: 0, speed: 0, targetSpeed: 0,
+    lean: 0, bob: 0, bobPhase: 0,
+    inVehicle: null,
+    onTrain: null,
+    onElevator: false,
+    parachuting: false,
+    parachuteY: 0,
+    swimming: false,
+    carryingCat: null, // cat object riding on the shoulder
   };
 }
 
 export function updatePlayer(dt, game) {
   const p = game.player;
-  const input = game.input;
   const state = game.state;
-  if (p.inVehicle) return; // vehicles module owns movement then
-  if (p.punchCd > 0) p.punchCd -= dt;
-  if (p.punchAnim > 0) p.punchAnim -= dt;
+  const input = game.input;
 
-  const axes = input.moveAxes();
-  const fwd = cameraForward(game.camera);
-  const right = cameraRight(game.camera);
-  let mx = fwd[0] * axes.y + right[0] * axes.x;
-  let mz = fwd[1] * axes.y + right[1] * axes.x;
-  const mLen = Math.hypot(mx, mz);
-  const running = input.down('ShiftLeft') || input.down('ShiftRight');
-  const topSpeed = running ? PLAYER.runSpeed : PLAYER.walkSpeed;
-
-  if (mLen > 0.01) {
-    mx /= mLen; mz /= mLen;
-    const target = Math.atan2(mx, mz);
-    // turn smoothly toward the move direction
-    let d = (target - p.heading) % (Math.PI * 2);
-    if (d > Math.PI) d -= Math.PI * 2;
-    if (d < -Math.PI) d += Math.PI * 2;
-    p.heading += d * Math.min(1, dt * 12);
-    p.speed += PLAYER.accel * dt;
-    if (p.speed > topSpeed) p.speed = topSpeed;
-    p.walkPhase += dt * p.speed * 1.6;
-  } else {
-    p.speed -= PLAYER.accel * 1.4 * dt;
-    if (p.speed < 0) p.speed = 0;
+  // Riding something else — the vehicle/train/elevator owns the position.
+  if (p.inVehicle) {
+    const v = p.inVehicle;
+    p.x = v.x; p.z = v.z; p.y = v.y;
+    p.heading = v.heading;
+    return;
   }
-
-  if (p.speed > 0.05) {
-    const nx = p.x + Math.sin(p.heading) * p.speed * dt;
-    const nz = p.z + Math.cos(p.heading) * p.speed * dt;
-    const fixed = resolveCollision(nx, nz, PLAYER.radius, game.city.buildings);
-    // keep the player out of the sea unless they walk in (swim = slow)
-    p.x = fixed.x;
-    p.z = fixed.z;
-    state.stats.distanceDriven += 0; // on foot doesn't count as driving
+  if (p.onTrain) {
+    p.x = p.onTrain.x; p.z = p.onTrain.z; p.y = p.onTrain.y;
+    return;
   }
+  if (p.onElevator) return; // elevator module moves the player
 
-  // ---- falling / parachute ----
-  if (p.falling) {
-    p.vy -= 22 * dt; // gravity
-    if (p.parachute) {
-      p.vy = Math.max(p.vy, -3.2);
-      // steer while gliding
-      const ax = input.moveAxes();
-      const f2 = cameraForward(game.camera);
-      const r2 = cameraRight(game.camera);
-      p.x += (f2[0] * ax.y + r2[0] * ax.x) * 5 * dt;
-      p.z += (f2[1] * ax.y + r2[1] * ax.x) * 5 * dt;
-      const fixed = resolveCollision(p.x, p.z, PLAYER.radius, game.city.buildings);
-      p.x = fixed.x; p.z = fixed.z;
-    } else {
-      p.vy = Math.max(p.vy, -26);
-    }
-    p.y += p.vy * dt;
-    if (p.y <= 0) {
+  // Parachuting: slow fall, steerable.
+  if (p.parachuting) {
+    p.parachuteY -= 4 * dt;
+    const steer = (input.down('KeyA') ? 1 : 0) - (input.down('KeyD') ? 1 : 0);
+    p.heading += steer * 1.5 * dt;
+    const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
+    p.x += fx * 6 * dt;
+    p.z += fz * 6 * dt;
+    if (p.parachuteY <= 0) {
+      p.parachuting = false;
       p.y = 0;
-      if (!p.parachute && p.vy < -18) {
-        // hard landing hurts
-        game.hurtPlayer(Math.round((-p.vy - 18) * 2), 'fall');
-      }
-      p.vy = 0;
-      p.falling = false;
-      p.parachute = false;
+    } else {
+      p.y = p.parachuteY;
     }
-  } else if (p.y > 0) {
-    p.falling = true; // walked off something (shouldn't happen on flat ground)
+    return;
   }
 
-  // deploy parachute while falling
-  if (p.falling && !p.parachute && p.y > 12 && input.down('Space')) {
-    p.parachute = true;
-    game.audio.blip(880, 0.12);
+  // Wish direction from WASD/arrows, relative to the camera.
+  const cam = game.camera;
+  const fx = -Math.sin(cam.yaw), fz = -Math.cos(cam.yaw);
+  const rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
+  let wx = 0, wz = 0;
+  if (input.down('KeyW') || input.down('ArrowUp')) { wx += fx; wz += fz; }
+  if (input.down('KeyS') || input.down('ArrowDown')) { wx -= fx; wz -= fz; }
+  if (input.down('KeyD') || input.down('ArrowRight')) { wx += rx; wz += rz; }
+  if (input.down('KeyA') || input.down('ArrowLeft')) { wx -= rx; wz -= rz; }
+  const wl = Math.hypot(wx, wz);
+  if (wl > 0) { wx /= wl; wz /= wl; }
+
+  const swimming = inWater(game.city, p.x, p.z);
+  p.swimming = swimming;
+  const run = input.down('ShiftLeft') || input.down('ShiftRight');
+  p.targetSpeed = swimming ? TUNE.swimSpeed : wl > 0 ? (run ? TUNE.runSpeed : TUNE.walkSpeed) : 0;
+  // eased acceleration — no speed snap, no dead stop
+  p.speed += (p.targetSpeed - p.speed) * Math.min(1, TUNE.playerAccel * dt);
+  if (p.speed < 0.01 && p.targetSpeed === 0) p.speed = 0;
+
+  if (wl > 0 && p.speed > 0.2) {
+    const wantHeading = Math.atan2(wx, wz);
+    let diff = wantHeading - p.heading;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    p.heading += diff * Math.min(1, 10 * dt);
+    p.lean = clamp(diff * 0.9, -0.2, 0.2);
+    const mx = Math.sin(p.heading) * p.speed * dt;
+    const mz = Math.cos(p.heading) * p.speed * dt;
+    moveWithCollision(game.city, p, mx, mz, TUNE.playerRadius);
+    p.bobPhase += p.speed * dt * 1.7;
+    p.bob = Math.sin(p.bobPhase) * 0.1;
+  } else {
+    p.lean += (0 - p.lean) * Math.min(1, 6 * dt);
+    p.bob += (0 - p.bob) * Math.min(1, 6 * dt);
   }
+  p.y = swimming ? -0.55 : 0;
 }
 
-// Draw the blocky character as a few boxes via the renderer.
+// E: enter the nearest enterable vehicle. Cooldown gated with `<= 0`.
+export function tryEnterVehicle(game) {
+  const state = game.state;
+  if (state.eCooldown > 0) return false;
+  const p = game.player;
+  if (p.inVehicle || p.onTrain || p.parachuting) return false;
+  const v = nearestVehicle(game, p.x, p.z, TUNE.enterRadius);
+  if (!v) return false;
+  if (v.damage >= 100) return false; // wrecked
+  if (v.kind === 'plane' && v.y > 4) return false; // flying away
+  if (v.kind === 'boat' && !inWater(game.city, v.x, v.z)) return false;
+  // A traffic car with a driver: the driver flees, it counts as theft.
+  if (v.driver === 'traffic') {
+    if (game.peds && game.peds.fleeFrom) game.peds.fleeFrom(v.x, v.z, 30);
+    if (game.police && game.police.commitCrime) game.police.commitCrime(game, 'stealCar');
+    state.stats.carsStolen += 1;
+  }
+  v.driver = 'player';
+  v.parked = false;
+  v.traffic = false;
+  p.inVehicle = v;
+  state.eCooldown = 0.35;
+  if (game.audio) game.audio.blip(660, 0.08);
+  return true;
+}
+
+export function exitVehicle(game) {
+  const state = game.state;
+  if (state.eCooldown > 0) return false;
+  const p = game.player;
+  const v = p.inVehicle;
+  if (!v) return false;
+  // step out to the side of the car
+  const side = Math.PI / 2;
+  p.x = v.x + Math.sin(v.heading + side) * 2.4;
+  p.z = v.z + Math.cos(v.heading + side) * 2.4;
+  p.y = 0;
+  p.heading = v.heading;
+  v.driver = null;
+  v.parked = true;
+  v.speed = 0;
+  p.inVehicle = null;
+  state.eCooldown = 0.35;
+  return true;
+}
+
+// Outfit colours for the player's voxel body.
+export function outfitColors(state) {
+  return {
+    hair: OUTFIT.hair[state.outfit.hair].color,
+    shirt: OUTFIT.shirt[state.outfit.shirt].color,
+    pants: OUTFIT.pants[state.outfit.pants].color,
+    shoes: OUTFIT.shoes[state.outfit.shoes].color,
+    skin: [0.92, 0.75, 0.6],
+  };
+}
+
 export function drawPlayer(renderer, game) {
   const p = game.player;
-  if (p.inVehicle) return;
-  const { COL } = game;
+  if (p.inVehicle || p.onTrain) return; // hidden inside the vehicle
+  const c = outfitColors(game.state);
+  const bobY = p.bob;
+  const lean = p.lean;
   const yaw = p.heading;
-  const bob = Math.sin(p.walkPhase) * 0.06 * Math.min(1, p.speed / 6);
-  const legSwing = Math.sin(p.walkPhase) * 0.28 * Math.min(1, p.speed / 6);
-  const y = p.y + bob;
-  // legs
-  renderer.box(p.x - 0.14, y + 0.35, p.z, 0.24, 0.7, 0.26, yaw, COL.playerPants);
-  renderer.box(p.x + 0.14, y + 0.35, p.z, 0.24, 0.7, 0.26, yaw, COL.playerPants);
-  // torso (shirt), arms swing with the walk
-  renderer.box(p.x, y + 1.05, p.z, 0.62, 0.7, 0.34, yaw, COL.playerShirt);
-  const armY = y + 1.05 + legSwing * 0.4;
-  renderer.box(p.x - 0.42, armY, p.z, 0.2, 0.62, 0.22, yaw, COL.playerShirt);
-  renderer.box(p.x + 0.42, armY, p.z, 0.2, 0.62, 0.22, yaw, COL.playerShirt);
-  // head + cap
-  renderer.box(p.x, y + 1.62, p.z, 0.5, 0.46, 0.46, yaw, COL.playerSkin);
-  renderer.box(p.x, y + 1.88, p.z, 0.54, 0.12, 0.5, yaw, COL.playerShirt);
-  // held weapon
-  if (game.state.weapon !== 'pistol') {
-    const gx = p.x + Math.sin(yaw) * 0.5;
-    const gz = p.z + Math.cos(yaw) * 0.5;
-    renderer.box(gx, y + 1.05, gz, 0.12, 0.12, 0.55, yaw, COL.weapon);
+  const swim = p.swimming;
+  const y0 = p.y;
+  // legs (alternate with the walk cycle)
+  const legSwing = Math.sin(p.bobPhase) * 0.25;
+  renderer.box(p.x, y0 + 0.4 + bobY * 0.4, p.z, 0.42, 0.8, 0.42, c.pants, 1, yaw, lean, swim ? 0 : legSwing);
+  renderer.box(p.x, y0 + 0.4 - bobY * 0.4, p.z, 0.42, 0.8, 0.42, c.pants, 1, yaw, lean, swim ? 0 : -legSwing);
+  // shoes
+  renderer.box(p.x, y0 + 0.1, p.z, 0.46, 0.22, 0.6, c.shoes, 1, yaw, lean);
+  // torso
+  renderer.box(p.x, y0 + 1.15 + bobY, p.z, 0.95, 0.75, 0.55, c.shirt, 1, yaw, lean, swim ? 1.1 : 0);
+  // arms
+  renderer.box(p.x - 0.62, y0 + 1.15 + bobY, p.z, 0.3, 0.7, 0.3, c.shirt, 1, yaw, lean, swim ? 0 : -legSwing);
+  renderer.box(p.x + 0.62, y0 + 1.15 + bobY, p.z, 0.3, 0.7, 0.3, c.shirt, 1, yaw, lean, swim ? 0 : legSwing);
+  // head + hair
+  renderer.box(p.x, y0 + 1.85 + bobY, p.z, 0.62, 0.6, 0.6, c.skin, 1, yaw, lean);
+  renderer.box(p.x, y0 + 2.2 + bobY, p.z, 0.66, 0.28, 0.66, c.hair, 1, yaw, lean);
+  // carried cat rides on the shoulder
+  if (p.carryingCat) {
+    renderer.box(p.x + 0.5, y0 + 2.35 + bobY, p.z, 0.45, 0.4, 0.7, p.carryingCat.color, 1, yaw, lean);
   }
   // parachute canopy
-  if (p.parachute) {
-    renderer.box(p.x, y + 2.6, p.z, 2.4, 0.18, 2.4, yaw, COL.marker);
+  if (p.parachuting) {
+    renderer.box(p.x, y0 + 3.4, p.z, 3.4, 0.25, 2.2, [0.95, 0.4, 0.3], 1, yaw, 0);
   }
 }
+
+export { dist };
