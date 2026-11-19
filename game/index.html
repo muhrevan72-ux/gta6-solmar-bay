@@ -3,104 +3,113 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Bay — voxel open-world crime game</title>
+<title>Solmar Bay — open-world crime game</title>
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #f9b57e; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-  #wrap { position: relative; width: 100%; height: 100%; }
-  #game { display: block; width: 100%; height: 100%; }
-  #hud { position: absolute; top: 12px; left: 12px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.7); pointer-events: none; }
-  #cash { font-size: 28px; font-weight: 800; }
-  #healthbar-wrap { width: 180px; height: 10px; background: rgba(0,0,0,.5); border-radius: 5px; margin-top: 4px; }
-  #healthbar { height: 100%; width: 100%; background: #46d160; border-radius: 5px; }
-  #health, #armour { font-size: 14px; }
-  #wanted { font-size: 26px; letter-spacing: 2px; margin-top: 2px; }
-  #objective { font-size: 15px; margin-top: 6px; max-width: 320px; }
-  #speed { font-size: 20px; font-weight: 700; margin-top: 4px; }
-  #weapon, #bombs, #relationship, #clock { font-size: 14px; }
-  #clock { color: #bfe3ff; }
-  #phone { position: absolute; top: 12px; right: 224px; width: 300px; display: none; background: rgba(16, 16, 28, .92); color: #fff; border: 2px solid #555; border-radius: 14px; padding: 10px; z-index: 5; }
-  #phone-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
-  #phone-tabs button { flex: 1; font-size: 14px; padding: 6px 0; border: 0; border-radius: 6px; background: #333; color: #fff; cursor: pointer; }
-  #phone-tabs button:hover { background: #555; }
-  #phone-body { font-size: 14px; line-height: 1.5; min-height: 120px; }
-  #phone-body canvas { display: block; margin: 0 auto; border-radius: 8px; }
-  .phone-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #333; }
-  .phone-row button { font-size: 13px; padding: 4px 12px; border: 0; border-radius: 6px; background: #46d160; color: #111; font-weight: 700; cursor: pointer; }
-  .phone-msg { padding: 5px 0; border-bottom: 1px solid #333; }
-  .phone-hint, .phone-empty { font-size: 12px; opacity: .75; margin-top: 8px; }
-  #toast { position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%); color: #fff; background: rgba(0,0,0,.55); padding: 8px 16px; border-radius: 8px; font-size: 16px; pointer-events: none; }
-  #toast:empty { display: none; } /* an empty toast rendered as a small black oval at bottom-centre */
-  #minimap { position: absolute; top: 12px; right: 12px; width: 200px; height: 200px; border: 2px solid rgba(255,255,255,.6); border-radius: 6px; background: #1d2b1d; }
-  #crosshair { position: absolute; left: 50%; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; pointer-events: none; }
-  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #fff; box-shadow: 0 0 3px #000; }
-  #crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
-  #crosshair::after { left: 0; top: 8px; width: 18px; height: 2px; }
-  #menu { position: absolute; inset: 0; display: none; background: rgba(20, 12, 30, .55); color: #fff; text-align: center; padding-top: 12vh; }
-  #menu-title { font-size: 52px; font-weight: 900; letter-spacing: 4px; color: #ffd75e; text-shadow: 0 3px 0 #c22, 0 6px 18px rgba(0,0,0,.6); }
-  #menu-body { font-size: 17px; line-height: 1.6; max-width: 640px; margin: 18px auto; }
-  #menu-hint { font-size: 14px; opacity: .85; margin-top: 14px; }
-  #menu button { pointer-events: auto; font-size: 18px; padding: 10px 26px; margin: 6px; border: 0; border-radius: 8px; background: #ffd75e; color: #222; font-weight: 700; cursor: pointer; }
-  #menu button:hover { background: #ffe08a; }
-  #controls { position: absolute; bottom: 10px; left: 12px; color: #fff; font-size: 12px; text-shadow: 0 1px 2px rgba(0,0,0,.8); opacity: .9; }
-  /* dense HUD panels (graphics pass, top-4 formula) */
-  .panel { position: absolute; background: rgba(10, 10, 20, .62); border: 1px solid rgba(255,255,255,.25); border-radius: 8px; color: #fff; padding: 8px 12px; font-size: 13px; line-height: 1.45; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,.8); display: none; }
-  #mission-panel { left: 340px; top: 12px; width: 320px; }
-  #mission-panel .mp-title { font-size: 15px; font-weight: 800; color: #ffd75e; }
-  #mission-panel .mp-next { color: #bfe3ff; }
-  #mission-panel .mp-repbar { height: 6px; background: rgba(0,0,0,.5); border-radius: 3px; margin-top: 2px; }
-  #mission-panel .mp-repfill { height: 100%; background: #ffd75e; border-radius: 3px; }
-  #police-list { top: 224px; right: 12px; width: 200px; }
-  #police-list .pl-title { font-size: 13px; font-weight: 800; color: #ff8888; }
-  #police-list .pl-row { display: flex; justify-content: space-between; gap: 6px; }
-  #police-list .pl-status { color: #ffb0b0; }
-  #radio { bottom: 36px; right: 12px; text-align: right; }
-  #radio .r-station { font-weight: 800; color: #ffd75e; }
-  #carinfo { bottom: 66px; right: 12px; text-align: right; }
-  #carinfo .c-name { font-weight: 800; }
-  #dialogue { bottom: 150px; left: 50%; transform: translateX(-50%); max-width: 520px; text-align: center; }
-  #dialogue .d-from { font-weight: 800; color: #ffd75e; }
+  html, body { margin: 0; padding: 0; background: #101018; color: #f2f2f2;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  #wrap { position: relative; width: 1280px; height: 720px; margin: 0 auto; }
+  canvas#game { width: 1280px; height: 720px; display: block; background: #f7b98a; }
+  .hud { position: absolute; pointer-events: none; text-shadow: 0 1px 2px rgba(0,0,0,.7); }
+  #hud-top-left { top: 12px; left: 12px; font-size: 20px; font-weight: 700; }
+  #hud-health { top: 40px; left: 12px; font-size: 15px; }
+  #hud-wanted { top: 64px; left: 12px; font-size: 20px; color: #ffd21f; letter-spacing: 2px; }
+  #hud-clock { top: 12px; left: 50%; transform: translateX(-50%); font-size: 15px; }
+  #hud-district { top: 34px; left: 50%; transform: translateX(-50%); font-size: 13px; color: #cfe3ff; }
+  #hud-mission { top: 12px; right: 220px; width: 300px; font-size: 13px; line-height: 1.45;
+    background: rgba(10,10,20,.55); padding: 8px 10px; border-radius: 6px; }
+  #hud-police { top: 170px; right: 220px; width: 300px; font-size: 12px; line-height: 1.5;
+    background: rgba(10,10,20,.45); padding: 6px 10px; border-radius: 6px; }
+  #hud-minimap { position: absolute; top: 12px; right: 12px; width: 200px; height: 200px;
+    border: 2px solid rgba(255,255,255,.6); border-radius: 50%; background: #0d2b1a; }
+  #hud-respect { bottom: 96px; left: 12px; font-size: 14px; }
+  #hud-weapons { bottom: 72px; left: 12px; font-size: 14px; }
+  #hud-car { bottom: 48px; left: 12px; font-size: 14px; color: #ffe9a8; }
+  #hud-radio { bottom: 24px; left: 12px; font-size: 14px; color: #9fd8ff; }
+  #hud-speed { bottom: 12px; right: 12px; font-size: 26px; font-weight: 700; }
+  #hud-objective { bottom: 12px; left: 50%; transform: translateX(-50%); font-size: 14px; }
+  #hud-dialogue { bottom: 120px; left: 50%; transform: translateX(-50%); width: 520px;
+    font-size: 14px; line-height: 1.5; background: rgba(10,10,20,.7);
+    padding: 8px 12px; border-radius: 6px; display: none; }
+  #hud-toast { top: 110px; left: 12px; font-size: 14px; line-height: 1.6; }
+  #hud-toast:empty { display: none; }
+  .overlay { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: rgba(8,8,16,.72); pointer-events: auto; }
+  .overlay .panel { max-width: 560px; background: #181828; border: 1px solid #444;
+    border-radius: 10px; padding: 24px 28px; text-align: center; }
+  .overlay h1, .overlay h2 { margin: 0 0 10px; color: #ffd21f; }
+  .overlay p { line-height: 1.55; font-size: 15px; }
+  .overlay button { pointer-events: auto; font-size: 16px; padding: 10px 22px; margin: 6px;
+    border: 0; border-radius: 6px; background: #ffd21f; color: #181828; font-weight: 700; cursor: pointer; }
+  #hud-phone { position: absolute; right: 230px; top: 90px; width: 260px; display: none;
+    background: #111; border: 2px solid #444; border-radius: 12px; padding: 10px;
+    pointer-events: auto; font-size: 13px; }
+  #hud-phone .tabs button { background: #333; color: #fff; border: 0; border-radius: 4px;
+    padding: 4px 8px; margin-right: 4px; cursor: pointer; }
+  #hud-phone .contact { padding: 6px; border-bottom: 1px solid #333; cursor: pointer; }
+  #hud-phone .contact:hover { background: #222; }
+  #hud-phone .msg { padding: 5px 6px; border-bottom: 1px solid #222; }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px;
+    transform: translate(-50%,-50%); pointer-events: none; }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #fff; }
+  #crosshair::before { left: 6px; top: 0; width: 2px; height: 14px; }
+  #crosshair::after { top: 6px; left: 0; width: 14px; height: 2px; }
 </style>
 </head>
 <body>
 <div id="wrap">
   <canvas id="game" width="1280" height="720"></canvas>
-  <div id="hud">
-    <div id="cash">$150</div>
-    <div id="healthbar-wrap"><div id="healthbar"></div></div>
-    <div id="health">100 HP</div>
-    <div id="armour"></div>
-    <div id="wanted">&#9734;&#9734;&#9734;&#9734;&#9734;</div>
-    <div id="objective">Steal a car and drive to the garage.</div>
-    <div id="speed">0 km/h</div>
-    <div id="weapon">Weapon: Pistol</div>
-    <div id="bombs">Bombs: 3</div>
-    <div id="relationship"></div>
-    <div id="clock"></div>
-  </div>
-  <div id="phone">
-    <div id="phone-tabs"></div>
-    <div id="phone-body"></div>
-  </div>
-  <div id="mission-panel" class="panel"></div>
-  <div id="police-list" class="panel"></div>
-  <div id="radio" class="panel"></div>
-  <div id="carinfo" class="panel"></div>
-  <div id="dialogue" class="panel"></div>
-  <canvas id="minimap" width="200" height="200"></canvas>
   <div id="crosshair"></div>
-  <div id="toast"></div>
-  <div id="menu">
-    <div id="menu-title">SOLMAR BAY</div>
-    <div id="menu-body"></div>
-    <div>
+  <div class="hud" id="hud-top-left"><span id="hud-cash">$150</span></div>
+  <div class="hud" id="hud-health">HP 100</div>
+  <div class="hud" id="hud-wanted">☆☆☆☆☆</div>
+  <div class="hud" id="hud-clock">Day 1 · 16:00 · day · clear</div>
+  <div class="hud" id="hud-district">Downtown</div>
+  <div class="hud" id="hud-mission"></div>
+  <div class="hud" id="hud-police"></div>
+  <canvas id="hud-minimap" width="200" height="200"></canvas>
+  <div class="hud" id="hud-respect">Nobody · 0 REP</div>
+  <div class="hud" id="hud-weapons">[Pistol ∞] SMG — Shotgun —</div>
+  <div class="hud" id="hud-car"></div>
+  <div class="hud" id="hud-radio">BAY FM 94.7 — Golden Hour Drive</div>
+  <div class="hud" id="hud-speed">0 km/h</div>
+  <div class="hud" id="hud-objective"></div>
+  <div class="hud" id="hud-dialogue"></div>
+  <div class="hud" id="hud-toast"></div>
+  <div id="hud-phone">
+    <div class="tabs">
+      <button data-tab="contacts">Contacts</button>
+      <button data-tab="messages">Messages</button>
+      <button data-tab="map">Map</button>
+    </div>
+    <div id="phone-body">
+      <div class="contact" data-contact="Taxi">Taxi — Bay Taxi Co.</div>
+      <div class="contact" data-contact="Maya">Maya — Girlfriend</div>
+      <div class="contact" data-contact="Rico">Rico — Crew boss</div>
+    </div>
+  </div>
+  <div class="overlay" id="hud-menu" style="display:flex">
+    <div class="panel">
+      <h1>SOLMAR BAY</h1>
+      <p>An original open-world crime game. Sun, sand, and no money in your pocket.
+      Steal a car, outrun the cops, run the story — and own the bay.</p>
+      <p><b>Controls:</b> WASD move · Shift run · E interact / enter car · F punch · G bomb ·
+      Click shoot · 1/2/3 weapons · Space handbrake · Tab phone · R radio · M mute · Esc pause</p>
       <button id="btn-new">New Game</button>
       <button id="btn-continue">Continue</button>
-      <button id="btn-resume" style="display:none">Resume</button>
     </div>
-    <div id="menu-hint"></div>
   </div>
-  <div id="controls">WASD move &middot; Shift run &middot; E interact / enter car &middot; F punch &middot; G bomb &middot; Click shoot &middot; 1/2/3 weapons &middot; Space handbrake / parachute &middot; Tab phone &middot; R radio &middot; Esc pause &middot; M mute</div>
+  <div class="overlay" id="hud-card">
+    <div class="panel">
+      <h2 id="card-title"></h2>
+      <p id="card-text"></p>
+      <p><i>Press Enter to start.</i></p>
+    </div>
+  </div>
 </div>
-<script type="module" src="./src/main.js"></script>
+<script type="module">
+  import { boot } from './src/main.js';
+  const canvas = document.getElementById('game');
+  boot(canvas);
+</script>
 </body>
 </html>
