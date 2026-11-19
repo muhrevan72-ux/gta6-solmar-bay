@@ -1,13 +1,13 @@
 // Solmar Bay — WebAudio synth sound + the radio.
-// No audio files: every sound is a small oscillator pattern. All
-// audio is guarded — with no AudioContext (headless tests, muted
-// browser) the sequencer still advances so tests can verify songs,
-// stations and timing, it just makes no noise.
+//
+// No audio files: every sound is synthesized (engine hum by speed,
+// siren, pickup blip, punch thud, mission jingle, and the radio's
+// original sequencer songs). The AudioContext is created lazily on
+// the first user gesture, so loading the page never needs audio
+// permission; every play function no-ops while the context is null,
+// which is also what makes the module headless-testable.
 
 import { STATIONS, SONG_STEPS } from './config.js';
-
-const SCALE = [0, 2, 4, 5, 7, 9, 11, 12]; // major scale steps
-const BASE_FREQ = 220;
 
 export function createAudio() {
   return {
@@ -21,75 +21,89 @@ export function createAudio() {
   };
 }
 
-function ensureCtx(audio) {
-  if (audio.ctx) return audio.ctx;
-  if (typeof window === 'undefined') return null;
-  const AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC) return null;
-  audio.ctx = new AC();
-  audio.master = audio.ctx.createGain();
-  audio.master.gain.value = audio.muted ? 0 : 0.35;
-  audio.master.connect(audio.ctx.destination);
-  return audio.ctx;
+// Lazily create (and resume) the audio context. Safe to call often.
+export function ensureAudio(audio) {
+  if (audio.muted) return null;
+  try {
+    if (typeof window === 'undefined' || !window.AudioContext) return null;
+    if (!audio.ctx) {
+      audio.ctx = new window.AudioContext();
+      audio.master = audio.ctx.createGain();
+      audio.master.gain.value = 0.5;
+      audio.master.connect(audio.ctx.destination);
+    }
+    if (audio.ctx.state === 'suspended') audio.ctx.resume();
+    return audio.ctx;
+  } catch (e) {
+    return null;
+  }
 }
 
-// One short synth blip. Safe to call headless: no-ops without a ctx.
 export function playTone(audio, freq, dur, type, vol, when) {
-  const ctx = ensureCtx(audio);
-  if (!ctx || audio.muted) return;
-  const t = ctx.currentTime + (when || 0);
-  const osc = ctx.createOscillator();
-  const g = ctx.createGain();
-  osc.type = type || 'sine';
-  osc.frequency.value = freq;
-  g.gain.setValueAtTime(vol === undefined ? 0.2 : vol, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  osc.connect(g);
-  g.connect(audio.master);
-  osc.start(t);
-  osc.stop(t + dur + 0.02);
+  const ctx = ensureAudio(audio);
+  if (!ctx) return;
+  try {
+    const t0 = ctx.currentTime + (when || 0);
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = type || 'sine';
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(vol || 0.2, t0);
+    g.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
+    osc.connect(g);
+    g.connect(audio.master);
+    osc.start(t0);
+    osc.stop(t0 + dur + 0.02);
+  } catch (e) { /* audio must never break the game */ }
 }
 
 export function playBlip(audio) {
-  playTone(audio, 880, 0.08, 'sine', 0.2);
-}
-export function playThud(audio) {
-  playTone(audio, 90, 0.15, 'square', 0.3);
-}
-export function playJingle(audio) {
-  playTone(audio, 523, 0.12, 'sine', 0.25);
-  playTone(audio, 659, 0.12, 'sine', 0.25, 0.12);
-  playTone(audio, 784, 0.25, 'sine', 0.25, 0.24);
-}
-export function playSirenBlip(audio) {
-  playTone(audio, 700, 0.18, 'triangle', 0.12);
-  playTone(audio, 950, 0.18, 'triangle', 0.12, 0.18);
+  playTone(audio, 880, 0.08, 'sine', 0.15);
+  playTone(audio, 1320, 0.06, 'sine', 0.1, 0.05);
 }
 
-// Engine hum follows the driven car's speed.
+export function playThud(audio) {
+  playTone(audio, 90, 0.12, 'triangle', 0.3);
+}
+
+export function playJingle(audio) {
+  const notes = [523, 659, 784, 1047];
+  notes.forEach((f, i) => playTone(audio, f, 0.18, 'triangle', 0.2, i * 0.09));
+}
+
+export function playSirenBlip(audio) {
+  playTone(audio, 700, 0.15, 'square', 0.06);
+  playTone(audio, 950, 0.15, 'square', 0.06, 0.15);
+}
+
+// Continuous engine hum whose pitch follows the car's speed.
 export function engineHum(audio, speedNorm) {
-  const ctx = ensureCtx(audio);
-  if (!ctx || audio.muted) return;
-  if (!audio.engineOsc) {
-    audio.engineOsc = ctx.createOscillator();
-    audio.engineGain = ctx.createGain();
-    audio.engineOsc.type = 'sawtooth';
-    audio.engineOsc.frequency.value = 60;
-    audio.engineGain.gain.value = 0;
-    audio.engineOsc.connect(audio.engineGain);
-    audio.engineGain.connect(audio.master);
-    audio.engineOsc.start();
-  }
-  audio.engineOsc.frequency.value = 50 + speedNorm * 140;
-  audio.engineGain.gain.value = 0.02 + speedNorm * 0.05;
+  const ctx = ensureAudio(audio);
+  if (!ctx) return;
+  try {
+    if (!audio.engineOsc) {
+      audio.engineOsc = ctx.createOscillator();
+      audio.engineGain = ctx.createGain();
+      audio.engineOsc.type = 'sawtooth';
+      audio.engineOsc.frequency.value = 60;
+      audio.engineGain.gain.value = 0;
+      audio.engineOsc.connect(audio.engineGain);
+      audio.engineGain.connect(audio.master);
+      audio.engineOsc.start();
+    }
+    const target = speedNorm > 0.02 ? 0.05 + speedNorm * 0.06 : 0;
+    audio.engineGain.gain.setTargetAtTime(target, ctx.currentTime, 0.1);
+    audio.engineOsc.frequency.setTargetAtTime(50 + speedNorm * 160, ctx.currentTime, 0.1);
+  } catch (e) { /* never break the game */ }
 }
 
 export function setMuted(audio, m) {
   audio.muted = m;
-  if (audio.master) audio.master.gain.value = m ? 0 : 0.35;
+  if (audio.master) audio.master.gain.value = m ? 0 : 0.5;
 }
 
-// ---- radio: 4 stations, 8 original synth songs ----
+// ---- radio: 4 original stations, 8 original synth songs ----
+
 export function createRadio() {
   return {
     station: 0, // index into STATIONS
@@ -100,10 +114,10 @@ export function createRadio() {
   };
 }
 
-// The station + song currently playing (for the HUD).
 export function radioNow(radio) {
   const st = STATIONS[radio.station];
-  return { station: st.name, freq: st.freq, genre: st.genre, song: st.songs[radio.songIdx].title };
+  const song = st.songs[radio.songIdx];
+  return { station: st.name + ' ' + st.freq, freq: st.freq, genre: st.genre, song: song.title };
 }
 
 export function nextStation(radio) {
@@ -114,24 +128,25 @@ export function nextStation(radio) {
   return radioNow(radio);
 }
 
-// Advance the sequencer. Plays notes when audio exists; advances the
-// step counter regardless, so headless tests can verify the song
-// moves on and the station changes.
+// Advance the sequencer; plays the current step's note through the
+// synth. Songs rotate on their own when one finishes.
 export function advanceRadio(radio, audio, dt) {
   radio.stepT += dt;
-  while (radio.stepT >= radio.stepDur) {
-    radio.stepT -= radio.stepDur;
-    radio.step++;
+  if (radio.stepT < radio.stepDur) return;
+  radio.stepT -= radio.stepDur;
+  radio.step = (radio.step + 1) % SONG_STEPS;
+  if (radio.step === 0) {
     const st = STATIONS[radio.station];
-    const song = st.songs[radio.songIdx];
-    const note = song.notes[radio.step % song.notes.length];
-    const freq = BASE_FREQ * Math.pow(2, SCALE[note % SCALE.length] / 12);
-    playTone(audio, freq, 0.18, 'triangle', 0.07);
-    if (radio.step >= SONG_STEPS) {
-      radio.step = 0;
-      radio.songIdx = (radio.songIdx + 1) % st.songs.length;
-    }
+    radio.songIdx = (radio.songIdx + 1) % st.songs.length;
   }
+  const st = STATIONS[radio.station];
+  const song = st.songs[radio.songIdx];
+  const note = song.notes[radio.step % song.notes.length];
+  // A minor-pentatonic ladder on A3 (220 Hz).
+  const scale = [0, 3, 5, 7, 10, 12, 15, 17, 19, 22, 24];
+  const semi = scale[note % scale.length] + 12 * Math.floor(note / scale.length);
+  const freq = 220 * Math.pow(2, semi / 12);
+  playTone(audio, freq, 0.2, 'triangle', 0.08);
+  // Soft bass on the downbeat.
+  if (radio.step % 8 === 0) playTone(audio, 110, 0.25, 'sine', 0.12);
 }
-
-export { STATIONS, SONG_STEPS };

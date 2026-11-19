@@ -1,109 +1,91 @@
-// Solmar Bay — dating (wholesome, GTA San Andreas style).
-//
-// Maya, the girlfriend NPC, waits at the beach house. Press E to
-// start a date: drive her to the viewpoint, eat at a food shop
-// together, drop her home. Relationship meter 0-100% in the HUD;
-// milestones give small bonuses (she calls with a tip, tops up
-// health, gifts cash). Dates, conversation and gifts only — nothing
-// sexual.
+// Solmar Bay — dating: Maya and Rico, two named NPCs the player
+// can meet, talk to, and take on dates. A date is a walk to a spot
+// (beach or pier) together; completing one gives +10 respect and a
+// dialogue line. Maya and Rico also appear as phone contacts
+// (Digit 5 / Digit 6 on the phone).
 
-import { dist2 } from './config.js';
-import { addCash, addRespect, healPlayer, showToast, showDialogue } from './state.js';
+import { showToast, showDialogue, addRespect } from './state.js';
+
+const NPCS = [
+  { name: 'Maya', role: 'Beach lifeguard', x: -280, z: 120, shirt: [1, 0.5, 0.6], hair: [0.3, 0.2, 0.1] },
+  { name: 'Rico', role: 'Garage mechanic', x: 150, z: -110, shirt: [0.2, 0.5, 0.9], hair: [0.1, 0.1, 0.1] },
+];
 
 export function createDating() {
   return {
-    maya: { x: -310, z: 100, heading: 0 }, // beach house
-    onDate: false,
-    stage: 0, // 0 idle, 1 drive to viewpoint, 2 eat together, 3 drop home
-    relationship: 0, // 0..100
-    ateTogether: false,
-    milestones: {}, // 25/50/75/100 claimed
+    npcs: NPCS.map((n) => ({ ...n, heading: 0, bob: 0, dateT: 0, onDate: false })),
+    date: null, // {npc, target, stage}
   };
 }
 
-export function startDate(game) {
-  const d = game.dating;
-  if (d.onDate) return false;
-  d.onDate = true;
-  d.stage = 1;
-  d.ateTogether = false;
-  showDialogue(game.state, 'Maya', 'Girlfriend', 'Take me somewhere with a view, then food. I\'m starving!', 6);
-  showToast(game.state, 'Date with Maya: drive her to the viewpoint (-300, 250).', 4);
-  return true;
-}
-
-const VIEWPOINT = { x: -300, z: 250 };
-const MAYA_HOME = { x: -310, z: 100 };
-
 export function stepDating(game, dt) {
   const d = game.dating;
-  if (!d.onDate) return;
   const p = game.state.player;
-  if (d.stage === 1) {
-    if (dist2(p.x, p.z, VIEWPOINT.x, VIEWPOINT.z) < 144) {
-      d.stage = 2;
-      showDialogue(game.state, 'Maya', 'Girlfriend', 'Wow, look at that sunset. Now let\'s eat — any food shop!', 6);
-      showToast(game.state, 'Viewpoint reached! Now eat together at a food shop.', 3);
-    }
-  } else if (d.stage === 2) {
-    if (d.ateTogether) {
-      d.stage = 3;
-      showDialogue(game.state, 'Maya', 'Girlfriend', 'That was lovely. Take me home now?', 5);
-      showToast(game.state, 'Dinner done! Drop Maya home at the beach house.', 3);
-    }
-  } else if (d.stage === 3) {
-    if (dist2(p.x, p.z, MAYA_HOME.x, MAYA_HOME.z) < 100) {
-      endDate(game, true);
-    }
-  }
-}
-
-function endDate(game, success) {
-  const d = game.dating;
-  d.onDate = false;
-  d.stage = 0;
-  d.ateTogether = false;
-  if (success) {
-    d.relationship = Math.min(100, d.relationship + 20);
-    addRespect(game.state, 10);
-    showDialogue(game.state, 'Maya', 'Girlfriend', 'Best date ever. See you soon!', 5);
-    showToast(game.state, 'Date complete! Relationship ' + d.relationship + '% (+10 REP).', 3);
-    // Milestones.
-    for (const m of [25, 50, 75, 100]) {
-      if (d.relationship >= m && !d.milestones[m]) {
-        d.milestones[m] = true;
-        if (m === 25) {
-          showToast(game.state, 'Maya calls with a tip: a parked Comet is near the garage.', 4);
-        } else if (m === 50) {
-          healPlayer(game.state, 100);
-          showToast(game.state, 'Maya patched you up. +100 HP!', 3);
-        } else if (m === 75) {
-          addCash(game.state, 200);
-          showToast(game.state, 'Maya gifted you $200!', 3);
-        } else if (m === 100) {
-          addCash(game.state, 500);
-          showToast(game.state, 'Maya: "You\'re my favourite criminal." +$500!', 4);
-        }
+  for (const npc of d.npcs) {
+    npc.bob += dt * 1.5;
+    if (npc.onDate) {
+      // Follow the player at 2 m.
+      const dx = p.x - npc.x, dz = p.z - npc.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 2.5) {
+        npc.heading = Math.atan2(dx, dz);
+        npc.x += (dx / dist) * 4 * dt;
+        npc.z += (dz / dist) * 4 * dt;
       }
     }
   }
-}
-
-export function mayaBoxes(game, out) {
-  const d = game.dating;
-  // Maya: pink top, dark hair, standing at the beach house (or riding
-  // with the player on a date — she follows the car).
-  let x = d.maya.x;
-  let z = d.maya.z;
-  if (d.onDate && game.state.player.inCar) {
-    const v = game.state.player.inCar;
-    x = v.x - Math.sin(v.heading) * 1;
-    z = v.z - Math.cos(v.heading) * 1;
+  if (d.date) {
+    const npc = d.date.npc;
+    const t = d.date.target;
+    if (Math.hypot(p.x - t.x, p.z - t.z) < 6 && Math.hypot(npc.x - t.x, npc.z - t.z) < 8) {
+      d.date = null;
+      npc.onDate = false;
+      addRespect(game.state, 10);
+      showDialogue(game.state, npc.name, npc.role, 'This is nice. Same time tomorrow?', 8);
+      showToast(game.state, 'Date complete! +10 REP', 4);
+    }
   }
-  out.pushBox(x, 0.45, z, 0.6, 0.9, 0.35, [0.25, 0.35, 0.6]);
-  out.pushBox(x, 1.25, z, 0.8, 0.75, 0.42, [1.0, 0.5, 0.7]);
-  out.pushBox(x, 1.95, z, 0.52, 0.52, 0.48, [0.95, 0.8, 0.65]);
-  out.pushBox(x, 2.2, z, 0.54, 0.2, 0.5, [0.15, 0.1, 0.08]);
 }
 
-export { VIEWPOINT, MAYA_HOME };
+// Start a date with the nearest NPC (E within 3 m).
+export function tryDate(game) {
+  const d = game.dating;
+  const p = game.state.player;
+  for (const npc of d.npcs) {
+    if (Math.hypot(npc.x - p.x, npc.z - p.z) < 3 && !npc.onDate) {
+      npc.onDate = true;
+      const spot = npc.name === 'Maya' ? { x: -300, z: 140 } : { x: -330, z: 100 };
+      d.date = { npc, target: spot, stage: 0 };
+      showDialogue(game.state, npc.name, npc.role, 'Let\'s go for a walk — meet me at the pier.', 8);
+      showToast(game.state, 'Date with ' + npc.name + ' — walk to the pier together.', 5);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Called from the phone (Digit 5 Maya, Digit 6 Rico): the NPC walks
+// to the player.
+export function callDateNPC(game, name) {
+  const d = game.dating;
+  const p = game.state.player;
+  const npc = d.npcs.find((n) => n.name === name);
+  if (!npc) return false;
+  npc.x = p.x + 3;
+  npc.z = p.z + 3;
+  npc.onDate = true;
+  showToast(game.state, name + ' is on their way to you.', 4);
+  return true;
+}
+
+export function datingBoxes(game, out) {
+  for (const npc of game.dating.npcs) {
+    const swing = Math.sin(npc.bob) * 0.3;
+    out.pushBoxRot(npc.x - 0.11, 0.45, npc.z, 0.18, 0.9, 0.18, [0.3, 0.3, 0.35], npc.heading + swing * 0.1);
+    out.pushBoxRot(npc.x + 0.11, 0.45, npc.z, 0.18, 0.9, 0.18, [0.3, 0.3, 0.35], npc.heading - swing * 0.1);
+    out.pushBoxRot(npc.x, 1.25, npc.z, 0.5, 0.7, 0.28, npc.shirt, npc.heading);
+    out.pushBoxRot(npc.x, 1.82, npc.z, 0.34, 0.36, 0.32, [0.9, 0.75, 0.6], npc.heading);
+    out.pushBoxRot(npc.x, 2.02, npc.z, 0.36, 0.12, 0.34, npc.hair, npc.heading);
+    out.pushFlat(npc.x, 0.06, npc.z, 0.7, 0.7, [0, 0, 0], npc.heading);
+  }
+}

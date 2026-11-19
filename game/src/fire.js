@@ -1,80 +1,72 @@
-// Solmar Bay — firefighters: red fire truck, fire station, fires.
+// Solmar Bay — fire: fires break out in the city, the player
+// extinguishes them (E near a fire with the fire truck nearby, or
+// just E near a fire) for $150 + 15 respect per fire.
 //
-// Fires spawn (a burning car or building corner, with smoke + flame
-// boxes). Firefighter side job: drive the truck near a fire and hold
-// E to spray; extinguishing pays $150 + 15 respect.
+// A fire is a flickering orange/red box stack with smoke. The fire
+// station is at (150, 132); the fire truck is parked there.
 
-import { TUNE, dist2 } from './config.js';
-import { addCash, addRespect, showToast } from './state.js';
-import { clearSpot } from './world.js';
+import { TUNE, COL } from './config.js';
+import { showToast, addCash, addRespect } from './state.js';
 
-export function createFire() {
+export function createFire(city) {
   return {
-    fires: [], // {x, z, t, hp}
-    spawnT: 45, // seconds until the next fire
-    spraying: 0,
+    fires: [], // {x, z, size, t}
+    spawnT: 30, // seconds until the next fire
+    truck: { x: 150, z: 132, heading: 0 },
   };
-}
-
-function spawnFire(game) {
-  const city = game.city;
-  for (let tries = 0; tries < 20; tries++) {
-    const x = -300 + Math.random() * 600;
-    const z = -300 + Math.random() * 600;
-    if (!clearSpot(city, x, z, 2)) continue;
-    if (dist2(x, z, game.state.player.x, game.state.player.z) < 2500) continue;
-    game.fire.fires.push({ x, z, t: 0, hp: 100 });
-    showToast(game.state, 'Fire reported! Grab the fire truck and put it out ($150).', 4);
-    return true;
-  }
-  return false;
 }
 
 export function stepFire(game, dt) {
   const f = game.fire;
+  const s = game.state;
+  // A new fire every ~60-90 s, max 3 at once.
   f.spawnT -= dt;
   if (f.spawnT <= 0) {
-    f.spawnT = 60 + Math.random() * 60;
-    if (f.fires.length < 3) spawnFire(game);
+    f.spawnT = 60 + Math.random() * 30;
+    if (f.fires.length < 3) {
+      const b = game.city.buildings[Math.floor(Math.random() * game.city.buildings.length)];
+      f.fires.push({ x: b.x, z: b.z, size: 2 + Math.random() * 2, t: 0 });
+      const label = b.kind.startsWith('shop') ? 'a shop' : b.kind === 'tower' ? 'a tower' : 'a ' + b.kind;
+      showToast(s, 'A fire broke out in ' + label + '! Put it out for $150.', 5);
+    }
   }
-  const p = game.state.player;
-  const inTruck = p.inCar && p.inCar.type === 'fire';
+  for (const fire of f.fires) fire.t += dt;
+}
+
+// Extinguish: E within 5 m of a fire. Called from main.js's E
+// dispatcher (not from stepFire) so E is consumed exactly once.
+export function tryFire(game) {
+  const f = game.fire;
+  const s = game.state;
+  const p = s.player;
+  let putOut = false;
   for (let i = f.fires.length - 1; i >= 0; i--) {
     const fire = f.fires[i];
-    fire.t += dt;
-    // Spray: hold E while in the fire truck near the fire. (E is a
-    // tap key, so the spray runs while the truck is near and the
-    // player holds the key down.)
-    if (inTruck && dist2(p.x, p.z, fire.x, fire.z) < 144) {
-      if (game.input.down.has('KeyE')) {
-        fire.hp -= 40 * dt;
-        f.spraying = 0.2;
-      }
-    }
-    if (fire.hp <= 0) {
-      addCash(game.state, TUNE.fireReward);
-      addRespect(game.state, 15);
-      game.state.stats.fires++;
-      showToast(game.state, 'Fire out! +$' + TUNE.fireReward + ' +15 REP', 3);
+    if (Math.hypot(fire.x - p.x, fire.z - p.z) < 5) {
       f.fires.splice(i, 1);
-    } else if (fire.t > 180) {
-      // Burns itself out.
-      f.fires.splice(i, 1);
+      addCash(s, TUNE.fireReward);
+      addRespect(s, 15);
+      s.stats.fires++;
+      showToast(s, 'Fire out! +$' + TUNE.fireReward + ', +15 REP', 4);
+      putOut = true;
     }
   }
-  if (f.spraying > 0) f.spraying -= dt;
+  return putOut;
 }
 
 export function fireBoxes(game, out) {
-  for (const fire of game.fire.fires) {
-    // Flame (flickering orange/yellow) + smoke (grey, rising).
-    const flick = 0.8 + Math.sin(fire.t * 9) * 0.3;
-    out.pushBox(fire.x, 1.2, fire.z, 2.4, 2.4 * flick, 2.4, [1.0, 0.45, 0.1]);
-    out.pushBox(fire.x, 2.6, fire.z, 1.6, 1.6, 1.6, [1.0, 0.8, 0.2]);
-    out.pushBox(fire.x, 4.5 + Math.sin(fire.t * 2) * 0.5, fire.z, 2, 2, 2, [0.35, 0.35, 0.38]);
+  const f = game.fire;
+  for (const fire of f.fires) {
+    const flicker = 0.8 + Math.sin(fire.t * 12) * 0.2;
+    out.pushBox(fire.x, 1, fire.z, fire.size, 2 * flicker, fire.size, [1, 0.4 * flicker, 0.1]);
+    out.pushBox(fire.x + 0.5, 2.5, fire.z, fire.size * 0.6, 1.5, fire.size * 0.6, [1, 0.6, 0.1]);
+    // Smoke.
+    out.pushBox(fire.x, 4.5 + Math.sin(fire.t * 2) * 0.3, fire.z, 1.5, 1.5, 1.5, [0.3, 0.3, 0.3]);
   }
-  if (game.fire.spraying > 0) {
-    const p = game.state.player;
-    out.pushBox(p.x + Math.sin(p.heading) * 6, 1, p.z + Math.cos(p.heading) * 6, 1.5, 1.5, 1.5, [0.6, 0.8, 1.0]);
-  }
+  // Fire truck at the station.
+  const t = f.truck;
+  out.pushBoxRot(t.x, 0.8, t.z, 2.2, 1.6, 5, [0.9, 0.1, 0.1], t.heading);
+  out.pushBoxRot(t.x, 1.8, t.z + 1, 2.0, 0.8, 2, [0.9, 0.1, 0.1], t.heading);
+  out.pushBoxRot(t.x, 1.9, t.z + 2.2, 1.8, 0.4, 0.1, [0.8, 0.8, 0.9], t.heading);
+  out.pushFlat(t.x, 0.06, t.z, 2.6, 5.4, [0, 0, 0], t.heading);
 }

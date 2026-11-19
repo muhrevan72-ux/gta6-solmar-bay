@@ -1,101 +1,95 @@
-// Solmar Bay — cats: small voxel cats wandering the city (beach and
-// shops), cute. Press E near a cat to pick it up and carry it (shown
-// riding on the player's shoulder); press E again to put it down.
-// Pure fun — no wanted, no cash.
+// Solmar Bay — cats: the city has stray cats. E near a cat picks
+// it up (it rides on the player's shoulder); E again at the
+// safehouse puts it down for $20. Cats wander the sidewalks and
+// meow (a soft blip).
 
-import { dist2 } from './config.js';
-import { showToast } from './state.js';
-import { randomSidewalkPoint, collideCircle } from './world.js';
+import { showToast, addCash } from './state.js';
+import { playBlip } from './audio.js';
+import { randomSidewalkPoint } from './world.js';
+import { makeRng } from './config.js';
 
-export function createCats(city, rng) {
-  const list = [];
-  const spots = [
-    { x: -310, z: 100 }, { x: -60, z: -20 }, { x: 40, z: 120 },
-    { x: 120, z: 68 }, { x: -40, z: 70 }, { x: 0, z: 40 },
-  ];
-  for (let i = 0; i < 6; i++) {
-    const s = spots[i];
-    list.push({
-      x: s.x + (rng() - 0.5) * 6,
-      z: s.z + (rng() - 0.5) * 6,
-      heading: rng() * Math.PI * 2,
+export function createCats(city) {
+  const cats = [];
+  for (let i = 0; i < 5; i++) {
+    const pt = randomSidewalkPoint(city, makeRng(500 + i * 17));
+    cats.push({
+      x: pt.x, z: pt.z, heading: Math.random() * Math.PI * 2,
+      bob: Math.random() * Math.PI * 2,
+      waitT: 2 + i,
       target: null,
-      bob: rng() * 6,
-      colour: [[0.9, 0.85, 0.7], [0.2, 0.2, 0.22], [0.85, 0.6, 0.4]][i % 3],
       carried: false,
+      color: [[0.9, 0.85, 0.7], [0.2, 0.2, 0.2], [0.9, 0.6, 0.3]][i % 3],
     });
   }
-  return { list };
+  return cats;
 }
 
 export function stepCats(game, dt) {
-  for (const cat of game.cats.list) {
+  const p = game.state.player;
+  for (const cat of game.cats) {
     if (cat.carried) {
-      // Rides on the player's shoulder.
-      cat.x = game.state.player.x;
-      cat.z = game.state.player.z;
+      cat.x = p.x;
+      cat.z = p.z;
       continue;
     }
-    if (!cat.target || dist2(cat.x, cat.z, cat.target.x, cat.target.z) < 2) {
+    cat.waitT -= dt;
+    if (cat.waitT <= 0) {
+      cat.waitT = 3 + Math.random() * 5;
       cat.target = randomSidewalkPoint(game.city, Math.random);
     }
-    const d = Math.sqrt(dist2(cat.x, cat.z, cat.target.x, cat.target.z)) || 1;
-    const nx = cat.x + ((cat.target.x - cat.x) / d) * 1.2 * dt;
-    const nz = cat.z + ((cat.target.z - cat.z) / d) * 1.2 * dt;
-    if (!collideCircle(game.city, nx, nz, 0.5)) {
-      cat.x = nx;
-      cat.z = nz;
-    }
-    cat.heading = Math.atan2((cat.target.x - cat.x), (cat.target.z - cat.z));
-    cat.bob += dt * 2;
-  }
-}
-
-export function nearestCat(game, x, z, range) {
-  let best = null;
-  let bestD = range * range;
-  for (const cat of game.cats.list) {
-    if (cat.carried) continue;
-    const d = dist2(x, z, cat.x, cat.z);
-    if (d < bestD) {
-      bestD = d;
-      best = cat;
+    if (cat.target) {
+      const dx = cat.target.x - cat.x, dz = cat.target.z - cat.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 0.5) {
+        cat.heading = Math.atan2(dx, dz);
+        cat.x += (dx / d) * 1.2 * dt;
+        cat.z += (dz / d) * 1.2 * dt;
+        cat.bob += dt * 6;
+      }
     }
   }
-  return best;
 }
 
-export function pickupCat(game, cat) {
-  const p = game.state.player;
-  if (p.carryingCat) return false;
-  cat.carried = true;
-  p.carryingCat = cat;
-  showToast(game.state, 'You picked up the cat. It purrs on your shoulder.', 2);
-  return true;
-}
-
-export function putDownCat(game) {
-  const p = game.state.player;
-  const cat = p.carryingCat;
-  if (!cat) return false;
-  cat.carried = false;
-  p.carryingCat = null;
-  cat.x = p.x + Math.sin(p.heading) * 1.5;
-  cat.z = p.z + Math.cos(p.heading) * 1.5;
-  showToast(game.state, 'You put the cat down. It wanders off.', 2);
-  return true;
+// E near a cat picks it up; E at the safehouse with a cat puts it
+// down for $20.
+export function tryCat(game) {
+  const s = game.state;
+  const p = s.player;
+  if (p.carryingCat) {
+    // Put it down at the safehouse.
+    if (Math.hypot(p.x + 250, p.z - 250) < 10) {
+      const cat = p.carryingCat;
+      cat.carried = false;
+      cat.x = p.x + 1;
+      cat.z = p.z + 1;
+      p.carryingCat = null;
+      addCash(s, 20);
+      showToast(s, 'You found the cat a home! +$20', 4);
+      playBlip(game.audio);
+      return true;
+    }
+    return false;
+  }
+  for (const cat of game.cats) {
+    if (!cat.carried && Math.hypot(cat.x - p.x, cat.z - p.z) < 2.5) {
+      cat.carried = true;
+      p.carryingCat = cat;
+      showToast(s, 'You picked up a cat! Take it to the safehouse.', 4);
+      playBlip(game.audio);
+      return true;
+    }
+  }
+  return false;
 }
 
 export function catBoxes(game, out) {
-  for (const cat of game.cats.list) {
+  for (const cat of game.cats) {
     if (cat.carried) continue; // drawn on the player's shoulder
-    const y = Math.abs(Math.sin(cat.bob)) * 0.1;
-    out.pushBoxRot(cat.x, y + 0.35, cat.z, 0.7, 0.5, 0.35, cat.colour, cat.heading);
-    out.pushBoxRot(cat.x, y + 0.7, cat.z + 0.25, 0.35, 0.35, 0.35, cat.colour, cat.heading);
+    const bob = Math.sin(cat.bob) * 0.05;
+    out.pushBoxRot(cat.x, 0.2 + bob, cat.z, 0.25, 0.2, 0.4, cat.color, cat.heading);
+    out.pushBoxRot(cat.x, 0.35 + bob, cat.z + 0.15, 0.15, 0.15, 0.15, cat.color, cat.heading);
     // Ears.
-    out.pushBoxRot(cat.x - 0.12, y + 0.95, cat.z + 0.25, 0.1, 0.15, 0.1, cat.colour, cat.heading);
-    out.pushBoxRot(cat.x + 0.12, y + 0.95, cat.z + 0.25, 0.1, 0.15, 0.1, cat.colour, cat.heading);
-    // Tail.
-    out.pushBoxRot(cat.x, y + 0.6, cat.z - 0.35, 0.1, 0.5, 0.1, cat.colour, cat.heading);
+    out.pushBoxRot(cat.x - 0.06, 0.45 + bob, cat.z + 0.15, 0.05, 0.08, 0.05, cat.color, cat.heading);
+    out.pushBoxRot(cat.x + 0.06, 0.45 + bob, cat.z + 0.15, 0.05, 0.08, 0.05, cat.color, cat.heading);
   }
 }

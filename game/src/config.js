@@ -1,31 +1,47 @@
-// Solmar Bay — every tuning number, colour and table lives here.
-// The rest of the game reads these constants; nothing else hard-codes
-// magic numbers for balance, positions or prices.
+// Solmar Bay — shared tuning, palette and tables.
+//
+// One place for every number the game balances on: speeds, prices,
+// rewards, spawn tables, colours, chapter text. Systems read from
+// here; nothing else hard-codes a balance value. The helpers at the
+// bottom are the small maths every module shares.
+
+// ---------- small maths ----------
+
+// Pick element i of an array, wrapping around.
+export function pick(arr, i) {
+  return arr[((i % arr.length) + arr.length) % arr.length];
+}
 
 export function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
+
 export function lerp(a, b, t) {
   return a + (b - a) * t;
 }
+
 export function dist2(ax, az, bx, bz) {
   const dx = ax - bx;
   const dz = az - bz;
   return dx * dx + dz * dz;
 }
+
 export function dist(ax, az, bx, bz) {
   return Math.sqrt(dist2(ax, az, bx, bz));
 }
+
 export function angleTo(ax, az, bx, bz) {
   return Math.atan2(bx - ax, bz - az);
 }
-// Wrap an angle to [-PI, PI].
+
 export function wrapAngle(a) {
   while (a > Math.PI) a -= Math.PI * 2;
   while (a < -Math.PI) a += Math.PI * 2;
   return a;
 }
-// Deterministic RNG (mulberry32) so the city is identical every run.
+
+// Deterministic RNG (mulberry32): the same seed builds the same
+// city on every load, so the map never changes between sessions.
 export function makeRng(seed) {
   let a = seed >>> 0;
   return function rng() {
@@ -37,8 +53,10 @@ export function makeRng(seed) {
   };
 }
 
+// ---------- tuning ----------
+
 export const TUNE = {
-  // player on foot
+  // On foot.
   walkSpeed: 6,
   runSpeed: 10.5,
   accel: 34,
@@ -46,7 +64,7 @@ export const TUNE = {
   swimSpeed: 3.2,
   playerRadius: 0.9,
   playerHeight: 1.9,
-  // cars
+  // Cars and other vehicles.
   carAccel: 16,
   carBrake: 26,
   carMaxSpeed: 34,
@@ -59,54 +77,56 @@ export const TUNE = {
   planeAccel: 22,
   planeTakeoff: 45,
   planeMaxSpeed: 70,
-  // wanted
+  // Wanted level.
   wantedDecayTime: 14, // seconds out of sight to lose one star
   copSightRange: 60,
-  bustedFine: 0.2, // 20% of cash on busted
-  // combat
+  bustedFine: 0.2, // 20% of cash lost when busted
+  // Combat.
   pistolDamage: 34,
   smgDamage: 18,
   shotgunDamage: 22, // per pellet, 6 pellets
   punchDamage: 12,
   bombDamage: 120,
   bombRadius: 9,
-  // world
+  // World caps (keep the cloud browser near 60 fps, not a slideshow).
   cityHalf: 400,
   pedCap: 76,
   trafficCap: 32,
   parkedCap: 31,
   batchCap: 1600, // max dynamic boxes drawn per frame
-  // misc
+  // Interaction.
   interactRange: 4.5,
   pickupRadius: 2.2,
   cashDropMin: 10,
   cashDropMax: 50,
-  // weather + day/night
+  // Weather + day/night.
   dayLengthSec: 720, // real seconds per game day
   weatherMinSec: 90,
   weatherMaxSec: 180,
-  rainDrops: 100, // max visible rain drops (perf cap)
-  // garage + side activities
+  rainDrops: 100, // max visible rain drops
+  // Garage + side activities.
   repaintPrice: 50,
   snackPrice: 3,
   snackHeal: 15,
   fishMin: 5,
   fishMax: 15,
   fishTime: 3, // seconds to catch a fish
-  // police helicopter
+  // Police helicopter.
   heliAltitude: 80,
   heliSpeed: 22,
-  // training
+  // Training rewards.
   rangeReward: 80,
   swimReward: 100,
   slalomReward: 150,
   fireReward: 150,
 };
 
-// Palette. Colours are [r, g, b] in 0..1 (values above 1.0 read as glow
-// for neon signs at sunset/night).
+// ---------- palette ----------
+
+// Colours are [r, g, b] in 0..1. Values above 1.0 read as a glow for
+// neon signs at sunset and night (the shader passes them through).
 export const COL = {
-  sky: [0.98, 0.72, 0.55], // warm peach sunset base
+  sky: [0.98, 0.72, 0.55],
   skyDawn: [0.92, 0.62, 0.55],
   skyDay: [0.55, 0.78, 0.95],
   skyGolden: [1.0, 0.62, 0.38], // golden hour, 17:00
@@ -149,9 +169,7 @@ export const COL = {
     [0.6, 0.45, 0.32],
     [0.95, 0.7, 0.55],
   ],
-  // Hair colours for the ped variety pass (visual overhaul): each
-  // ped gets one, plus a hair style (cap / long / mohawk / buzz /
-  // ponytail) that changes the shape of the single hair box.
+  // Hair colours + the six styles peds cycle through.
   hair: [
     [0.1, 0.1, 0.12],
     [0.25, 0.18, 0.1],
@@ -168,9 +186,18 @@ export const COL = {
     [0.2, 0.4, 0.95],
     [0.85, 0.2, 0.2],
   ],
+  pants: [
+    [0.25, 0.35, 0.6],
+    [0.15, 0.15, 0.18],
+    [0.92, 0.92, 0.9],
+    [0.3, 0.3, 0.35],
+  ],
+  gangKings: [0.95, 0.75, 0.15],
+  gangSharks: [0.1, 0.7, 0.7],
 };
 
-// The five story chapters, in order.
+// ---------- story ----------
+
 export const CHAPTERS = [
   {
     id: 1,
@@ -214,7 +241,7 @@ export const CHAPTERS = [
   },
 ];
 
-// Side jobs (repeatable). Each has a marker, a reward and a short label.
+// Repeatable side jobs.
 export const SIDE_JOBS = [
   { id: 'taxi', label: 'Taxi fare', reward: 120, desc: 'Drive a passenger to the marker.' },
   { id: 'courier', label: 'Courier run', reward: 150, desc: 'Deliver the parcel across town.' },
@@ -223,17 +250,19 @@ export const SIDE_JOBS = [
   { id: 'gangrun', label: 'Gang delivery', reward: 200, desc: 'Deliver the goods for your crew.' },
 ];
 
-// Food shops: name, menu prices, heal values.
-// Points sit at the shop FRONTS (just outside the shop building, on
-// standable ground) — never inside a building collider.
+// ---------- food, outfits, respect ----------
+
+// Food menu (same at every shop) and shop points. The points sit at
+// the shop FRONTS — just outside the shop building, on standable
+// ground — never inside a collider.
 export const FOOD_MENU = [
   { name: 'Snack', price: 5, heal: 10, armour: 0 },
   { name: 'Meal', price: 10, heal: 25, armour: 0 },
   { name: 'Feast', price: 15, heal: 100, armour: 25 },
 ];
 export const FOOD_SHOPS = [
-  // Pizza/Burger sit 5m south of their interior doors so the 5m food
-  // radius and the 4m door radius do not overlap at the point itself.
+  // Pizza/Burger sit 5 m south of their interior doors so the 5 m
+  // food radius and the 4 m door radius do not overlap at the point.
   { name: 'Pizza Palace', x: -60, z: -27, colour: [0.9, 0.3, 0.2] },
   { name: 'Burger Barn', x: 60, z: -23, colour: [0.95, 0.6, 0.1] },
   { name: "Clucky's Chicken", x: -40, z: 70, colour: [0.95, 0.8, 0.2] },
@@ -241,7 +270,6 @@ export const FOOD_SHOPS = [
   { name: 'Taco Tide', x: 120, z: 68, colour: [0.4, 0.8, 0.3] },
 ];
 
-// Outfit shop options. Each part cycles through these; buying costs cash.
 export const OUTFIT = {
   hair: [
     { name: 'Black crop', price: 0, colour: [0.1, 0.1, 0.12] },
@@ -267,9 +295,8 @@ export const OUTFIT = {
   ],
 };
 
-// Respect levels and unlocks. Respect grows with missions (+50) and
-// side jobs (+25), fares (+10), fires (+15) and training (+10).
-// Unlocks spawn once, tracked in state.flags.
+// Respect grows with missions (+50) and side jobs (+25), fares
+// (+10), fires (+15) and training (+10). Unlocks spawn once.
 export const RESPECT = {
   levels: [
     { min: 0, name: 'Nobody' },
@@ -291,6 +318,8 @@ export function respectLevel(rep) {
   const next = RESPECT.levels.find((l) => l.min > rep);
   return { name: lvl.name, min: lvl.min, next: next ? next.name : null, nextMin: next ? next.min : null };
 }
+
+// ---------- names, crimes, radio, gangs ----------
 
 // Original car model names (nothing from Rockstar).
 export const CAR_NAMES = [
@@ -324,21 +353,21 @@ export const STATIONS = [
     ],
   },
   {
-    name: 'PALM 102.3', freq: '102.3', genre: 'Tropical House',
+    name: 'PALM', freq: '102.3', genre: 'Tropical House',
     songs: [
       { title: 'Coconut Radio', notes: [0, 2, 4, 5, 7, 5, 4, 2] },
       { title: 'Beachfront', notes: [7, 5, 4, 2, 0, 2, 4, 5] },
     ],
   },
   {
-    name: 'NEON 89.1', freq: '89.1', genre: 'Electro',
+    name: 'NEON', freq: '89.1', genre: 'Electro',
     songs: [
       { title: 'Night Circuit', notes: [0, 0, 3, 0, 5, 0, 7, 5] },
       { title: 'Chrome Hearts', notes: [9, 7, 5, 7, 9, 7, 5, 4] },
     ],
   },
   {
-    name: 'CORAL 105.5', freq: '105.5', genre: 'Chill',
+    name: 'CORAL', freq: '105.5', genre: 'Chill',
     songs: [
       { title: 'Slow Tide', notes: [4, 2, 0, 2, 4, 5, 4, 2] },
       { title: 'Harbour Moon', notes: [2, 4, 5, 4, 2, 0, 2, 4] },
@@ -352,6 +381,42 @@ export const GANGS = {
   kings: { name: 'Bay Kings', colour: [0.95, 0.75, 0.15], turf: { x: 0, z: -100, hx: 160, hz: 140 } },
   sharks: { name: 'Harbour Sharks', colour: [0.1, 0.7, 0.7], turf: { x: 320, z: -100, hx: 90, hz: 110 } },
 };
+
+// ---------- shared spots (garage, activities, props) ----------
+
+// Side-job markers: E at a marker starts that job.
+export const SIDE_MARKERS = [
+  { kind: 'taxi', x: 0, z: 50 },
+  { kind: 'courier', x: -150, z: -106 },
+  { kind: 'trial', x: 100, z: -350 },
+  { kind: 'turf', x: -100, z: -100 },
+  { kind: 'gangrun', x: 100, z: 150 },
+];
+
+// The garage door (north face of the garage building).
+export const GARAGE_DOOR = { x: 150, z: -128 };
+
+// Fishing spot on the pier.
+export const FISHING_SPOT = { x: -330, z: 100 };
+
+// Vending machines + ATMs.
+export const VENDING_MACHINES = [
+  { x: -40, z: -60 },
+  { x: 40, z: 40 },
+  { x: 100, z: 120 },
+];
+export const ATMS = [
+  { x: -20, z: 20 },
+  { x: 80, z: -40 },
+];
+
+// The CC0 barrel model (Barrel_01, Poly Haven) sits on the dock.
+export const BARREL_SPOTS = [
+  [311, -80, 0.3],
+  [312, -65, 1.2],
+  [311, -130, 2.1],
+];
+export const BARREL_COLOR = [0.65, 0.12, 0.08];
 
 // City districts, for the HUD location name.
 export function districtAt(x, z) {
