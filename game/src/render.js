@@ -6,6 +6,18 @@
 // filled-primitive draw mode, and a point-cloud scene is what you get
 // if you try anything else — the round-4 play-test proved it.
 //
+// THE FRAME RULE (play-test #5, 20 Nov 2026 — read this before
+// touching this file): the colour/depth buffers are cleared EXACTLY
+// ONCE per frame, in beginFrame(), before any batch is drawn. The
+// old build called gl.clear() at the start of every draw() — and the
+// frame draws three batches (static city, GLB props, dynamic
+// objects) — so the second and third clears erased everything drawn
+// before them. The final image was only the tiny dynamic batch
+// against the sky clear colour: a flat orange screen, no buildings,
+// no roads, exactly what play-test #5 saw twice. draw() MUST NEVER
+// clear. A headless test enforces it: gl.clear appears exactly once
+// in this file, inside beginFrame.
+//
 // The renderer is split in two halves so headless tests can use the
 // pure half: BoxBatch (geometry) and the mat4 helpers are plain JS;
 // createRenderer (the GL context, shaders, draw calls) only runs in
@@ -21,57 +33,20 @@ const PLAIN_UV = (() => {
   return [(u0 + u1) / 2, (v0 + v1) / 2];
 })();
 
-// ---- mat4 helpers (column-major, like WebGL expects) ----
-export function mat4Identity() {
-  return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-}
-export function mat4Multiply(a, b) {
-  const o = new Array(16).fill(0);
-  for (let c = 0; c < 4; c++) {
-    for (let r = 0; r < 4; r++) {
-      let s = 0;
-      for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
-      o[c * 4 + r] = s;
-    }
-  }
-  return o;
-}
-export function mat4Perspective(fovY, aspect, near, far) {
-  const f = 1 / Math.tan(fovY / 2);
-  const nf = 1 / (near - far);
-  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
-}
-export function mat4LookAt(eye, target, up) {
-  const zx = eye[0] - target[0];
-  const zy = eye[1] - target[1];
-  const zz = eye[2] - target[2];
-  let zl = Math.sqrt(zx * zx + zy * zy + zz * zz) || 1;
-  const z = [zx / zl, zy / zl, zz / zl];
-  let xx = up[1] * z[2] - up[2] * z[1];
-  let xy = up[2] * z[0] - up[0] * z[2];
-  let xz = up[0] * z[1] - up[1] * z[0];
-  let xl = Math.sqrt(xx * xx + xy * xy + xz * xz) || 1;
-  const x = [xx / xl, xy / xl, xz / xl];
-  const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
-  return [
-    x[0], y[0], z[0], 0,
-    x[1], y[1], z[1], 0,
-    x[2], y[2], z[2], 0,
-    -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]),
-    -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]),
-    -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]),
-    1,
-  ];
-}
-
 // Per-face shading so voxel boxes read as 3D: top brightest, bottom
-// darkest, sides in between.
-const FACE_SHADE = [1.0, 0.6, 0.85, 0.75, 0.85, 0.75]; // +Y,-Y,+X,-X,+Z,-Z
+// darkest, sides in between. Order matches the FACES table below:
+// +Z, -Z, +X, -X, +Y, -Y.
+const FACE_SHADE = [0.75, 0.75, 0.85, 0.85, 1.0, 0.6];
 
-// A batch of coloured boxes. Positions and colours are flat arrays of
-// 3 floats per vertex; UVs are 2 floats per vertex (see texture.js).
-// Every face contributes exactly 6 vertices (two triangles). `count`
-// is the vertex count for gl.drawArrays.
+// A batch of coloured boxes. Positions and colours are flat arrays
+// of 3 floats per vertex; UVs are 2 floats per vertex (see
+// texture.js). Every face contributes exactly 6 vertices (two
+// triangles). `count` is the vertex count for gl.drawArrays.
+//
+// Invariant the tests check: pos.length / 3 === col.length / 3 ===
+// uv.length / 2 === count. If a push method ever breaks that, the
+// shader reads the wrong attribute stream and the scene draws
+// garbage (or nothing) with no error from WebGL.
 export class BoxBatch {
   constructor() {
     this.pos = [];
@@ -88,21 +63,41 @@ export class BoxBatch {
     this.uv.length = 0;
     this.boxes = 0;
   }
-  // Push one axis-aligned box centred at (x, y, z) with size (sx, sy, sz).
-  // `tile` names a texture-atlas tile (default 'plain' = white, so the
-  // box renders exactly as before); the tile repeats every few world
-  // units on each face (see faceUV in texture.js).
+  // Emit one face (4 corner positions) as two triangles. `shade` is
+  // the per-face brightness, `u0,v0,u1,v1` the atlas rect for it.
+  _face(corners, shade, colour, uvRect) {
+    const [u0, v0, u1, v1] = uvRect;
+    const r = Math.min(1.4, colour[0] * shade);
+    const g = Math.min(1.4, colour[1] * shade);
+    const b = Math.min(1.4, colour[2] * shade);
+    // Triangle 1: corners 0,1,2 — triangle 2: corners 0,2,3.
+    // UV corners: (u0,v0) (u1,v0) (u1,v1) (u0,v0) (u1,v1) (u0,v1).
+    const order = [0, 1, 2, 0, 2, 3];
+    for (let k = 0; k < 6; k++) {
+      const p = corners[order[k]];
+      this.pos.push(p[0], p[1], p[2]);
+      this.col.push(r, g, b);
+      const u = (k === 1 || k === 2 || k === 4) ? u1 : u0;
+      const v = (k === 2 || k === 4 || k === 5) ? v1 : v0;
+      this.uv.push(u, v);
+    }
+  }
+  // Push one axis-aligned box centred at (x, y, z) with size
+  // (sx, sy, sz). `tile` names a texture-atlas tile (default 'plain'
+  // = white, so the box renders exactly as before); the tile repeats
+  // every few world units on each face (see faceUV in texture.js).
   pushBox(x, y, z, sx, sy, sz, c, shadeScale, tile) {
     const hx = sx / 2, hy = sy / 2, hz = sz / 2;
     const scale = shadeScale === undefined ? 1 : shadeScale;
-    // 8 corners
+    // 8 corners: 0..3 bottom ring (-Y), 4..7 top ring (+Y).
     const v = [
       [x - hx, y - hy, z - hz], [x + hx, y - hy, z - hz],
       [x + hx, y + hy, z - hz], [x - hx, y + hy, z - hz],
       [x - hx, y - hy, z + hz], [x + hx, y - hy, z + hz],
       [x + hx, y + hy, z + hz], [x - hx, y + hy, z + hz],
     ];
-    // 6 faces, each as 4 corner indices; each face becomes 2 triangles.
+    // 6 faces, each as 4 corner indices in counter-clockwise order
+    // seen from outside the box (front faces for BACK culling).
     const faces = [
       [4, 5, 6, 7], // +Z
       [1, 0, 3, 2], // -Z
@@ -111,23 +106,12 @@ export class BoxBatch {
       [7, 6, 2, 3], // +Y (top)
       [0, 1, 5, 4], // -Y (bottom)
     ];
-    const shadeOrder = [0.75, 0.75, 0.85, 0.85, 1.0, 0.6]; // matches faces above
     const faceW = [sx, sx, sz, sz, sx, sx];
     const faceH = [sy, sy, sy, sy, sz, sz];
     for (let f = 0; f < 6; f++) {
-      const [a, b, c2, d] = faces[f];
-      const sh = shadeOrder[f] * scale;
-      const col = [Math.min(1.4, c[0] * sh), Math.min(1.4, c[1] * sh), Math.min(1.4, c[2] * sh)];
-      const [u0, v0, u1, v1] = faceUV(tile || 'plain', faceW[f], faceH[f]);
-      // Triangle 1: a, b, c2 — triangle 2: a, c2, d. UV corners are
-      // (u0,v0) (u1,v0) (u1,v1) (u0,v0) (u1,v1) (u0,v1); computed
-      // inline so the hot per-frame path allocates nothing per face.
-      for (let k = 0; k < 6; k++) {
-        const idx = k === 0 ? a : k === 1 ? b : k === 2 ? c2 : k === 3 ? a : k === 4 ? c2 : d;
-        this.pos.push(v[idx][0], v[idx][1], v[idx][2]);
-        this.col.push(col[0], col[1], col[2]);
-        this.uv.push(k === 1 || k === 2 || k === 4 ? u1 : u0, k === 2 || k === 4 || k === 5 ? v1 : v0);
-      }
+      const idx = faces[f];
+      const corners = [v[idx[0]], v[idx[1]], v[idx[2]], v[idx[3]]];
+      this._face(corners, FACE_SHADE[f] * scale, c, faceUV(tile || 'plain', faceW[f], faceH[f]));
     }
     this.boxes++;
   }
@@ -143,38 +127,23 @@ export class BoxBatch {
     const scale = shadeScale === undefined ? 1 : shadeScale;
     const cos = Math.cos(yaw), sin = Math.sin(yaw);
     const rot = (px, pz) => [x + px * cos - pz * sin, z + px * sin + pz * cos];
-    const corners = [
-      rot(-hx, -hz), rot(hx, -hz), rot(hx, hz), rot(-hx, hz),
-    ];
-    // Build the 8 corners with rotated XZ, then emit faces like pushBox.
+    const c0 = rot(-hx, -hz), c1 = rot(hx, -hz), c2 = rot(hx, hz), c3 = rot(-hx, hz);
     const v = [
-      [corners[0][0], y - hy, corners[0][1]],
-      [corners[1][0], y - hy, corners[1][1]],
-      [corners[1][0], y + hy, corners[1][1]],
-      [corners[0][0], y + hy, corners[0][1]],
-      [corners[3][0], y - hy, corners[3][1]],
-      [corners[2][0], y - hy, corners[2][1]],
-      [corners[2][0], y + hy, corners[2][1]],
-      [corners[3][0], y + hy, corners[3][1]],
+      [c0[0], y - hy, c0[1]], [c1[0], y - hy, c1[1]],
+      [c1[0], y + hy, c1[1]], [c0[0], y + hy, c0[1]],
+      [c3[0], y - hy, c3[1]], [c2[0], y - hy, c2[1]],
+      [c2[0], y + hy, c2[1]], [c3[0], y + hy, c3[1]],
     ];
     const faces = [
       [4, 5, 6, 7], [1, 0, 3, 2], [5, 1, 2, 6],
       [0, 4, 7, 3], [7, 6, 2, 3], [0, 1, 5, 4],
     ];
-    const shadeOrder = [0.75, 0.75, 0.85, 0.85, 1.0, 0.6];
     const faceW = [sx, sx, sz, sz, sx, sx];
     const faceH = [sy, sy, sy, sy, sz, sz];
     for (let f = 0; f < 6; f++) {
-      const [a, b, c2, d] = faces[f];
-      const sh = shadeOrder[f] * scale;
-      const col = [Math.min(1.4, c[0] * sh), Math.min(1.4, c[1] * sh), Math.min(1.4, c[2] * sh)];
-      const [u0, v0, u1, v1] = faceUV(tile || 'plain', faceW[f], faceH[f]);
-      for (let k = 0; k < 6; k++) {
-        const idx = k === 0 ? a : k === 1 ? b : k === 2 ? c2 : k === 3 ? a : k === 4 ? c2 : d;
-        this.pos.push(v[idx][0], v[idx][1], v[idx][2]);
-        this.col.push(col[0], col[1], col[2]);
-        this.uv.push(k === 1 || k === 2 || k === 4 ? u1 : u0, k === 2 || k === 4 || k === 5 ? v1 : v0);
-      }
+      const idx = faces[f];
+      const corners = [v[idx[0]], v[idx[1]], v[idx[2]], v[idx[3]]];
+      this._face(corners, FACE_SHADE[f] * scale, c, faceUV(tile || 'plain', faceW[f], faceH[f]));
     }
     this.boxes++;
   }
@@ -199,13 +168,14 @@ export class BoxBatch {
       [x + hx, y, z + hz], [x + hx, y, z - hz],
     ];
     const [u0, v0, u1, v1] = faceUV(tile || 'plain', sx, sz);
-    // UV corners for the flat quad: (u0,v0) (u0,v1) (u1,v1) (u0,v0)
-    // (u1,v1) (u1,v0); corner order (0,1,2) (0,2,3).
+    const order = [0, 1, 2, 0, 2, 3];
     for (let k = 0; k < 6; k++) {
-      const idx = k === 0 ? 0 : k === 1 ? 1 : k === 2 ? 2 : k === 3 ? 0 : k === 4 ? 2 : 3;
-      this.pos.push(quad[idx][0], quad[idx][1], quad[idx][2]);
+      const p = quad[order[k]];
+      this.pos.push(p[0], p[1], p[2]);
       this.col.push(c[0], c[1], c[2]);
-      this.uv.push(k === 2 || k === 4 || k === 5 ? u1 : u0, k === 1 || k === 2 || k === 4 ? v1 : v0);
+      const u = (k === 2 || k === 4 || k === 5) ? u1 : u0;
+      const v = (k === 1 || k === 2 || k === 4) ? v1 : v0;
+      this.uv.push(u, v);
     }
     this.boxes++;
   }
@@ -220,11 +190,14 @@ export class BoxBatch {
       quad = [[x - hw, y - hh, z], [x + hw, y - hh, z], [x + hw, y + hh, z], [x - hw, y + hh, z]];
     }
     const [u0, v0, u1, v1] = faceUV(tile || 'plain', w, h);
+    const order = [0, 1, 2, 0, 2, 3];
     for (let k = 0; k < 6; k++) {
-      const idx = k === 0 ? 0 : k === 1 ? 1 : k === 2 ? 2 : k === 3 ? 0 : k === 4 ? 2 : 3;
-      this.pos.push(quad[idx][0], quad[idx][1], quad[idx][2]);
+      const p = quad[order[k]];
+      this.pos.push(p[0], p[1], p[2]);
       this.col.push(c[0], c[1], c[2]);
-      this.uv.push(k === 1 || k === 2 || k === 4 ? u1 : u0, k === 2 || k === 4 || k === 5 ? v1 : v0);
+      const u = (k === 1 || k === 2 || k === 4) ? u1 : u0;
+      const v = (k === 2 || k === 4 || k === 5) ? v1 : v0;
+      this.uv.push(u, v);
     }
     this.boxes++;
   }
@@ -246,7 +219,68 @@ export function boxVisible(bx, bz, cam, maxDist) {
   return true;
 }
 
+// ---- mat4 helpers (column-major, like WebGL expects) ----
+
+export function mat4Identity() {
+  return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+}
+
+export function mat4Multiply(a, b) {
+  const o = new Array(16).fill(0);
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      let s = 0;
+      for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
+      o[c * 4 + r] = s;
+    }
+  }
+  return o;
+}
+
+export function mat4Perspective(fovY, aspect, near, far) {
+  const f = 1 / Math.tan(fovY / 2);
+  const nf = 1 / (near - far);
+  return [f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0];
+}
+
+export function mat4LookAt(eye, target, up) {
+  const zx = eye[0] - target[0];
+  const zy = eye[1] - target[1];
+  const zz = eye[2] - target[2];
+  let zl = Math.sqrt(zx * zx + zy * zy + zz * zz) || 1;
+  const z = [zx / zl, zy / zl, zz / zl];
+  let xx = up[1] * z[2] - up[2] * z[1];
+  let xy = up[2] * z[0] - up[0] * z[2];
+  let xz = up[0] * z[1] - up[1] * z[0];
+  let xl = Math.sqrt(xx * xx + xy * xy + xz * xz) || 1;
+  const x = [xx / xl, xy / xl, xz / xl];
+  const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+  return [
+    x[0], y[0], z[0], 0,
+    x[1], y[1], z[1], 0,
+    x[2], y[2], z[2], 0,
+    -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]),
+    -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]),
+    -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]),
+    1,
+  ];
+}
+
+// Project a world point through a view-projection matrix to NDC
+// (x, y in [-1, 1] when visible). Pure maths, for the camera-framing
+// test: a downtown building must project into the central band of
+// the screen, not just the top edge.
+export function projectPoint(vp, pt) {
+  const [x, y, z] = pt;
+  const cx = vp[0] * x + vp[4] * y + vp[8] * z + vp[12];
+  const cy = vp[1] * x + vp[5] * y + vp[9] * z + vp[13];
+  const cz = vp[2] * x + vp[6] * y + vp[10] * z + vp[14];
+  const cw = vp[3] * x + vp[7] * y + vp[11] * z + vp[15];
+  return { x: cx / cw, y: cy / cw, z: cz / cw, behind: cw <= 0 };
+}
+
 // ---- Browser-only renderer (WebGL1) ----
+
 export function createRenderer(canvas) {
   if (typeof document === 'undefined' || !canvas) return null;
   const gl = canvas.getContext('webgl', { antialias: false });
@@ -310,12 +344,18 @@ export function createRenderer(canvas) {
   gl.cullFace(gl.BACK);
   return {
     gl,
-    setSky(sky) {
+    // Start a frame: set the sky clear colour and clear the buffers.
+    // This is the ONLY clear in the whole renderer — it runs once
+    // per frame, before the first draw. See the frame rule at the
+    // top of this file.
+    beginFrame(sky) {
       gl.clearColor(sky[0], sky[1], sky[2], 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     },
+    // Draw one batch. Never clears — the caller clears once via
+    // beginFrame, then draws every batch into the same frame.
     draw(batch, vp, fogCol, fogNear, fogFar) {
       if (!batch || batch.count === 0) return;
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, atlas);
       gl.uniform1i(locTex, 0);
@@ -338,19 +378,6 @@ export function createRenderer(canvas) {
       gl.drawArrays(gl.TRIANGLES, 0, batch.count);
     },
   };
-}
-
-// Project a world point through a view-projection matrix to NDC
-// (x, y in [-1, 1] when visible). Pure maths, for the camera-framing
-// test: a downtown building must project into the central band of
-// the screen, not just the top edge.
-export function projectPoint(vp, pt) {
-  const [x, y, z] = pt;
-  const cx = vp[0] * x + vp[4] * y + vp[8] * z + vp[12];
-  const cy = vp[1] * x + vp[5] * y + vp[9] * z + vp[13];
-  const cz = vp[2] * x + vp[6] * y + vp[10] * z + vp[14];
-  const cw = vp[3] * x + vp[7] * y + vp[11] * z + vp[15];
-  return { x: cx / cw, y: cy / cw, z: cz / cw, behind: cw <= 0 };
 }
 
 export { COL, FACE_SHADE };

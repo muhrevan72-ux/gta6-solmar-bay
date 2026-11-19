@@ -1,134 +1,103 @@
-// Solmar Bay — taxi side job: yellow taxi, fares with tips.
+// Solmar Bay — taxis: call one from the phone (Digit 4), ride it,
+// and the taxi side job ($120 per fare).
 //
-// Pick up a passenger at the taxi stand, drive them to the
-// destination marker; the fare + tip depends on distance and time.
-// A fare also pays +10 respect.
-//
-// Calling a taxi from the phone DISPATCHES a cab: it drives to the
-// player, parks nearby and toasts "Your cab is here. Get in!". The
-// parked cab is a normal parked car — E enters it like any other
-// (play-test #4 found the old build's called taxi could not be
-// entered at all, so the dispatch parks with driver = null, exactly
-// like a parked car, and the E dispatcher treats it as one).
+// Call flow (play-test #4 fix): the taxi drives to the player, parks
+// WITHIN 4 m with driver=null, and waits. E enters it WITHOUT a
+// steal crime (it is a called taxi). If it waits 30 s unentered it
+// un-sticks itself (teleports beside the player) — vehicles.js owns
+// that timer.
 
-import { dist2, clamp } from './config.js';
-import { addCash, addRespect, showToast } from './state.js';
-import { makeVehicle } from './vehicles.js';
+import { TUNE, COL } from './config.js';
+import { showToast, addCash } from './state.js';
+import { completeSideJob } from './missions.js';
 
 export function createTaxi() {
   return {
-    fare: null, // {px, pz, dx, dz, t, dist}
-    waiting: false,
-    dispatched: null, // the cab driving to the player (or null)
-    arrived: null, // the parked cab waiting for the player (or null)
-    dispatchT: 0, // seconds since dispatch (unstick timer)
+    called: null, // the called taxi car object
+    fare: null, // {active, stage, pickup, dropoff}
   };
 }
 
-// Dispatch a cab to the player's location (phone call).
-export function dispatchTaxi(game) {
-  const t = game.taxi;
-  if (t.fare || t.dispatched || t.arrived) return false;
-  const p = game.state.player;
-  // Reuse the city's taxi if it is free, else spawn one nearby.
-  let cab = game.vehicles.list.find((v) => v.type === 'taxi' && v.driver !== 'player');
-  if (!cab) {
-    cab = makeVehicle('taxi', p.x + 30, p.z, 0);
-    game.vehicles.list.push(cab);
+// Call a taxi to the player. Spawns a yellow taxi on the nearest
+// road, 30 m along it from the player, and drives it to the player.
+export function callTaxi(game) {
+  const s = game.state;
+  const p = s.player;
+  if (game.taxi.called) {
+    showToast(s, 'A taxi is already on its way.', 3);
+    return false;
   }
-  cab.driver = 'dispatch';
-  cab.speed = 0;
-  t.dispatched = cab;
-  t.dispatchT = 0;
-  showToast(game.state, 'Taxi dispatched — your cab is on its way.', 3);
-  return true;
-}
-
-// Start a fare: the passenger waits at the taxi stand.
-export function startFare(game) {
-  const t = game.taxi;
-  if (t.fare) return false;
-  const dests = [
-    { x: 300, z: -100, label: 'Harbour docks' },
-    { x: -250, z: 190, label: 'Southside' },
-    { x: 200, z: -320, label: 'Airport' },
-    { x: -310, z: 100, label: 'Beach' },
-    { x: 150, z: -120, label: 'Garage' },
-  ];
-  const d = dests[Math.floor(Math.random() * dests.length)];
-  t.fare = { px: 0, pz: 50, dx: d.x, dz: d.z, label: d.label, t: 0, pickedUp: false, dist: 0 };
-  showToast(game.state, 'Taxi fare: pick up the passenger at the stand, then drive to ' + d.label + '.', 4);
+  // Spawn on the nearest road line, 30 m along the road from the
+  // player (not on top of the player).
+  const road = game.city.roads.reduce((best, r) => {
+    const d = r.vertical ? Math.abs(r.coord - p.x) : Math.abs(r.coord - p.z);
+    return d < best.d ? { r, d } : best;
+  }, { r: game.city.roads[0], d: Infinity }).r;
+  const along = 30;
+  const x = road.vertical ? road.coord : p.x + along;
+  const z = road.vertical ? p.z + along : road.coord;
+  const taxi = {
+    kind: 'taxi', x, z, heading: road.vertical ? 0 : Math.PI / 2,
+    speed: 0, color: [1, 0.85, 0.1], name: 'Solmar Cab',
+    condition: 100, driver: 'npc', route: null,
+    stuckT: 0, calledTaxi: true, parkedT: 0, wheelSpin: 0, alt: 0,
+  };
+  game.vehicles.traffic.push(taxi);
+  game.taxi.called = taxi;
+  showToast(s, 'Taxi called — it is on its way to you.', 4);
   return true;
 }
 
 export function stepTaxi(game, dt) {
-  const t = game.taxi;
-  // --- dispatched cab: drive to the player and park ---
-  if (t.dispatched) {
-    const cab = t.dispatched;
-    const p = game.state.player;
-    t.dispatchT += dt;
-    if (cab.driver !== 'dispatch') {
-      // The player (or someone) took the cab.
-      t.dispatched = null;
-      t.arrived = null;
-    } else {
-      const d = Math.sqrt(dist2(cab.x, cab.z, p.x, p.z));
-      if (d < 4) {
-        // Parked within E range (4.5 m): driver = null, exactly like
-        // any parked car, so E enters it through the normal path.
-        cab.driver = null;
-        cab.speed = 0;
-        t.dispatched = null;
-        t.arrived = cab;
-        showToast(game.state, 'Your cab is here. Get in!', 3);
-      } else {
-        // Unstick: if it has not arrived in 30 s, move it to a road
-        // point near the player and try again.
-        if (t.dispatchT > 30) {
-          t.dispatchT = 0;
-          cab.x = p.x + 25;
-          cab.z = p.z + 5;
-          cab.speed = 0;
-        }
-        const targetHeading = Math.atan2(p.x - cab.x, p.z - cab.z);
-        let dh = targetHeading - cab.heading;
-        while (dh > Math.PI) dh -= Math.PI * 2;
-        while (dh < -Math.PI) dh += Math.PI * 2;
-        cab.heading += clamp(dh, -1.8 * dt, 1.8 * dt);
-        cab.speed = clamp(cab.speed + 14 * dt, 0, 26);
-        cab.x += Math.sin(cab.heading) * cab.speed * dt;
-        cab.z += Math.cos(cab.heading) * cab.speed * dt;
-        cab.wheelSpin += cab.speed * dt * 2;
-      }
+  const taxi = game.taxi.called;
+  if (!taxi) return;
+  const s = game.state;
+  const p = s.player;
+  if (taxi.driver === 'player') return; // the player is driving it
+  const dx = p.x - taxi.x, dz = p.z - taxi.z;
+  const d = Math.hypot(dx, dz);
+  if (d > 4) {
+    // Drive to the player.
+    taxi.heading = Math.atan2(dx, dz);
+    taxi.speed = Math.min(18, taxi.speed + 10 * dt);
+    const nx = taxi.x + Math.sin(taxi.heading) * taxi.speed * dt;
+    const nz = taxi.z + Math.cos(taxi.heading) * taxi.speed * dt;
+    if (!game.city.collidesCircle(nx, taxi.z, 1.6)) taxi.x = nx;
+    if (!game.city.collidesCircle(taxi.x, nz, 1.6)) taxi.z = nz;
+    taxi.wheelSpin += taxi.speed * dt * 2;
+  } else {
+    // Parked beside the player, waiting.
+    taxi.speed = 0;
+    taxi.driver = null;
+    taxi.parkedT += dt;
+    if (!taxi.arrived) {
+      taxi.arrived = true;
+      showToast(s, 'Your cab is here. Get in!', 4);
     }
-  }
-  if (!t.fare) return;
-  const f = t.fare;
-  const p = game.state.player;
-  f.t += dt;
-  if (!f.pickedUp) {
-    if (dist2(p.x, p.z, f.px, f.pz) < 64) {
-      f.pickedUp = true;
-      showToast(game.state, 'Passenger aboard — drive to ' + f.label + '.', 3);
-    }
-    return;
-  }
-  if (p.inCar) f.dist += Math.abs(p.speed) * dt;
-  if (dist2(p.x, p.z, f.dx, f.dz) < 100) {
-    // Fare + tip: base $30, +$1 per 20 units driven, tip for speed.
-    const base = 30;
-    const distPay = Math.floor(f.dist / 20);
-    const tip = f.t < 90 ? 15 : 0;
-    const total = base + distPay + tip;
-    addCash(game.state, total);
-    addRespect(game.state, 10);
-    game.state.stats.fares++;
-    showToast(game.state, 'Fare complete! +$' + total + (tip ? ' (incl. $15 tip)' : ''), 3);
-    t.fare = null;
   }
 }
 
-export function cancelFare(game) {
-  game.taxi.fare = null;
+// The taxi side job: pick up a passenger at the stand (0, 50) and
+// drop them at the harbour (330, -100). $120.
+export function stepTaxiFare(game, dt) {
+  const fare = game.taxi.fare;
+  if (!fare || !fare.active) return;
+  const s = game.state;
+  const p = s.player;
+  if (fare.stage === 0) {
+    if (p.inCar && Math.hypot(p.x - 0, p.z - 50) < 8) {
+      fare.stage = 1;
+      showToast(s, 'Passenger aboard — drop them at the harbour.', 4);
+    }
+  } else if (fare.stage === 1) {
+    if (p.inCar && Math.hypot(p.x - 330, p.z + 100) < 12) {
+      completeSideJob(game, 'taxi');
+    }
+  }
+}
+
+export function taxiBoxes(game, out) {
+  // Taxis are drawn by vehicleBoxes; this only adds the roof sign
+  // for a called taxi (the sign is drawn in vehicleBoxes already
+  // when kind === 'taxi'). Kept for symmetry with the other systems.
 }

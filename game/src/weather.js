@@ -10,6 +10,9 @@
 // afterglow 18:45 [0.75, 0.35, 0.5], warm fog to match. Neon signs
 // glow brighter at sunset (1.6x) and night (1.9x), 1.4x at dawn,
 // 1.0x in the day — and x0.85 in rain/fog.
+//
+// Fog near/far are in the same 0..1 range the vertex shader uses:
+// vFog = (NDC z + 1) / 2, so 0 is the near plane and 1 the far plane.
 
 import { TUNE, COL, clamp, lerp } from './config.js';
 
@@ -93,8 +96,8 @@ export function stepWeather(game, dt) {
   const w = game.weather;
   // A full game day lasts TUNE.dayLengthSec real seconds (720), so the
   // clock advances 86400 / 720 = 120 game-seconds per real second.
-  // The old code advanced 1:1, which made the golden hour take 2+
-  // real hours instead of ~2 minutes.
+  // Advancing 1:1 would make the golden hour take 2+ real hours
+  // instead of ~2 minutes.
   w.time += dt * (24 * 3600 / TUNE.dayLengthSec);
   if (w.time >= 24 * 3600) {
     w.time -= 24 * 3600;
@@ -120,9 +123,9 @@ export function stepWeather(game, dt) {
       });
     }
     for (const d of w.rainDrops) {
-      d.y -= 30 * dt;
+      d.y -= dt * 30;
       if (d.y < 0) {
-        d.y = 30 + Math.random() * 10;
+        d.y = 20 + Math.random() * 20;
         d.x = p.x + (Math.random() - 0.5) * 60;
         d.z = p.z + (Math.random() - 0.5) * 60;
       }
@@ -130,26 +133,23 @@ export function stepWeather(game, dt) {
   } else if (w.rainDrops.length > 0) {
     w.rainDrops.length = 0;
   }
-  // Keep the state clock in sync.
-  game.state.clock = w.time;
 }
 
-// Clock text for the HUD: "Day 1 · 17:42 · sunset · rain".
+// "Day 1 · 16:00 · sunset · clear" — the HUD clock line.
 export function clockText(game) {
   const w = game.weather;
-  const h = Math.floor((w.time / 3600) % 24);
-  const m = Math.floor((w.time / 60) % 60);
-  const hh = String(h).padStart(2, '0');
-  const mm = String(m).padStart(2, '0');
+  const hour = Math.floor((w.time / 3600) % 24);
+  const min = Math.floor((w.time / 60) % 60);
+  const hh = String(hour).padStart(2, '0');
+  const mm = String(min).padStart(2, '0');
   return 'Day ' + w.day + ' · ' + hh + ':' + mm + ' · ' + w.phase + ' · ' + w.weather;
 }
 
+// Rain drops as thin boxes in the dynamic batch.
 export function rainBoxes(game, out) {
   const w = game.weather;
   if (w.weather !== 'rain') return;
   for (const d of w.rainDrops) {
-    out.pushBox(d.x, d.y, d.z, 0.08, 1.2, 0.08, [0.7, 0.8, 0.95]);
+    out.pushBox(d.x, d.y, d.z, 0.1, 1.2, 0.1, [0.7, 0.8, 0.95]);
   }
 }
-
-export { DAY_KEYS };

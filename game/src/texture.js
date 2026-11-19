@@ -2,10 +2,10 @@
 //
 // The renderer is vertex-coloured; this atlas adds subtle surface
 // detail (brick, asphalt, sidewalk, sand, grass, water) without any
-// external files: the atlas is drawn on a canvas at runtime, so the
-// game stays dependency-free and offline. The fragment shader
-// multiplies the texture by the vertex colour, so a building keeps
-// its own tint — the tiles are deliberately light and low-contrast.
+// external files: it is drawn on a canvas at runtime, so the game
+// stays dependency-free and offline. The fragment shader multiplies
+// the texture by the vertex colour, so a building keeps its own tint
+// — the tiles are deliberately light and low-contrast.
 //
 // Atlas: 512x512, one row of 64x64 tiles. Tile rects are in UV space
 // (v = 1 at the top of the canvas, because the upload flips Y).
@@ -56,18 +56,18 @@ export function faceUV(name, w, h) {
 // colour, so the building/road keeps its own tint.
 export function drawAtlas(ctx) {
   const S = TILE_PX;
-  function tile(name) {
+  const tile = (name) => {
     const t = TILES[name];
     return { x: t.col * S, y: t.row * S };
-  }
-  function speckle(x, y, n, colours) {
+  };
+  const speckle = (x, y, n, colours) => {
     for (let i = 0; i < n; i++) {
       const px = x + ((i * 37) % S);
       const py = y + ((i * 53) % S);
       ctx.fillStyle = colours[i % colours.length];
       ctx.fillRect(px, py, 2, 2);
     }
-  }
+  };
   // plain: white.
   let p = tile('plain');
   ctx.fillStyle = '#ffffff';

@@ -7,7 +7,7 @@ import { RESPECT, TUNE } from './config.js';
 export function newGameState() {
   return {
     // flow
-    mode: 'menu', // menu | play | pause | busted | wasted | passed
+    mode: 'menu', // menu | chapter | play | pause | busted | wasted | passed
     chapter: 1,
     chapterIntroShown: false,
     // player economy + body
@@ -51,7 +51,7 @@ export function newGameState() {
     // UI state (pure data; hud.js renders it)
     hud: {
       toasts: [], // {text, t}
-      menu: null, // {title, body, hint} or null
+      menu: null, // {title, body, hint} or null — the modal (pause/busted/wasted/passed)
       dialogue: null, // {name, role, text, t}
       card: null, // chapter intro card {title, text, t} or null
     },
@@ -98,6 +98,9 @@ export function showDialogue(s, name, role, text, dur) {
   s.hud.dialogue = { name, role, text, t: dur || 10 };
 }
 
+// Show the MODAL overlay (pause / busted / wasted / mission passed).
+// This is a separate DOM element from the title screen (#hud-menu):
+// the title screen is static HTML and is never overwritten by this.
 export function showMenu(s, title, body, hint) {
   s.hud.menu = { title, body, hint: hint || 'Press Enter to continue.' };
 }
@@ -124,7 +127,7 @@ export function healPlayer(s, n) {
 
 export function completionPct(s) {
   // story 60 (12 per chapter) + side jobs 20 + garage 8 + respect 12
-  const story = Math.min(5, s.chapter - 1) * 12 + (s.chapter > 5 ? 0 : 0);
+  const story = Math.min(5, s.chapter - 1) * 12;
   const side = Math.min(20, s.stats.sideJobsDone * 4);
   const garage = Math.min(8, s.ownedCars.length * 2);
   const rep = Math.min(12, Math.floor(s.respect / 100));
