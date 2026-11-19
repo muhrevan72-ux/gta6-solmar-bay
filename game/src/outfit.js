@@ -1,52 +1,64 @@
-// Solmar Bay — outfit shop. A clothing shop building; press E to
-// open the menu, number keys cycle hair / shirt / pants / shoes,
-// each option bought with cash. The player's voxel body uses the
-// chosen colours, and the outfit persists in the save.
+// Solmar Bay — outfit shop: change the player's look.
+//
+// A clothing shop building; press E to open the outfit menu (number
+// keys cycle options). Changeable parts: hair, shirt, pants, shoes —
+// each with a few options, bought with cash. The player's voxel body
+// uses the chosen colours. The outfit persists in the save.
 
 import { OUTFIT } from './config.js';
 import { showToast } from './state.js';
-import { showMenu } from './hud.js';
 
-export function showOutfitMenu(game) {
-  const o = game.player.outfit;
-  const parts = ['hair', 'shirt', 'pants', 'shoes'];
-  const lines = parts.map((part, i) => {
-    const opts = OUTFIT[part];
-    const cur = opts[o[part]];
-    return (i + 1) + '. ' + part + ': ' + cur.name + (cur.price ? ' ($' + cur.price + ')' : ' (owned)');
-  }).join('<br>');
-  showMenu(game.hud, 'Outfit Shop', lines, 'Press 1-4 to cycle a part, Esc to close. Cash: $' + game.state.cash);
-}
+const PARTS = ['hair', 'shirt', 'pants', 'shoes'];
 
 export function createOutfit() {
   return {
-    open: false,
-    shop: { x: -50, z: 150 },
+    menuOpen: false,
+    part: 0, // index into PARTS
   };
 }
 
-export function buyOutfitPart(game, part) {
-  const state = game.state;
-  const outfit = game.player.outfit;
-  const options = OUTFIT[part];
-  if (!options) return false;
-  const next = (outfit[part] + 1) % options.length;
-  const item = options[next];
-  if (item.price > 0 && state.cash < item.price) {
-    showToast(state, 'Not enough cash for the ' + item.name + ' ($' + item.price + ').', 2);
-    return false;
-  }
-  state.cash -= item.price;
-  outfit[part] = next;
-  showToast(state, part + ': ' + item.name + (item.price ? ' (-$' + item.price + ')' : ''), 2);
-  if (game.audio) game.audio.play('pickup');
+// Cycle one part to the next option (Digit1-4 pick the part, Digit5
+// buys the current option). Called from main.js's key handling.
+export function cyclePart(game, partIdx) {
+  const s = game.state;
+  const part = PARTS[partIdx];
+  if (!part) return false;
+  const opts = OUTFIT[part];
+  const cur = s.outfit[part];
+  const next = (cur + 1) % opts.length;
+  s.outfit[part] = next;
+  showToast(s, part + ': ' + opts[next].name + (opts[next].price > 0 ? ' ($' + opts[next].price + ' — press 5 to buy)' : ' (free)'), 2);
   return true;
 }
 
-export function outfitBoxes(shop) {
-  return [
-    { x: shop.x, y: 2, z: shop.z, sx: 12, sy: 4, sz: 9, c: [0.75, 0.4, 0.85] },
-    { x: shop.x, y: 4.4, z: shop.z + 4.6, sx: 9, sy: 1.0, sz: 0.5, c: [1, 0.3, 0.6] },
-    { x: shop.x, y: 1.2, z: shop.z + 4.8, sx: 3, sy: 2.4, sz: 0.4, c: [0.95, 0.9, 0.7] },
-  ];
+export function buyCurrent(game) {
+  const s = game.state;
+  const part = PARTS[game.outfit.part];
+  const opts = OUTFIT[part];
+  const cur = s.outfit[part];
+  const opt = opts[cur];
+  if (opt.price <= 0) {
+    showToast(s, opt.name + ' is already yours.', 2);
+    return true;
+  }
+  if (s.cash < opt.price) {
+    showToast(s, 'Not enough cash for ' + opt.name + ' ($' + opt.price + ').', 2);
+    return false;
+  }
+  s.cash -= opt.price;
+  showToast(s, 'Bought ' + opt.name + ' for $' + opt.price + '!', 2);
+  return true;
 }
+
+// The outfit menu data for the HUD (part names + current option).
+export function outfitMenuData(game) {
+  const s = game.state;
+  return PARTS.map((part, i) => ({
+    part,
+    current: OUTFIT[part][s.outfit[part]].name,
+    price: OUTFIT[part][s.outfit[part]].price,
+    selected: i === game.outfit.part,
+  }));
+}
+
+export { PARTS, OUTFIT };

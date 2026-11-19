@@ -1,115 +1,109 @@
-// Solmar Bay — dating (wholesome, GTA San Andreas style). Maya
-// waits at her beach house. Press E to start a date: drive her to
-// the viewpoint, eat together at a food shop, drop her home.
-// Relationship 0–100% in the HUD; milestones give small bonuses.
-// Dates, conversation and gifts only — nothing else.
+// Solmar Bay — dating (wholesome, GTA San Andreas style).
+//
+// Maya, the girlfriend NPC, waits at the beach house. Press E to
+// start a date: drive her to the viewpoint, eat at a food shop
+// together, drop her home. Relationship meter 0-100% in the HUD;
+// milestones give small bonuses (she calls with a tip, tops up
+// health, gifts cash). Dates, conversation and gifts only — nothing
+// sexual.
 
-import { dist2, clamp } from './config.js';
-import { addCash, showToast } from './state.js';
+import { dist2 } from './config.js';
+import { addCash, addRespect, healPlayer, showToast, showDialogue } from './state.js';
 
 export function createDating() {
   return {
-    maya: { x: -310, z: 120, heading: 0, bob: 0 },
+    maya: { x: -310, z: 100, heading: 0 }, // beach house
     onDate: false,
-    stage: 0, // 0 idle, 1 drive to viewpoint, 2 eat together, 3 drive home
-    progress: 0, // date progress 0..3 (mirrors stage for the HUD)
+    stage: 0, // 0 idle, 1 drive to viewpoint, 2 eat together, 3 drop home
+    relationship: 0, // 0..100
     ateTogether: false,
-    inCar: false,
-    giftT: 0,
+    milestones: {}, // 25/50/75/100 claimed
   };
 }
 
-export function updateDating(game, dt) {
-  const dating = game.dating;
-  const p = game.player;
-  const state = game.state;
-  dating.giftT -= dt;
-  const maya = dating.maya;
-  maya.bob += dt * 2;
+export function startDate(game) {
+  const d = game.dating;
+  if (d.onDate) return false;
+  d.onDate = true;
+  d.stage = 1;
+  d.ateTogether = false;
+  showDialogue(game.state, 'Maya', 'Girlfriend', 'Take me somewhere with a view, then food. I\'m starving!', 6);
+  showToast(game.state, 'Date with Maya: drive her to the viewpoint (-300, 250).', 4);
+  return true;
+}
 
-  if (!dating.onDate) {
-    // Maya waits at the beach house, swaying gently
-    maya.x = -310;
-    maya.z = 120;
-    return;
-  }
+const VIEWPOINT = { x: -300, z: 250 };
+const MAYA_HOME = { x: -310, z: 100 };
 
-  // Maya rides with the player (in the car, or follows on foot)
-  if (p.inVehicle) {
-    dating.inCar = true;
-    maya.x = p.x - Math.sin(p.heading) * 1.5;
-    maya.z = p.z - Math.cos(p.heading) * 1.5;
-  } else if (dating.inCar) {
-    dating.inCar = false;
-    maya.x = p.x + 2;
-    maya.z = p.z + 2;
-  }
-
-  if (dating.stage === 1) {
-    // drive to the viewpoint on the beach road
-    if (dist2(p.x, p.z, -320, -200) < 144) {
-      dating.stage = 2;
-      dating.progress = 1;
-      showToast(state, 'What a view! Maya loved the drive. Now grab food together.', 3);
-      state.relationship = clamp(state.relationship + 15, 0, 100);
+export function stepDating(game, dt) {
+  const d = game.dating;
+  if (!d.onDate) return;
+  const p = game.state.player;
+  if (d.stage === 1) {
+    if (dist2(p.x, p.z, VIEWPOINT.x, VIEWPOINT.z) < 144) {
+      d.stage = 2;
+      showDialogue(game.state, 'Maya', 'Girlfriend', 'Wow, look at that sunset. Now let\'s eat — any food shop!', 6);
+      showToast(game.state, 'Viewpoint reached! Now eat together at a food shop.', 3);
     }
-  } else if (dating.stage === 2) {
-    if (dating.ateTogether) {
-      dating.stage = 3;
-      dating.progress = 2;
-      showToast(state, 'Dinner was lovely. Take Maya home.', 3);
-      state.relationship = clamp(state.relationship + 20, 0, 100);
+  } else if (d.stage === 2) {
+    if (d.ateTogether) {
+      d.stage = 3;
+      showDialogue(game.state, 'Maya', 'Girlfriend', 'That was lovely. Take me home now?', 5);
+      showToast(game.state, 'Dinner done! Drop Maya home at the beach house.', 3);
     }
-  } else if (dating.stage === 3) {
-    if (dist2(p.x, p.z, -310, 120) < 100) {
-      dating.onDate = false;
-      dating.stage = 0;
-      dating.ateTogether = false;
-      dating.progress = 3;
-      state.relationship = clamp(state.relationship + 25, 0, 100);
-      showToast(state, 'Date complete! Relationship ' + Math.round(state.relationship) + '%', 4);
-      if (game.audio) game.audio.play('win');
-      // milestones: she gifts cash / tops up health
-      if (state.relationship >= 50 && dating.giftT <= 0) {
-        dating.giftT = 300;
-        addCash(state, 100);
-        showToast(state, 'Maya slipped you $100. Sweet!', 3);
-      } else if (state.relationship >= 100) {
-        state.health = 100;
-        showToast(state, 'Maya topped up your health. True love!', 3);
+  } else if (d.stage === 3) {
+    if (dist2(p.x, p.z, MAYA_HOME.x, MAYA_HOME.z) < 100) {
+      endDate(game, true);
+    }
+  }
+}
+
+function endDate(game, success) {
+  const d = game.dating;
+  d.onDate = false;
+  d.stage = 0;
+  d.ateTogether = false;
+  if (success) {
+    d.relationship = Math.min(100, d.relationship + 20);
+    addRespect(game.state, 10);
+    showDialogue(game.state, 'Maya', 'Girlfriend', 'Best date ever. See you soon!', 5);
+    showToast(game.state, 'Date complete! Relationship ' + d.relationship + '% (+10 REP).', 3);
+    // Milestones.
+    for (const m of [25, 50, 75, 100]) {
+      if (d.relationship >= m && !d.milestones[m]) {
+        d.milestones[m] = true;
+        if (m === 25) {
+          showToast(game.state, 'Maya calls with a tip: a parked Comet is near the garage.', 4);
+        } else if (m === 50) {
+          healPlayer(game.state, 100);
+          showToast(game.state, 'Maya patched you up. +100 HP!', 3);
+        } else if (m === 75) {
+          addCash(game.state, 200);
+          showToast(game.state, 'Maya gifted you $200!', 3);
+        } else if (m === 100) {
+          addCash(game.state, 500);
+          showToast(game.state, 'Maya: "You\'re my favourite criminal." +$500!', 4);
+        }
       }
     }
   }
 }
 
-export function startDate(game) {
-  const dating = game.dating;
-  if (dating.onDate) return false;
-  dating.onDate = true;
-  dating.stage = 1;
-  dating.ateTogether = false;
-  dating.progress = 0;
-  showToast(game.state, 'Date with Maya! Drive to the viewpoint on the beach road.', 3);
-  if (game.audio) game.audio.play('mission');
-  return true;
+export function mayaBoxes(game, out) {
+  const d = game.dating;
+  // Maya: pink top, dark hair, standing at the beach house (or riding
+  // with the player on a date — she follows the car).
+  let x = d.maya.x;
+  let z = d.maya.z;
+  if (d.onDate && game.state.player.inCar) {
+    const v = game.state.player.inCar;
+    x = v.x - Math.sin(v.heading) * 1;
+    z = v.z - Math.cos(v.heading) * 1;
+  }
+  out.pushBox(x, 0.45, z, 0.6, 0.9, 0.35, [0.25, 0.35, 0.6]);
+  out.pushBox(x, 1.25, z, 0.8, 0.75, 0.42, [1.0, 0.5, 0.7]);
+  out.pushBox(x, 1.95, z, 0.52, 0.52, 0.48, [0.95, 0.8, 0.65]);
+  out.pushBox(x, 2.2, z, 0.54, 0.2, 0.5, [0.15, 0.1, 0.08]);
 }
 
-export function datingMarker(game) {
-  const dating = game.dating;
-  if (!dating.onDate) return { x: -310, z: 120, label: 'Maya' };
-  if (dating.stage === 1) return { x: -320, z: -200, label: 'Viewpoint' };
-  if (dating.stage === 2) return { x: -60, z: -40, label: 'Eat together' };
-  return { x: -310, z: 120, label: 'Take Maya home' };
-}
-
-export function mayaBoxes(game) {
-  const m = game.dating.maya;
-  const bobY = Math.sin(m.bob) * 0.05;
-  return [
-    { x: m.x - 0.22, y: 0.4 + bobY, z: m.z, sx: 0.4, sy: 0.8, sz: 0.4, c: [0.3, 0.3, 0.5] },
-    { x: m.x + 0.22, y: 0.4 + bobY, z: m.z, sx: 0.4, sy: 0.8, sz: 0.4, c: [0.3, 0.3, 0.5] },
-    { x: m.x, y: 1.2 + bobY, z: m.z, sx: 0.9, sy: 0.8, sz: 0.5, c: [0.95, 0.4, 0.6] },
-    { x: m.x, y: 1.85 + bobY, z: m.z, sx: 0.6, sy: 0.55, sz: 0.55, c: [0.9, 0.7, 0.55] },
-    { x: m.x, y: 2.15 + bobY, z: m.z, sx: 0.66, sy: 0.22, sz: 0.62, c: [0.35, 0.2, 0.1] },
-  ];
-}
+export { VIEWPOINT, MAYA_HOME };

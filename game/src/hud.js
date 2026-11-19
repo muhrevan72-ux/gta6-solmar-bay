@@ -1,318 +1,195 @@
-// Solmar Bay — HUD: DOM overlay (cash, health, wanted stars,
-// objective, speed, toasts, menus) + a 2D canvas minimap drawn
-// behind the menus too (the title screen must not show an empty box).
+// Solmar Bay — HUD: the dense top-4 style interface.
+//
+// Mission panel (chapter + stage + objective + NEXT + respect +
+// location + completion %), police response list (named units +
+// distance + status), Day N · HH:MM · phase · weather clock, weapon
+// slots with ammo, car name + condition while driving, radio
+// station + song, district name, dialogue box with a named NPC +
+// role. All the data comes from pure functions (headless-testable);
+// updateHud writes it into the DOM. drawMinimap is exported and
+// called in the menu branch too, so the title screen never shows an
+// empty green box.
 
-import { currentSky } from './weather.js';
-import { CHAPTERS, RESPECT } from './config.js';
-import { respectLevel } from './state.js';
+import { districtAt, respectLevel } from './config.js';
+import { missionPanelData } from './missions.js';
 import { policeListData } from './police.js';
+import { clockText } from './weather.js';
+import { radioNow } from './audio.js';
 import { completionPct } from './missions.js';
 
-export function createHud(documentRef) {
-  const doc = documentRef || (typeof document !== 'undefined' ? document : null);
-  const hud = {
-    doc,
-    els: {},
-    wantedFlash: 0,
-    minimapCtx: null,
-  };
-  hud.flashWanted = () => {
-    hud.wantedFlash = 1;
-  };
-  if (doc) {
-    const ids = ['cash', 'health', 'healthbar', 'armour', 'wanted', 'objective', 'speed', 'toast', 'chapter', 'weapon', 'bombs', 'relationship', 'clock', 'minimap', 'menu', 'menu-title', 'menu-body', 'menu-hint', 'mission-panel', 'police-list', 'radio', 'carinfo', 'dialogue'];
-    for (const id of ids) {
-      hud.els[id] = doc.getElementById(id);
-    }
-    const mm = hud.els.minimap;
-    if (mm && mm.getContext) hud.minimapCtx = mm.getContext('2d');
-  }
-  return hud;
+export const HUD_IDS = [
+  'hud-cash', 'hud-health', 'hud-armour', 'hud-wanted', 'hud-objective',
+  'hud-speed', 'hud-mission', 'hud-police', 'hud-respect', 'hud-clock',
+  'hud-weapons', 'hud-car', 'hud-radio', 'hud-district', 'hud-dialogue',
+  'hud-toast', 'hud-menu', 'hud-card', 'hud-minimap', 'hud-phone',
+];
+
+export function weaponSlots(game) {
+  const s = game.state;
+  const slots = [];
+  slots.push({ key: '1', name: 'Pistol', ammo: '∞', owned: true, active: s.weapon === 'pistol' });
+  slots.push({ key: '2', name: 'SMG', ammo: String(s.ammo.smg), owned: s.weapons.smg, active: s.weapon === 'smg' });
+  slots.push({ key: '3', name: 'Shotgun', ammo: String(s.ammo.shotgun), owned: s.weapons.shotgun, active: s.weapon === 'shotgun' });
+  return slots;
 }
 
-function setText(el, text) {
-  if (el && el.textContent !== text) el.textContent = text;
-}
-
-export function updateHud(game) {
-  const hud = game.hud;
-  const state = game.state;
-  if (!hud || !hud.doc) return;
-  setText(hud.els.cash, '$' + state.cash);
-  setText(hud.els.health, Math.ceil(state.health) + ' HP');
-  if (hud.els.healthbar) hud.els.healthbar.style.width = Math.max(0, state.health) + '%';
-  setText(hud.els.armour, state.armour > 0 ? 'Armour ' + Math.ceil(state.armour) : '');
-  const stars = '\u2605'.repeat(state.wanted) + '\u2606'.repeat(5 - state.wanted);
-  setText(hud.els.wanted, stars);
-  if (hud.els.wanted) {
-    hud.els.wanted.style.color = state.wanted > 0 ? '#ff4444' : '#ffd75e';
-    hud.els.wanted.style.opacity = hud.wantedFlash > 0.5 ? '1' : '0.85';
-  }
-  hud.wantedFlash = Math.max(0, hud.wantedFlash - 0.02);
-  const marker = game.missions ? currentMarker(game) : null;
-  setText(hud.els.objective, marker ? marker.label : chapterObjective(game));
-  const speed = game.player.inVehicle ? Math.abs(game.player.inVehicle.speed || 0) : Math.abs(game.player.speed || 0);
-  setText(hud.els.speed, Math.round(speed * 3.6) + ' km/h');
-  if (hud.els.toast) {
-    setText(hud.els.toast, state.toastT > 0 ? state.toast : '');
-  }
-  if (hud.els.weapon) {
-    const w = game.combat ? game.combat : null;
-    setText(hud.els.weapon, w ? weaponSlotsText(w) : '');
-  }
-  if (hud.els.bombs) {
-    setText(hud.els.bombs, game.combat ? 'Bombs: ' + game.combat.bombs : '');
-  }
-  if (hud.els.relationship) {
-    setText(hud.els.relationship, state.relationship > 0 ? 'Maya \u2665 ' + Math.round(state.relationship) + '%' : '');
-  }
-  if (hud.els.clock && game.weather) {
-    const sky = currentSky(game.weather);
-    setText(hud.els.clock, 'Day ' + sky.day + ' · ' + sky.clock + ' · ' + sky.phase + ' · ' + sky.weather);
-  }
-  updateDensePanels(game);
-  drawMinimap(game);
-}
-
-// Weapon slots with ammo counts (graphics pass): the current weapon
-// is bracketed, unowned slots are dimmed with a dash.
-export function weaponSlotsText(combat) {
-  const names = ['Pistol', 'SMG', 'Shotgun'];
-  return names.map((n, i) => {
-    if (!combat.owned[i]) return n + ' —';
-    const ammo = combat.ammo && combat.ammo[i] !== undefined ? combat.ammo[i] : Infinity;
-    const label = ammo === Infinity ? '∞' : String(ammo);
-    const slot = n + ' ' + label;
-    return i === combat.weapon ? '[' + slot + ']' : slot;
-  }).join('  ');
-}
-
-// ---- dense HUD panels (graphics pass, top-4 formula) ----
-
-// District name for a position.
-export function districtAt(x, z) {
-  if (x < -300) return 'Beach';
-  if (x > 300 && z < 0) return 'Harbour';
-  if (z > 200) return 'Suburbs';
-  if (x > 200 && z < -200) return 'Airport';
-  if (Math.abs(x) <= 150 && Math.abs(z) <= 150) return 'Downtown';
-  if (x >= 0 && z < 0) return 'Eastside';
-  if (x < 0 && z < 0) return 'Northside';
-  if (x >= 0) return 'Southside';
-  return 'West End';
-}
-
-// Mission panel data: chapter + stage + objective + next + respect
-// + location + completion. Pure, headless-testable.
-export function missionPanelData(game) {
-  const state = game.state;
-  const ch = state.chapter;
-  const rep = state.respect || 0;
-  const level = respectLevel(rep, RESPECT.levels);
-  const nextLevel = RESPECT.levels.find((l) => l.min > rep);
-  const repPct = nextLevel ? Math.round(((rep - level.min) / (nextLevel.min - level.min)) * 100) : 100;
-  const marker = game.missions ? currentMarker(game) : null;
-  const step = game.missions ? game.missions.step || 0 : 0;
-  if (ch > 5) {
-    return {
-      title: 'Free Roam', stage: 'Story complete', objective: 'Side jobs still pay.',
-      next: 'NEXT: —', respect: rep, levelName: level.name, repPct,
-      location: districtAt(game.player.x, game.player.z), completion: completionPct(game),
-    };
-  }
-  const chapter = CHAPTERS[ch - 1];
-  const nextChapter = CHAPTERS[ch];
+export function respectInfo(game) {
+  const s = game.state;
+  const lvl = respectLevel(s.respect);
   return {
-    title: chapter.title,
-    stage: 'Stage ' + (step + 1) + (marker ? ' — ' + marker.label : ''),
-    objective: chapter.objective,
-    next: 'NEXT: ' + (nextChapter ? nextChapter.title : 'Free roam'),
-    respect: rep, levelName: level.name, repPct,
-    location: districtAt(game.player.x, game.player.z),
+    name: lvl.name,
+    rep: s.respect,
+    next: lvl.next,
+    nextMin: lvl.nextMin,
+    pct: lvl.nextMin ? Math.round(((s.respect - lvl.min) / (lvl.nextMin - lvl.min)) * 100) : 100,
+  };
+}
+
+export function carInfo(game) {
+  const v = game.state.player.inCar;
+  if (!v) return null;
+  return {
+    name: v.name,
+    condition: Math.max(0, 100 - v.damage),
+    speed: Math.round(Math.abs(v.speed) * 3.6), // km/h
+  };
+}
+
+export function hudData(game) {
+  const s = game.state;
+  return {
+    cash: s.cash,
+    bank: s.bank,
+    health: Math.round(s.health),
+    armour: Math.round(s.armour),
+    wanted: s.wanted,
+    speed: Math.round(Math.abs(s.player.speed) * 3.6),
+    mission: missionPanelData(game),
+    police: policeListData(game),
+    respect: respectInfo(game),
+    clock: clockText(game),
+    weapons: weaponSlots(game),
+    car: carInfo(game),
+    radio: radioNow(game.radio),
+    district: districtAt(s.player.x, s.player.z),
+    dialogue: s.hud.dialogue,
     completion: completionPct(game),
+    bombs: s.bombs,
+    relationship: game.dating.relationship,
   };
 }
 
-// Car panel data while driving: name + condition (100 - damage).
-export function carInfoData(game) {
-  const veh = game.player.inVehicle;
-  if (!veh) return null;
-  return {
-    name: veh.name || 'Car',
-    condition: Math.max(0, 100 - (veh.damage || 0)),
-    speedKmh: Math.round(Math.abs(veh.speed || 0) * 3.6),
-  };
-}
-
-// Dialogue box data: the latest named-NPC message (Rico/Maya/Taxi
-// Co.), shown while it is less than 10s old (game time).
-export function dialogueData(game) {
-  const msgs = game.phone && game.phone.messages;
-  if (!msgs || !msgs.length) return null;
-  const m = msgs[msgs.length - 1];
-  if (game.state.time - (m.t || 0) > 10) return null;
-  const roles = { Rico: 'Fixer', Maya: 'Girlfriend', 'Taxi Co.': 'Dispatch' };
-  return { from: m.from, role: roles[m.from] || 'Contact', text: m.text };
-}
-
-// Radio panel data: station + song (null when there is no audio).
-export function radioData(game) {
-  if (!game.audio || !game.audio.currentSong) return null;
-  const now = game.audio.currentSong();
-  return { station: now.station, freq: now.freq, song: now.song.title, artist: now.song.artist };
-}
-
-function setPanel(el, html) {
-  if (!el) return;
-  if (!html) {
-    el.style.display = 'none';
-    return;
-  }
-  el.style.display = 'block';
-  if (el.innerHTML !== html) el.innerHTML = html;
-}
-
-function esc(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function updateDensePanels(game) {
-  const hud = game.hud;
-  const state = game.state;
-  // mission panel: chapter + stage + objective + next + respect + location
-  const mp = missionPanelData(game);
-  setPanel(hud.els['mission-panel'],
-    '<div class="mp-title">' + esc(mp.title) + '</div>' +
-    '<div>' + esc(mp.stage) + '</div>' +
-    '<div>' + esc(mp.objective) + '</div>' +
-    '<div class="mp-next">' + esc(mp.next) + '</div>' +
-    '<div class="mp-rep">REP ' + esc(mp.levelName) + ' · ' + mp.respect +
-    '<div class="mp-repbar"><div class="mp-repfill" style="width:' + mp.repPct + '%"></div></div></div>' +
-    '<div>' + esc(mp.location) + ' · ' + mp.completion + '% complete</div>');
-  // police response list: named units + distance + status
-  const units = policeListData(game);
-  setPanel(hud.els['police-list'], units.length === 0 ? null :
-    '<div class="pl-title">POLICE RESPONSE</div>' +
-    units.map((u) => '<div class="pl-row"><span>' + esc(u.name) + '</span><span>' + u.dist + 'm</span><span class="pl-status">' + esc(u.status) + '</span></div>').join(''));
-  // radio: station + song
-  const rd = radioData(game);
-  setPanel(hud.els.radio, rd ? '<div class="r-station">' + esc(rd.station) + ' ' + esc(rd.freq) + '</div><div>"' + esc(rd.song) + '" — ' + esc(rd.artist) + '</div><div>R to change · M mute</div>' : null);
-  // car info: name + condition, only while driving
-  const ci = carInfoData(game);
-  setPanel(hud.els.carinfo, ci ? '<div class="c-name">' + esc(ci.name) + '</div><div>Condition ' + ci.condition + '% · ' + ci.speedKmh + ' km/h</div>' : null);
-  // dialogue: latest named-NPC message
-  const dg = dialogueData(game);
-  setPanel(hud.els.dialogue, dg ? '<span class="d-from">' + esc(dg.from) + ' (' + esc(dg.role) + '):</span> ' + esc(dg.text) : null);
-}
-
-function chapterObjective(game) {
-  const ch = game.state.chapter;
-  if (ch > 5) return 'Free roam — side jobs still pay.';
-  const CHAPTERS = [
-    'Steal a car and drive to the garage.',
-    'Pick up the package, deliver it before time runs out.',
-    'Escape the 3-star wanted level.',
-    'Pick up 3 passengers and drop them off.',
-    'Grab the cash, lose the heat, reach the safehouse.',
-  ];
-  return CHAPTERS[ch - 1] || '';
-}
-
-function currentMarker(game) {
-  if (game.missions) {
-    const m = game.missions.marker || null;
-    if (m) return m;
-  }
-  if (game.dating) {
-    const d = game.dating;
-    if (d.onDate) return { label: 'Date with Maya' };
-  }
-  return null;
-}
-
-// 2D top-down minimap: roads, water, buildings, player, mission
-// marker, police blips, gang turf. Drawn every frame, including
-// behind the title menu. Optional ctx/size draw into another canvas
-// (the phone's big map).
-export function drawMinimap(game, ctx, size) {
-  const hud = game.hud;
-  ctx = ctx || (hud && hud.minimapCtx);
+// Minimap (2D canvas, top-down): player, mission marker, police
+// blips, gang turf, car. Exported so the title screen can draw it
+// behind the menu.
+export function drawMinimap(ctx, game, w, h) {
   if (!ctx) return;
-  const S = size || 200; // canvas pixels
-  const W = 800; // world units
-  const scale = S / W;
-  const toX = (x) => (x + 400) * scale;
-  const toZ = (z) => (z + 400) * scale;
-  ctx.clearRect(0, 0, S, S);
-  ctx.fillStyle = '#1d2b1d';
-  ctx.fillRect(0, 0, S, S);
-  // water west
-  ctx.fillStyle = '#2a6f9f';
-  ctx.fillRect(0, 0, (70) * scale, S);
-  // sand
-  ctx.fillStyle = '#d8c27a';
-  ctx.fillRect((70) * scale, 0, (70) * scale, S);
-  // roads
-  ctx.fillStyle = '#3a3a3e';
-  for (let g = -300; g <= 300; g += 100) {
-    ctx.fillRect(toX(g) - 1.5, 0, 3, S);
-    ctx.fillRect(0, toZ(g) - 1.5, S, 3);
+  const size = Math.min(w, h);
+  const scale = size / 800;
+  const cx = w / 2;
+  const cy = h / 2;
+  ctx.fillStyle = '#0d2b1a';
+  ctx.fillRect(0, 0, w, h);
+  // Water + sand (west edge).
+  ctx.fillStyle = '#2a6a8a';
+  ctx.fillRect(0, 0, (400 - 340) * scale * 0 + 30 * scale, h);
+  ctx.fillStyle = '#c8a86a';
+  ctx.fillRect(30 * scale, 0, 40 * scale, h);
+  // Roads.
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 7 * scale;
+  for (const l of [-300, -200, -100, 0, 100, 200, 300]) {
+    const px = cx + l * scale;
+    const py = cy + l * scale;
+    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(w, py); ctx.stroke();
   }
-  // buildings
-  ctx.fillStyle = '#8a8a90';
+  // Gang turf.
+  ctx.fillStyle = 'rgba(240, 190, 40, 0.25)';
+  ctx.fillRect(cx - 160 * scale, cy - 240 * scale, 320 * scale, 280 * scale);
+  ctx.fillStyle = 'rgba(40, 180, 180, 0.25)';
+  ctx.fillRect(cx + 230 * scale, cy - 210 * scale, 180 * scale, 220 * scale);
+  // Buildings.
+  ctx.fillStyle = '#777';
   for (const b of game.city.buildings) {
-    ctx.fillRect(toX(b.x - b.sx / 2), toZ(b.z - b.sz / 2), Math.max(1, b.sx * scale), Math.max(1, b.sz * scale));
+    ctx.fillRect(cx + (b.x - b.sx / 2) * scale, cy + (b.z - b.sz / 2) * scale, b.sx * scale, b.sz * scale);
   }
-  // gang turf
-  ctx.fillStyle = 'rgba(255, 200, 40, 0.25)';
-  ctx.fillRect(toX(-150), toZ(-150), 300 * scale, 300 * scale);
-  ctx.fillStyle = 'rgba(40, 200, 200, 0.25)';
-  ctx.fillRect(toX(230), toZ(220), 170 * scale, 180 * scale);
-  // mission marker (yellow diamond)
-  const marker = currentMarker(game);
-  if (marker) {
-    ctx.fillStyle = '#ffd75e';
-    const mx = toX(marker.x);
-    const mz = toZ(marker.z);
+  // Mission marker (yellow).
+  const m = game.missions.marker;
+  if (m) {
+    ctx.fillStyle = '#ffd21f';
     ctx.beginPath();
-    ctx.moveTo(mx, mz - 6);
-    ctx.lineTo(mx + 5, mz);
-    ctx.lineTo(mx, mz + 6);
-    ctx.lineTo(mx - 5, mz);
-    ctx.closePath();
+    ctx.arc(cx + m.x * scale, cy + m.z * scale, 6, 0, Math.PI * 2);
     ctx.fill();
   }
-  // police blips (blue)
-  if (game.police) {
-    ctx.fillStyle = '#3a7bff';
-    for (const c of game.police.copCars) {
-      ctx.beginPath();
-      ctx.arc(toX(c.x), toZ(c.z), 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
+  // Police blips (blue).
+  ctx.fillStyle = '#3a6cff';
+  for (const c of game.police.cops) {
+    ctx.beginPath();
+    ctx.arc(cx + c.x * scale, cy + c.z * scale, 3, 0, Math.PI * 2);
+    ctx.fill();
   }
-  // player (white dot + heading tick)
-  const p = game.player;
-  ctx.fillStyle = '#ffffff';
+  // Player (white triangle).
+  const p = game.state.player;
+  ctx.fillStyle = '#fff';
   ctx.beginPath();
-  ctx.arc(toX(p.x), toZ(p.z), 4, 0, Math.PI * 2);
+  ctx.arc(cx + p.x * scale, cy + p.z * scale, 5, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = '#ffffff';
-  ctx.beginPath();
-  ctx.moveTo(toX(p.x), toZ(p.z));
-  ctx.lineTo(toX(p.x) + Math.sin(p.heading) * 8, toZ(p.z) + Math.cos(p.heading) * 8);
-  ctx.stroke();
 }
 
-export function showMenu(hud, title, body, hint) {
-  if (!hud || !hud.doc) return;
-  setText(hud.els['menu-title'], title || '');
-  if (hud.els['menu-body']) hud.els['menu-body'].innerHTML = body || '';
-  setText(hud.els['menu-hint'], hint || '');
-  if (hud.els.menu) hud.els.menu.style.display = 'block';
-}
-
-export function hideMenu(hud) {
-  if (!hud || !hud.doc) return;
-  if (hud.els.menu) hud.els.menu.style.display = 'none';
+export function updateHud(game, els) {
+  if (typeof document === 'undefined' || !els) return;
+  const d = hudData(game);
+  const set = (id, text) => {
+    const el = els[id];
+    if (el) el.textContent = text;
+  };
+  set('hud-cash', '$' + d.cash + (d.bank ? '  ·  bank $' + d.bank : ''));
+  set('hud-health', 'HP ' + d.health + (d.armour ? ' · Armour ' + d.armour : ''));
+  set('hud-wanted', '★'.repeat(d.wanted) + '☆'.repeat(5 - d.wanted));
+  set('hud-objective', d.mission.objective);
+  set('hud-speed', d.car ? d.car.speed + ' km/h' : Math.round(d.speed) + ' km/h');
+  set('hud-clock', d.clock);
+  set('hud-district', d.district);
+  set('hud-respect', d.respect.name + ' · ' + d.respect.rep + ' REP' + (d.respect.next ? ' → ' + d.respect.next + ' (' + d.respect.nextMin + ')' : ''));
+  set('hud-radio', d.radio.station + ' ' + d.radio.freq + ' — ' + d.radio.song);
+  set('hud-car', d.car ? d.car.name + ' · ' + d.car.condition + '%' : '');
+  const wEl = els['hud-weapons'];
+  if (wEl) {
+    wEl.innerHTML = d.weapons.map((w) => (w.active ? '<b>' : '') + '[' + w.name + ' ' + (w.owned ? w.ammo : '—') + ']' + (w.active ? '</b>' : '')).join(' ');
+  }
+  const mEl = els['hud-mission'];
+  if (mEl) {
+    mEl.innerHTML = '<b>' + d.mission.chapter + '</b><br>' + d.mission.objective +
+      (d.mission.next ? '<br>NEXT: ' + d.mission.next : '') +
+      (d.mission.sideJob ? '<br>JOB: ' + d.mission.sideJob : '') +
+      '<br>Complete: ' + d.mission.completion + '%';
+  }
+  const pEl = els['hud-police'];
+  if (pEl) {
+    pEl.innerHTML = d.police.length
+      ? d.police.map((u) => u.name + ' ' + u.status + ' ' + u.dist + 'm').join('<br>')
+      : 'No police response';
+  }
+  const dg = els['hud-dialogue'];
+  if (dg) {
+    dg.style.display = d.dialogue ? 'block' : 'none';
+    if (d.dialogue) dg.innerHTML = '<b>' + d.dialogue.name + '</b> <i>' + d.dialogue.role + '</i><br>' + d.dialogue.text;
+  }
+  const tEl = els['hud-toast'];
+  if (tEl) {
+    tEl.innerHTML = game.state.hud.toasts.map((t) => '<div>' + t.text + '</div>').join('');
+  }
+  const menu = els['hud-menu'];
+  if (menu) {
+    const m = game.state.hud.menu;
+    menu.style.display = m ? 'block' : 'none';
+    if (m) menu.innerHTML = '<h2>' + m.title + '</h2><p>' + m.body + '</p><p><i>' + m.hint + '</i></p>';
+  }
+  const card = els['hud-card'];
+  if (card) {
+    const c = game.state.hud.card;
+    card.style.display = c ? 'block' : 'none';
+    if (c) card.innerHTML = '<h2>' + c.title + '</h2><p>' + c.text + '</p><p><i>Press Enter to start.</i></p>';
+  }
 }

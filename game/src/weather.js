@@ -1,193 +1,155 @@
 // Solmar Bay — weather + day/night cycle.
 //
-// A game-day lasts TUNE.dayLengthSec real seconds. The time of day
-// drives the sky colour, fog colour/density and light level through
-// keyframes (night / dawn / day / sunset); the weather state
-// (clear / rain / fog) changes every 90-180s and modifies the fog
-// further. Rain draws visible falling drops around the player
-// (capped, cheap boxes). All state is plain data, so headless tests
-// can construct any time/weather directly.
-
-import { TUNE, clamp, lerp } from './config.js';
-
-// hour -> { sky, fog, light }. Sky is the clear colour, fog the
-// distance-fade colour (the renderer clears to the fog colour).
+// A 720-second game day: dawn / day / sunset / night keyframes drive
+// the sky colour, fog colour/density and light tint. Weather states
+// (clear, rain with visible rain particles + darker light, fog with
+// short fog distance) change every 90-180 seconds.
 //
-// The sunset is a GOLDEN HOUR look (the reference: the bounty
-// leader's "GOLDEN HOUR KINGS" — warm orange/pink sky, warm low
-// light, neon glowing). The game starts at 16:00, so the player
-// watches the city warm into golden hour within ~30 seconds, peak
-// sunset at 18:00, a pink dusk afterglow, then night.
-const KEYS = [
-  { h: 0, sky: [0.04, 0.06, 0.13], fog: [0.05, 0.07, 0.15], light: 0.45 },
-  { h: 5, sky: [0.04, 0.06, 0.13], fog: [0.05, 0.07, 0.15], light: 0.45 },
-  { h: 6.5, sky: [0.98, 0.62, 0.45], fog: [0.95, 0.65, 0.55], light: 0.8 },
-  { h: 8, sky: [0.55, 0.8, 0.95], fog: [0.72, 0.85, 0.95], light: 1.0 },
-  { h: 16, sky: [0.55, 0.8, 0.95], fog: [0.72, 0.85, 0.95], light: 1.0 },
-  { h: 17, sky: [1.0, 0.62, 0.38], fog: [1.0, 0.66, 0.45], light: 0.95 },
-  { h: 18, sky: [1.0, 0.45, 0.3], fog: [1.0, 0.55, 0.45], light: 0.85 },
-  { h: 18.75, sky: [0.75, 0.35, 0.5], fog: [0.8, 0.45, 0.55], light: 0.6 },
-  { h: 19.5, sky: [0.05, 0.07, 0.14], fog: [0.06, 0.08, 0.16], light: 0.5 },
-  { h: 24, sky: [0.04, 0.06, 0.13], fog: [0.05, 0.07, 0.15], light: 0.45 },
+// GOLDEN HOUR (the look the bounty leaders use): golden hour 17:00
+// sky [1, 0.62, 0.38], peak sunset 18:00 [1, 0.45, 0.3], pink dusk
+// afterglow 18:45 [0.75, 0.35, 0.5], warm fog to match. Neon signs
+// glow brighter at sunset (1.6x) and night (1.9x), 1.4x at dawn,
+// 1.0x in the day — and x0.85 in rain/fog.
+
+import { TUNE, COL, clamp, lerp } from './config.js';
+
+// Keyframes: [hour, sky, fog, fogNear, fogFar, neonBoost].
+const DAY_KEYS = [
+  { h: 0, sky: COL.skyNight, fog: COL.fogNight, near: 0.25, far: 0.7, neon: 1.9 },
+  { h: 5, sky: [0.45, 0.4, 0.55], fog: [0.5, 0.45, 0.55], near: 0.3, far: 0.9, neon: 1.4 },
+  { h: 7, sky: COL.skyDawn, fog: [0.85, 0.65, 0.55], near: 0.35, far: 1.0, neon: 1.4 },
+  { h: 10, sky: COL.skyDay, fog: COL.fogDay, near: 0.4, far: 1.2, neon: 1.0 },
+  { h: 15, sky: [0.9, 0.78, 0.62], fog: [0.9, 0.78, 0.62], near: 0.4, far: 1.1, neon: 1.0 },
+  { h: 16.5, sky: COL.skyGolden, fog: [1.0, 0.62, 0.38], near: 0.35, far: 1.0, neon: 1.6 },
+  { h: 17.5, sky: COL.skySunset, fog: [1.0, 0.45, 0.3], near: 0.3, far: 0.9, neon: 1.6 },
+  { h: 19, sky: COL.skyDusk, fog: [0.75, 0.35, 0.5], near: 0.3, far: 0.85, neon: 1.9 },
+  { h: 20, sky: COL.skyNight, fog: COL.fogNight, near: 0.25, far: 0.7, neon: 1.9 },
+  { h: 24, sky: COL.skyNight, fog: COL.fogNight, near: 0.25, far: 0.7, neon: 1.9 },
+  { h: 29, sky: [0.45, 0.4, 0.55], fog: [0.5, 0.45, 0.55], near: 0.3, far: 0.9, neon: 1.4 },
 ];
 
-export function phaseFor(hour) {
-  if (hour < 5 || hour >= 19) return 'Night';
-  if (hour < 7) return 'Dawn';
-  if (hour < 17) return 'Day';
-  return 'Sunset';
+export function createWeather() {
+  return {
+    time: 16 * 3600, // seconds since midnight — starts at 16:00 so the
+    // golden hour arrives soon after a new game starts
+    day: 1,
+    weather: 'clear', // clear | rain | fog
+    weatherT: 120, // seconds until the next weather change
+    rainDrops: [], // {x, y, z} falling drops around the player
+    phase: 'day',
+  };
 }
 
-function lerp3(a, b, t) {
-  return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
-}
-
-// Keyframe colours for one hour of the day (0..24).
-export function keyframeFor(hour) {
-  const h = ((hour % 24) + 24) % 24;
-  let a = KEYS[0];
-  let b = KEYS[KEYS.length - 1];
-  for (let i = 0; i < KEYS.length - 1; i++) {
-    if (h >= KEYS[i].h && h <= KEYS[i + 1].h) {
-      a = KEYS[i];
-      b = KEYS[i + 1];
+function sampleKeys(w) {
+  const hour = (w.time / 3600) % 24;
+  let a = DAY_KEYS[0];
+  let b = DAY_KEYS[DAY_KEYS.length - 1];
+  for (let i = 0; i < DAY_KEYS.length - 1; i++) {
+    if (hour >= DAY_KEYS[i].h && hour < DAY_KEYS[i + 1].h) {
+      a = DAY_KEYS[i];
+      b = DAY_KEYS[i + 1];
       break;
     }
   }
   const span = b.h - a.h || 1;
-  const t = clamp((h - a.h) / span, 0, 1);
+  const t = clamp((hour - a.h) / span, 0, 1);
+  const mix = (va, vb) => [lerp(va[0], vb[0], t), lerp(va[1], vb[1], t), lerp(va[2], vb[2], t)];
   return {
-    sky: lerp3(a.sky, b.sky, t),
-    fog: lerp3(a.fog, b.fog, t),
-    light: lerp(a.light, b.light, t),
+    sky: mix(a.sky, b.sky),
+    fog: mix(a.fog, b.fog),
+    near: lerp(a.near, b.near, t),
+    far: lerp(a.far, b.far, t),
+    neon: lerp(a.neon, b.neon, t),
+    hour,
   };
 }
 
-export function createWeather() {
-  return {
-    time: 16.0, // game hours; starts late afternoon (sunset palette)
-    day: 1, // game day, increments when the clock wraps past 24
-    weather: 'clear', // clear | rain | fog
-    weatherT: 0, // seconds in the current weather
-    nextChange: 120, // seconds until the weather may change
-    rain: [], // rain drops { x, y, z } around the player
-  };
-}
-
-function seedRain(w, game) {
-  const p = game.player;
-  w.rain = [];
-  for (let i = 0; i < TUNE.rainDrops; i++) {
-    w.rain.push({
-      x: p.x + (Math.random() * 90 - 45),
-      y: Math.random() * 25,
-      z: p.z + (Math.random() * 90 - 45),
-    });
+export function weatherSample(w) {
+  const s = sampleKeys(w);
+  // Weather modifies the sample: rain darkens + shortens fog, fog
+  // shortens the fog distance hard.
+  if (w.weather === 'rain') {
+    s.sky = s.sky.map((v) => v * 0.7);
+    s.fog = s.fog.map((v) => v * 0.75);
+    s.far *= 0.75;
+    s.neon *= 0.85;
+  } else if (w.weather === 'fog') {
+    s.far = 0.35;
+    s.near = 0.05;
+    s.neon *= 0.85;
   }
+  return s;
 }
 
-export function updateWeather(game, dt) {
+export function phaseName(w) {
+  const hour = (w.time / 3600) % 24;
+  if (hour >= 5 && hour < 8) return 'dawn';
+  if (hour >= 8 && hour < 16) return 'day';
+  if (hour >= 16 && hour < 19.5) return 'sunset';
+  return 'night';
+}
+
+export function stepWeather(game, dt) {
   const w = game.weather;
-  if (!w) return;
-  // advance the clock: one game day per TUNE.dayLengthSec seconds
-  const before = w.time;
-  w.time = (w.time + (dt * 24) / TUNE.dayLengthSec) % 24;
-  if (w.time < before) w.day = (w.day || 1) + 1; // wrapped past midnight
-  // weather state machine
-  w.weatherT += dt;
-  w.nextChange -= dt;
-  if (w.nextChange <= 0) {
-    const r = Math.random();
-    const next = r < 0.6 ? 'clear' : r < 0.8 ? 'rain' : 'fog';
-    if (next !== w.weather) {
-      w.weather = next;
-      w.weatherT = 0;
-      if (next === 'rain') seedRain(w, game);
-      else w.rain = [];
-    }
-    w.nextChange = TUNE.weatherMinSec + Math.random() * (TUNE.weatherMaxSec - TUNE.weatherMinSec);
+  // A full game day lasts TUNE.dayLengthSec real seconds (720), so the
+  // clock advances 86400 / 720 = 120 game-seconds per real second.
+  // The old code advanced 1:1, which made the golden hour take 2+
+  // real hours instead of ~2 minutes.
+  w.time += dt * (24 * 3600 / TUNE.dayLengthSec);
+  if (w.time >= 24 * 3600) {
+    w.time -= 24 * 3600;
+    w.day++;
+    game.state.day = w.day;
   }
-  // rain falls and recycles around the player
-  if (w.weather === 'rain' && w.rain.length) {
-    const p = game.player;
-    for (const d of w.rain) {
-      d.y -= 20 * dt;
-      if (d.y <= 0) {
-        d.y = 25;
-        d.x = p.x + (Math.random() * 90 - 45);
-        d.z = p.z + (Math.random() * 90 - 45);
+  w.phase = phaseName(w);
+  // Weather changes every 90-180 s.
+  w.weatherT -= dt;
+  if (w.weatherT <= 0) {
+    w.weatherT = TUNE.weatherMinSec + Math.random() * (TUNE.weatherMaxSec - TUNE.weatherMinSec);
+    const roll = Math.random();
+    w.weather = roll < 0.6 ? 'clear' : roll < 0.85 ? 'rain' : 'fog';
+  }
+  // Rain particles around the player (capped at 100).
+  const p = game.state.player;
+  if (w.weather === 'rain') {
+    while (w.rainDrops.length < TUNE.rainDrops) {
+      w.rainDrops.push({
+        x: p.x + (Math.random() - 0.5) * 60,
+        y: 20 + Math.random() * 20,
+        z: p.z + (Math.random() - 0.5) * 60,
+      });
+    }
+    for (const d of w.rainDrops) {
+      d.y -= 30 * dt;
+      if (d.y < 0) {
+        d.y = 30 + Math.random() * 10;
+        d.x = p.x + (Math.random() - 0.5) * 60;
+        d.z = p.z + (Math.random() - 0.5) * 60;
       }
     }
+  } else if (w.rainDrops.length > 0) {
+    w.rainDrops.length = 0;
   }
+  // Keep the state clock in sync.
+  game.state.clock = w.time;
 }
 
-// Everything the renderer + HUD need for this frame.
-export function currentSky(w) {
-  const base = keyframeFor(w.time);
-  const phase = phaseFor(w.time);
-  // Neon signs glow brighter as the daylight fades: dim by day,
-  // bright at sunset, brightest at night (golden-hour look).
-  let neon = phase === 'Night' ? 1.9 : phase === 'Sunset' ? 1.6 : phase === 'Dawn' ? 1.4 : 1.0;
-  if (w.weather === 'rain' || w.weather === 'fog') neon *= 0.85;
-  const out = {
-    sky: base.sky,
-    fog: base.fog,
-    fogNear: 120,
-    fogFar: 700,
-    light: base.light,
-    neon,
-    phase,
-    weather: w.weather,
-    day: w.day || 1,
-    clock: clockText(w.time),
-  };
-  if (w.weather === 'rain') {
-    out.fog = [out.fog[0] * 0.55, out.fog[1] * 0.55, out.fog[2] * 0.6];
-    out.fogNear = 60;
-    out.fogFar = 320;
-    out.light = Math.min(out.light, 0.6);
-  } else if (w.weather === 'fog') {
-    out.fog = [0.75, 0.78, 0.8];
-    out.fogNear = 30;
-    out.fogFar = 220;
-    out.light = Math.min(out.light, 0.7);
-  }
-  return out;
-}
-
-export function clockText(hours) {
-  const h = Math.floor(hours) % 24;
-  const m = Math.floor((hours % 1) * 60);
-  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
-}
-
-// Neon sign boxes, drawn dynamically so their brightness follows
-// the time of day (dim by day, glowing at sunset and night). The
-// base colour is never mutated — the boost makes a fresh array, and
-// channels are capped so the glow stays a colour, not white.
-export function neonBoxes(game) {
-  const list = game.city && game.city.neon;
-  if (!list || !list.length) return [];
-  const boost = currentSky(game.weather).neon;
-  if (boost <= 1.0) return list.map((b) => ({ ...b }));
-  return list.map((b) => ({
-    ...b,
-    c: [
-      Math.min(b.c[0] * boost, 1.8),
-      Math.min(b.c[1] * boost, 1.8),
-      Math.min(b.c[2] * boost, 1.8),
-    ],
-  }));
-}
-
-// Dynamic boxes for the rain (empty unless raining). Capped at
-// TUNE.rainDrops so low-spec devices stay fine.
-export function weatherBoxes(game) {
+// Clock text for the HUD: "Day 1 · 17:42 · sunset · rain".
+export function clockText(game) {
   const w = game.weather;
-  if (!w || w.weather !== 'rain' || !w.rain.length) return [];
-  const boxes = [];
-  for (const d of w.rain) {
-    boxes.push({ x: d.x, y: d.y, z: d.z, sx: 0.12, sy: 1.4, sz: 0.12, c: [0.7, 0.8, 1], a: 0.55 });
-  }
-  return boxes;
+  const h = Math.floor((w.time / 3600) % 24);
+  const m = Math.floor((w.time / 60) % 60);
+  const hh = String(h).padStart(2, '0');
+  const mm = String(m).padStart(2, '0');
+  return 'Day ' + w.day + ' · ' + hh + ':' + mm + ' · ' + w.phase + ' · ' + w.weather;
 }
+
+export function rainBoxes(game, out) {
+  const w = game.weather;
+  if (w.weather !== 'rain') return;
+  for (const d of w.rainDrops) {
+    out.pushBox(d.x, d.y, d.z, 0.08, 1.2, 0.08, [0.7, 0.8, 0.95]);
+  }
+}
+
+export { DAY_KEYS };

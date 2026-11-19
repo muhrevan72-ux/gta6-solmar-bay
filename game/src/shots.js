@@ -1,66 +1,74 @@
-// Solmar Bay — third-person follow camera. Eased yaw/pitch/zoom and
-// a spring-smoothed eye so movement never snaps (user: jangan kaku).
+// Solmar Bay — third-person camera helpers (pure maths).
+// The camera follows behind the player (or the car), the mouse drag
+// orbits it (yaw/pitch), the wheel zooms. Movement is smooth: the
+// camera lerps toward its target instead of snapping, and the player
+// leans into turns.
 
-import { angleLerp, clamp, lerp } from './config.js';
+import { clamp, lerp, wrapAngle } from './config.js';
 
 export function createCamera() {
   return {
-    yaw: 0, // orbit around the target
-    pitch: 0.42,
-    dist: 13,
-    close: false, // close mode: interiors keep the camera in the room
-    eye: [0, 8, 14],
-    center: [0, 2, 0],
+    x: 0, y: 8, z: 0, // actual camera position (lerped)
+    yaw: 0, // orbit yaw (radians)
+    // Default framing (fixed by play-test #4): the old pitch (0.42)
+    // and distance (11) put the camera too close and too steep, so
+    // the empty foreground road filled 50-70% of the screen, the
+    // buildings only the top 30-40% and the sky 0-5% — and on a
+    // portrait phone the peach sky filled the whole view. The new
+    // defaults look more level and pull back, so the city (buildings
+    // + street + a band of sky) fills the frame in both orientations.
+    pitch: 0.28, // orbit pitch (radians, looking down)
+    dist: 14, // orbit distance
     targetYaw: 0,
-    snap: false,
+    targetPitch: 0.28,
+    targetDist: 14,
   };
 }
 
-// Snap the camera behind a heading instantly (spawns, teleports).
-export function snapCamera(camera, target, heading) {
-  camera.yaw = heading;
-  camera.targetYaw = heading;
-  camera.pitch = 0.42;
-  camera.dist = camera.close ? 4.5 : 13;
-  const ex = target.x - Math.sin(heading) * camera.dist;
-  const ez = target.z - Math.cos(heading) * camera.dist;
-  camera.eye = [ex, 6, ez];
-  camera.center = [target.x, 2, target.z];
-  camera.snap = true;
+// Mouse drag orbits; wheel zooms. Called from stepGame with the
+// frame's mouse deltas.
+export function orbitCamera(cam, input) {
+  if (input.mouse.dragging) {
+    cam.targetYaw -= input.mouse.dx * 0.004;
+    cam.targetPitch = clamp(cam.targetPitch + input.mouse.dy * 0.003, 0.08, 1.1);
+  }
+  if (input.mouse.wheel !== 0) {
+    cam.targetDist = clamp(cam.targetDist + input.mouse.wheel * 0.01, 5, 22);
+  }
 }
 
-// Per-frame update: mouse orbit (dx/dy in pixels), wheel zoom, and a
-// spring follow of the target. `follow` is {x, y, z, heading, speed}.
-export function updateCamera(camera, follow, mouse, dt) {
-  if (mouse) {
-    camera.targetYaw -= (mouse.dx || 0) * 0.004;
-    camera.pitch = clamp(camera.pitch + (mouse.dy || 0) * 0.003, 0.08, 1.1);
-    const minDist = camera.close ? 3 : 7;
-    camera.dist = clamp(camera.dist + (mouse.wheel || 0) * 0.01, minDist, 26);
-  }
-  // ease the actual yaw toward the target yaw
-  camera.yaw = angleLerp(camera.yaw, camera.targetYaw, 1 - Math.pow(0.0001, dt));
-  const dist = camera.dist + (follow.speed || 0) * 0.12;
-  const eyeX = follow.x - Math.sin(camera.yaw) * dist * Math.cos(camera.pitch);
-  const eyeZ = follow.z - Math.cos(camera.yaw) * dist * Math.cos(camera.pitch);
-  const eyeY = follow.y + 2 + Math.sin(camera.pitch) * dist;
-  const k = 1 - Math.pow(0.000001, dt); // spring factor
-  if (camera.snap) {
-    camera.eye = [eyeX, eyeY, eyeZ];
-    camera.snap = false;
-  } else {
-    camera.eye[0] = lerp(camera.eye[0], eyeX, k);
-    camera.eye[1] = lerp(camera.eye[1], eyeY, k);
-    camera.eye[2] = lerp(camera.eye[2], eyeZ, k);
-  }
-  camera.center = [follow.x, follow.y + 2, follow.z];
-}
-
-// View for the renderer: { eye, center, fov }.
-export function cameraView(camera) {
+// The camera's goal position for a focus point (extracted so tests
+// can compute the default framing without running the lerp).
+export function cameraGoal(cam, focus, driving) {
+  const d = driving ? cam.dist + 4 : cam.dist;
   return {
-    eye: camera.eye,
-    center: camera.center,
-    fov: 1.05,
+    x: focus.x - Math.sin(cam.yaw) * Math.cos(cam.pitch) * d,
+    y: focus.y + Math.sin(cam.pitch) * d + 1.5,
+    z: focus.z - Math.cos(cam.yaw) * Math.cos(cam.pitch) * d,
   };
 }
+
+// Follow the focus point (player, or car when driving). The camera
+// eases toward its goal position so it never snaps.
+export function followCamera(cam, focus, dt, driving) {
+  cam.yaw = lerp(cam.yaw, cam.targetYaw, Math.min(1, dt * 6));
+  cam.pitch = lerp(cam.pitch, cam.targetPitch, Math.min(1, dt * 6));
+  cam.dist = lerp(cam.dist, cam.targetDist, Math.min(1, dt * 6));
+  const g = cameraGoal(cam, focus, driving);
+  const k = Math.min(1, dt * 8);
+  cam.x = lerp(cam.x, g.x, k);
+  cam.y = lerp(cam.y, g.y, k);
+  cam.z = lerp(cam.z, g.z, k);
+}
+
+// Where the camera looks: the focus point, slightly above the ground.
+export function cameraTarget(cam, focus) {
+  return [focus.x, focus.y + 1.6, focus.z];
+}
+
+// Forward vector on the ground plane, from the camera yaw.
+export function cameraForward(cam) {
+  return { x: Math.sin(cam.yaw), z: Math.cos(cam.yaw) };
+}
+
+export { wrapAngle };

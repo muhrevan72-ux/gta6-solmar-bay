@@ -1,200 +1,153 @@
-// Solmar Bay — the player on foot: eased WASD movement relative to
-// the camera, running, swimming, parachute gliding, entering/exiting
-// vehicles (E). Body lean + bob make movement feel smooth, not stiff.
+// Solmar Bay — the player on foot.
+//
+// WASD/arrows move relative to the camera, Shift runs, E enters /
+// exits the nearest car, F punches, G throws a bomb, click shoots,
+// 1/2/3 switch weapons, Space is the handbrake (driving) or the
+// parachute (falling). Movement is eased: acceleration ramps up,
+// friction eases down, the body leans into turns, the walk cycle
+// bobs. The player swims (slowly) in the water instead of drowning.
 
-import { TUNE, clamp, lerp, angleLerp } from './config.js';
-import { collideCircle, inWater } from './world.js';
+import { TUNE, OUTFIT, clamp, dist2 } from './config.js';
+import { collideCircle, clearSpot } from './world.js';
+import { isDown, pressedKey } from './input.js';
+import { exitVehicle } from './vehicles.js';
+import { cameraForward } from './shots.js';
+import { switchWeapon, shoot, punch, throwBomb } from './combat.js';
 
-export function createPlayer(city) {
-  const s = city.spawns.player;
-  return {
-    x: s.x,
-    y: 0,
-    z: s.z,
-    heading: 0, // facing, radians (0 = -z... we use +z forward below)
-    vx: 0,
-    vz: 0,
-    speed: 0,
-    inVehicle: null, // vehicle object when driving/riding
-    onTrain: false,
-    onElevator: false,
-    swimming: false,
-    parachute: false,
-    falling: 0,
-    fishing: false,
-    lean: 0, // body lean into turns (-1..1)
-    bob: 0,
-    eCooldown: 0,
-    carryingCat: null,
-    outfit: { hair: 0, shirt: 0, pants: 0, shoes: 0 },
-  };
-}
-
-export function resetPlayer(player, city, keepOutfit) {
-  const s = city.spawns.player;
-  const outfit = player.outfit;
-  player.x = s.x;
-  player.y = 0;
-  player.z = s.z;
-  player.heading = 0;
-  player.vx = 0;
-  player.vz = 0;
-  player.speed = 0;
-  player.inVehicle = null;
-  player.onTrain = false;
-  player.onElevator = false;
-  player.swimming = false;
-  player.parachute = false;
-  player.falling = 0;
-  player.fishing = false;
-  player.lean = 0;
-  player.bob = 0;
-  player.eCooldown = 0;
-  player.carryingCat = null;
-  if (keepOutfit) player.outfit = outfit;
-}
-
-// Move the player for one frame. `input` is the input object,
-// `yaw` the camera yaw (movement is camera-relative).
-export function updatePlayer(game, dt) {
-  const p = game.player;
+export function stepPlayer(game, dt) {
+  const s = game.state;
+  const p = s.player;
   const input = game.input;
-  const city = game.city;
-  if (p.inVehicle || p.onTrain || p.onElevator || p.fishing) return;
+  if (s.mode !== 'play') return;
+  // Phone open: the world keeps running, but E/F/G/weapon keys are
+  // blocked while the phone is up (Esc closes the phone first).
+  const phoneOpen = game.phone && game.phone.open;
+  // In a car: the vehicle system drives; the player just rides.
+  if (p.inCar) {
+    // E exits the car (cooldown-gated with `<= 0`, never `!cooldown`).
+    if (!phoneOpen && pressedKey(input, 'KeyE') && input.eCooldown <= 0) {
+      input.eCooldown = 0.4;
+      exitVehicle(game);
+    }
+    return;
+  }
+  // Riding the train / elevator: no on-foot movement.
+  if (p.onTrain || p.onElevator) return;
 
-  p.eCooldown = Math.max(0, p.eCooldown - dt);
-
-  // desired move direction, camera-relative
+  // --- movement (camera-relative) ---
+  const fwd = cameraForward(game.camera);
   let mx = 0;
   let mz = 0;
-  if (input.down('KeyW') || input.down('ArrowUp')) mz -= 1;
-  if (input.down('KeyS') || input.down('ArrowDown')) mz += 1;
-  if (input.down('KeyA') || input.down('ArrowLeft')) mx -= 1;
-  if (input.down('KeyD') || input.down('ArrowRight')) mx += 1;
-  const mag = Math.hypot(mx, mz);
-  if (mag > 0) {
-    mx /= mag;
-    mz /= mag;
+  if (isDown(input, 'KeyW') || isDown(input, 'ArrowUp')) { mx += fwd.x; mz += fwd.z; }
+  if (isDown(input, 'KeyS') || isDown(input, 'ArrowDown')) { mx -= fwd.x; mz -= fwd.z; }
+  if (isDown(input, 'KeyA') || isDown(input, 'ArrowLeft')) { mx += fwd.z; mz -= fwd.x; }
+  if (isDown(input, 'KeyD') || isDown(input, 'ArrowRight')) { mx -= fwd.z; mz += fwd.x; }
+  const mLen = Math.sqrt(mx * mx + mz * mz);
+  if (mLen > 0) {
+    mx /= mLen;
+    mz /= mLen;
   }
-  const run = input.down('ShiftLeft') || input.down('ShiftRight');
-  const swimming = inWater(p.x, p.z) && p.y <= 0.5;
-  p.swimming = swimming;
-  const maxSpeed = swimming ? TUNE.swimSpeed : run ? TUNE.runSpeed : TUNE.walkSpeed;
-
-  // rotate the input vector by the camera yaw
-  const sin = Math.sin(game.camera.yaw);
-  const cos = Math.cos(game.camera.yaw);
-  const wx = mx * cos - mz * sin;
-  const wz = mx * sin + mz * cos;
-
-  // eased acceleration / deceleration (never snaps)
-  const accel = mag > 0 ? TUNE.accel : TUNE.friction;
-  p.vx = approach(p.vx, wx * maxSpeed, accel * dt);
-  p.vz = approach(p.vz, wz * maxSpeed, accel * dt);
-  p.speed = Math.hypot(p.vx, p.vz);
-
+  const running = isDown(input, 'ShiftLeft') || isDown(input, 'ShiftRight');
+  const inWater = p.x < -340 || (p.x > 340 && p.x < 400 && p.z > -160 && p.z < -40);
+  const topSpeed = inWater ? TUNE.swimSpeed : running ? TUNE.runSpeed : TUNE.walkSpeed;
+  p.swimming = inWater;
+  // Eased acceleration: ramp toward the target velocity.
+  const tx = mx * topSpeed;
+  const tz = mz * topSpeed;
+  const k = Math.min(1, dt * (mLen > 0 ? TUNE.accel / topSpeed : TUNE.friction / topSpeed));
+  p.vx += (tx - p.vx) * k;
+  p.vz += (tz - p.vz) * k;
+  // Friction when no input.
+  if (mLen === 0) {
+    p.vx -= p.vx * Math.min(1, dt * 8);
+    p.vz -= p.vz * Math.min(1, dt * 8);
+  }
   let nx = p.x + p.vx * dt;
   let nz = p.z + p.vz * dt;
-  const fixed = collideCircle(city, nx, nz, TUNE.playerRadius);
-  nx = fixed.x;
-  nz = fixed.z;
+  // Collide with buildings (slide along walls).
+  const hit = collideCircle(game.city, nx, nz, TUNE.playerRadius);
+  if (hit) {
+    nx = hit.x;
+    nz = hit.z;
+    // Kill the velocity component into the wall.
+    p.vx *= 0.4;
+    p.vz *= 0.4;
+  }
+  // City bounds.
+  nx = clamp(nx, -395, 395);
+  nz = clamp(nz, -395, 395);
   p.x = nx;
   p.z = nz;
-
-  // face the movement direction, eased
-  if (p.speed > 0.5) {
+  p.speed = Math.sqrt(p.vx * p.vx + p.vz * p.vz);
+  // Face the movement direction; lean into turns; walk-cycle bob.
+  if (p.speed > 0.3) {
     const target = Math.atan2(p.vx, p.vz);
-    const before = p.heading;
-    p.heading = angleLerp(p.heading, target, 1 - Math.pow(0.00001, dt));
-    // lean into the turn
-    let dh = p.heading - before;
-    while (dh > Math.PI) dh -= Math.PI * 2;
-    while (dh < -Math.PI) dh += Math.PI;
-    p.lean = clamp(lerp(p.lean, clamp(dh * 8, -1, 1), 0.2), -1, 1);
+    let d = target - p.heading;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    p.lean = clamp(d * 2, -0.4, 0.4);
+    p.heading += d * Math.min(1, dt * 10);
+    p.bob += p.speed * dt * 1.6;
   } else {
-    p.lean = lerp(p.lean, 0, 0.1);
+    p.lean *= Math.max(0, 1 - dt * 6);
   }
-  p.bob += p.speed * dt * 1.6;
-
-  // parachute glide
-  if (p.parachute) {
-    p.y = Math.max(0, p.y - 3.5 * dt);
-    const px = Math.sin(p.heading) * 6 * dt;
-    const pz = Math.cos(p.heading) * 6 * dt;
-    const f2 = collideCircle(city, p.x + px, p.z + pz, TUNE.playerRadius);
-    p.x = f2.x;
-    p.z = f2.z;
-    if (p.y <= 0) p.parachute = false;
+  // --- tap actions (all via pressedKey, never polling `down`) ---
+  // E is NOT handled here on foot: main.js's interaction dispatcher
+  // owns it (vehicle / food / cat / door / garage / ... priority).
+  if (!phoneOpen) {
+    if (pressedKey(input, 'KeyF')) punch(game);
+    if (pressedKey(input, 'KeyG')) throwBomb(game);
+    if (pressedKey(input, 'Digit1')) switchWeapon(game, 'pistol');
+    if (pressedKey(input, 'Digit2')) switchWeapon(game, 'smg');
+    if (pressedKey(input, 'Digit3')) switchWeapon(game, 'shotgun');
   }
-  // falling (after jumping out of a plane)
-  if (p.falling > 0) {
-    p.y -= 22 * dt;
-    if (p.y <= 0) {
-      p.y = 0;
-      p.falling = 0;
-    }
-  }
-  // swim: stay at water level
-  if (swimming) p.y = 0;
+  if (input.mouse.clicked && !phoneOpen) shoot(game);
 }
 
-function approach(v, target, step) {
-  if (v < target) return Math.min(target, v + step);
-  if (v > target) return Math.max(target, v - step);
-  return v;
-}
-
-// Voxel boxes for the player figure (used by the renderer).
-// Returns boxes in world space. Colours come from the outfit.
-export function playerBoxes(game) {
-  const p = game.player;
-  const OUTFIT = game.configOutfit;
-  const shirt = OUTFIT.shirt[p.outfit.shirt].colour;
-  const pants = OUTFIT.pants[p.outfit.pants].colour;
-  const shoes = OUTFIT.shoes[p.outfit.shoes].colour;
-  const hair = OUTFIT.hair[p.outfit.hair].colour;
-  const skin = [0.95, 0.75, 0.55];
-  const bobY = Math.sin(p.bob) * 0.08 * Math.min(1, p.speed / 6);
-  const y = p.y + bobY;
-  // graphics pass: the body faces the player's heading (every box
-  // carries yaw), the legs/arms swing with sin(bob) like a walk
-  // cycle, and the lean runs along the body's right axis. A blob
-  // shadow grounds the player.
-  const yaw = p.heading;
-  const s = Math.sin(yaw);
-  const c = Math.cos(yaw);
-  const lean = p.lean * 0.25;
-  const at = (dx, dz) => ({ x: p.x + (dx + lean) * c + dz * s, z: p.z - (dx + lean) * s + dz * c });
-  const put = (boxes, dx, yy, dz, sx, sy, sz, col) => {
-    const q = at(dx, dz);
-    boxes.push({ x: q.x, y: yy, z: q.z, sx, sy, sz, c: col, yaw });
-  };
-  const boxes = [];
-  const swing = Math.sin(p.bob) * 0.3 * Math.min(1, p.speed / 6);
-  // legs + shoes (opposite phases, swinging along the facing direction)
-  put(boxes, -0.28, y + 0.45, swing, 0.5, 0.9, 0.5, pants);
-  put(boxes, 0.28, y + 0.45, -swing, 0.5, 0.9, 0.5, pants);
-  put(boxes, -0.28, y + 0.08, swing, 0.55, 0.16, 0.7, shoes);
-  put(boxes, 0.28, y + 0.08, -swing, 0.55, 0.16, 0.7, shoes);
-  // torso
-  put(boxes, 0, y + 1.35, 0, 1.1, 0.9, 0.6, shirt);
-  // arms (opposite to the legs)
-  put(boxes, -0.75, y + 1.35, -swing * 0.8, 0.4, 0.85, 0.45, shirt);
-  put(boxes, 0.75, y + 1.35, swing * 0.8, 0.4, 0.85, 0.45, shirt);
-  // head + hair
-  put(boxes, 0, y + 2.05, 0, 0.7, 0.65, 0.65, skin);
-  put(boxes, 0, y + 2.4, 0, 0.74, 0.25, 0.7, hair);
-  // carried cat rides on the shoulder
+// Voxel boxes for the player: articulated humanoid — head with hair,
+// torso (outfit shirt), arms and legs that swing with the walk
+// cycle, shoes. Colours come from the outfit + skin.
+export function playerBoxes(game, out) {
+  const s = game.state;
+  const p = s.player;
+  const hair = OUTFIT.hair[s.outfit.hair];
+  const shirt = OUTFIT.shirt[s.outfit.shirt];
+  const pants = OUTFIT.pants[s.outfit.pants];
+  const shoes = OUTFIT.shoes[s.outfit.shoes];
+  const skin = [0.95, 0.8, 0.65];
+  const swing = Math.sin(p.bob) * (p.speed > 0.3 ? 0.5 : 0);
+  const bobY = Math.abs(Math.sin(p.bob)) * 0.08 * (p.speed > 0.3 ? 1 : 0);
+  const y = bobY;
+  // Legs (swing opposite).
+  out.pushBoxRot(p.x - 0.22, y + 0.45, p.z + swing * 0.4, 0.34, 0.9, 0.34, pants.colour, p.heading);
+  out.pushBoxRot(p.x + 0.22, y + 0.45, p.z - swing * 0.4, 0.34, 0.9, 0.34, pants.colour, p.heading);
+  // Shoes.
+  out.pushBoxRot(p.x - 0.22, y + 0.08, p.z + swing * 0.4 + 0.05, 0.36, 0.16, 0.5, shoes.colour, p.heading);
+  out.pushBoxRot(p.x + 0.22, y + 0.08, p.z - swing * 0.4 + 0.05, 0.36, 0.16, 0.5, shoes.colour, p.heading);
+  // Torso.
+  out.pushBoxRot(p.x, y + 1.25, p.z, 0.85, 0.75, 0.45, shirt.colour, p.heading);
+  // Arms (swing with the walk cycle).
+  out.pushBoxRot(p.x - 0.55, y + 1.25, p.z - swing * 0.35, 0.26, 0.7, 0.26, shirt.colour, p.heading);
+  out.pushBoxRot(p.x + 0.55, y + 1.25, p.z + swing * 0.35, 0.26, 0.7, 0.26, shirt.colour, p.heading);
+  // Head + hair (one box; the outfit's hair style changes its shape)
+  // + eyes (two tiny dark boxes on the front of the face).
+  out.pushBoxRot(p.x, y + 1.95, p.z, 0.55, 0.55, 0.5, skin, p.heading);
+  const fx = Math.sin(p.heading);
+  const fz = Math.cos(p.heading);
+  const rx = Math.cos(p.heading);
+  const rz = -Math.sin(p.heading);
+  if (hair.name === 'Blonde buzz') out.pushBoxRot(p.x, y + 2.23, p.z, 0.57, 0.08, 0.52, hair.colour, p.heading);
+  else if (hair.name === 'Red mohawk') out.pushBoxRot(p.x, y + 2.28, p.z, 0.12, 0.45, 0.52, hair.colour, p.heading);
+  else if (hair.name === 'Blue spikes') out.pushBoxRot(p.x, y + 2.3, p.z, 0.57, 0.35, 0.52, hair.colour, p.heading);
+  else out.pushBoxRot(p.x, y + 2.2, p.z, 0.57, 0.2, 0.52, hair.colour, p.heading); // Black crop
+  out.pushBox(p.x + fx * 0.27 + rx * 0.13, y + 1.98, p.z + fz * 0.27 + rz * 0.13, 0.09, 0.12, 0.06, [0.08, 0.08, 0.1]);
+  out.pushBox(p.x + fx * 0.27 - rx * 0.13, y + 1.98, p.z + fz * 0.27 - rz * 0.13, 0.09, 0.12, 0.06, [0.08, 0.08, 0.1]);
+  // Carried cat rides on the shoulder.
   if (p.carryingCat) {
-    put(boxes, 0.6, y + 1.9, 0, 0.4, 0.35, 0.5, p.carryingCat.colour);
+    out.pushBoxRot(p.x + 0.3, y + 2.5, p.z, 0.4, 0.3, 0.5, [0.9, 0.85, 0.7], p.heading);
   }
-  // parachute canopy
-  if (p.parachute) {
-    put(boxes, 0, y + 3.6, 0, 3.4, 0.25, 2.2, [0.95, 0.3, 0.3]);
-  }
-  // blob shadow (only on the ground, not while flying/falling)
-  if (!p.parachute && (p.y || 0) < 1) {
-    boxes.push({ x: p.x, y: 0.06, z: p.z, sx: 1.4, sy: 0.05, sz: 1.4, c: [0, 0, 0], yaw, a: 0.22 });
-  }
-  return boxes;
+  // Blob shadow.
+  out.pushBox(p.x, 0.05, p.z, 1.1, 0.08, 1.1, [0.05, 0.05, 0.06]);
 }
+
+export { dist2, clearSpot };
