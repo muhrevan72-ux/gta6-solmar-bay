@@ -1,414 +1,282 @@
-// Drawing only: the world state and the camera in, pixels out. The
-// camera follows the player and stays inside the city; everything is
-// flat vector shapes drawn on the canvas, so the game needs no assets.
-import {
-  COLORS, FONT, ROAD_W, ROAD_X, ROAD_Y, SAND_X, VIEW_H, VIEW_W,
-  WATER_X, clamp,
-} from './config.js';
+// Solmar Bay — raw WebGL1 voxel renderer. No libraries.
+// One unit-cube geometry, per-face normals, vertex colours, one
+// directional light + distance fog. Static city baked once, dynamic
+// entities rebuilt every frame, water drawn as a transparent pass.
 
-export function createCamera() {
-  return { x: VIEW_W / 2, y: VIEW_H / 2, shake: 0 };
+import { WORLD } from './config.js';
+
+// ---- tiny mat4 helpers (column-major, WebGL convention) ----
+
+export function mat4Perspective(fovy, aspect, near, far) {
+  const f = 1 / Math.tan(fovy / 2);
+  const nf = 1 / (near - far);
+  return new Float32Array([
+    f / aspect, 0, 0, 0,
+    0, f, 0, 0,
+    0, 0, (far + near) * nf, -1,
+    0, 0, 2 * far * near * nf, 0,
+  ]);
 }
 
-export function updateCamera(camera, focusX, focusY, dt) {
-  camera.x += (focusX - camera.x) * Math.min(1, 6 * dt);
-  camera.y += (focusY - camera.y) * Math.min(1, 6 * dt);
-  if (camera.shake > 0) camera.shake = Math.max(0, camera.shake - dt * 2);
+export function mat4LookAt(eye, target, up) {
+  const zx = eye[0] - target[0];
+  const zy = eye[1] - target[1];
+  const zz = eye[2] - target[2];
+  let zl = Math.hypot(zx, zy, zz) || 1;
+  const z = [zx / zl, zy / zl, zz / zl];
+  const xx = up[1] * z[2] - up[2] * z[1];
+  const xy = up[2] * z[0] - up[0] * z[2];
+  const xz = up[0] * z[1] - up[1] * z[0];
+  zl = Math.hypot(xx, xy, xz) || 1;
+  const x = [xx / zl, xy / zl, xz / zl];
+  const y = [
+    z[1] * x[2] - z[2] * x[1],
+    z[2] * x[0] - z[0] * x[2],
+    z[0] * x[1] - z[1] * x[0],
+  ];
+  return new Float32Array([
+    x[0], y[0], z[0], 0,
+    x[1], y[1], z[1], 0,
+    x[2], y[2], z[2], 0,
+    -(x[0] * eye[0] + x[1] * eye[1] + x[2] * eye[2]),
+    -(y[0] * eye[0] + y[1] * eye[1] + y[2] * eye[2]),
+    -(z[0] * eye[0] + z[1] * eye[1] + z[2] * eye[2]),
+    1,
+  ]);
 }
 
-function shakeOffset(camera) {
-  if (camera.shake <= 0) return { x: 0, y: 0 };
-  const s = camera.shake * 8;
-  return { x: (Math.random() - 0.5) * s, y: (Math.random() - 0.5) * s };
+export function mat4Multiply(a, b) {
+  // returns a * b (column-major)
+  const out = new Float32Array(16);
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      let s = 0;
+      for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
+      out[c * 4 + r] = s;
+    }
+  }
+  return out;
 }
 
-export function worldToScreen(camera, x, y) {
-  const off = shakeOffset(camera);
-  return {
-    x: x - camera.x + VIEW_W / 2 + off.x,
-    y: y - camera.y + VIEW_H / 2 + off.y,
+// ---- cube face table: 4 corners each, CCW from outside ----
+const FACES = [
+  { n: [1, 0, 0], c: [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]] },
+  { n: [-1, 0, 0], c: [[0, 0, 1], [0, 1, 1], [0, 1, 0], [0, 0, 0]] },
+  { n: [0, 1, 0], c: [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]] },
+  { n: [0, -1, 0], c: [[0, 0, 1], [0, 0, 0], [1, 0, 0], [1, 0, 1]] },
+  { n: [0, 0, 1], c: [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]] },
+  { n: [0, 0, -1], c: [[1, 0, 0], [0, 0, 0], [0, 1, 0], [1, 1, 0]] },
+];
+
+// Push one box (36 vertices, 9 floats each) into a plain number array.
+// cx,cy,cz = centre; sx,sy,sz = size; yaw = rotation around Y (radians);
+// pitch = nose-up tilt around the local X axis (radians, for the plane).
+// color = [r,g,b] for the sides, topColor for the +y face (or same).
+export function pushBoxVerts(arr, cx, cy, cz, sx, sy, sz, yaw, color, topColor, pitch) {
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  const cp = Math.cos(pitch || 0);
+  const sp = Math.sin(pitch || 0);
+  const hx = sx / 2, hy = sy / 2, hz = sz / 2;
+  for (let f = 0; f < 6; f++) {
+    const face = FACES[f];
+    const col = (f === 2 && topColor) ? topColor : color;
+    // rotate the face normal: pitch around X, then yaw around Y
+    let nx = face.n[0], ny = face.n[1], nz = face.n[2];
+    const ny2 = ny * cp - nz * sp;
+    const nz2 = ny * sp + nz * cp;
+    ny = ny2; nz = nz2;
+    const nx2 = nx * cos + nz * sin;
+    const nz3 = -nx * sin + nz * cos;
+    nx = nx2; nz = nz3;
+    const tris = [0, 1, 2, 0, 2, 3];
+    for (let t = 0; t < 6; t++) {
+      const corner = face.c[tris[t]];
+      const lx = (corner[0] - 0.5) * sx;
+      const ly = (corner[1] - 0.5) * sy;
+      const lz = (corner[2] - 0.5) * sz;
+      // pitch around X, then yaw around Y
+      const py = ly * cp - lz * sp;
+      const pz = ly * sp + lz * cp;
+      const wx = cx + lx * cos + pz * sin;
+      const wz = cz - lx * sin + pz * cos;
+      arr.push(wx, cy + py, wz, nx, ny, nz, col[0], col[1], col[2]);
+    }
+  }
+}
+
+const VERT = `
+attribute vec3 aPos;
+attribute vec3 aNor;
+attribute vec3 aCol;
+uniform mat4 uPV;
+uniform vec3 uEye;
+varying vec3 vCol;
+varying vec3 vNor;
+varying float vFog;
+void main() {
+  gl_Position = uPV * vec4(aPos, 1.0);
+  vCol = aCol;
+  vNor = aNor;
+  vFog = distance(aPos, uEye);
+}
+`;
+
+const FRAG = `
+precision mediump float;
+varying vec3 vCol;
+varying vec3 vNor;
+varying float vFog;
+uniform vec3 uFogColor;
+uniform float uFogNear;
+uniform float uFogFar;
+uniform float uAlpha;
+void main() {
+  vec3 L = normalize(vec3(0.45, 0.8, 0.35));
+  float d = max(dot(normalize(vNor), L), 0.0);
+  vec3 c = vCol * (0.42 + 0.58 * d);
+  float f = clamp((vFog - uFogNear) / (uFogFar - uFogNear), 0.0, 1.0);
+  gl_FragColor = vec4(mix(c, uFogColor, f), uAlpha);
+}
+`;
+
+function compileShader(gl, type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    throw new Error('shader: ' + gl.getShaderInfoLog(sh));
+  }
+  return sh;
+}
+
+export function createRenderer(canvas) {
+  const gl = canvas.getContext('webgl', { antialias: true, alpha: false });
+  if (!gl) throw new Error('WebGL not available');
+  const prog = gl.createProgram();
+  gl.attachShader(prog, compileShader(gl, gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, compileShader(gl, gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error('program: ' + gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+  const loc = {
+    pv: gl.getUniformLocation(prog, 'uPV'),
+    eye: gl.getUniformLocation(prog, 'uEye'),
+    fogColor: gl.getUniformLocation(prog, 'uFogColor'),
+    fogNear: gl.getUniformLocation(prog, 'uFogNear'),
+    fogFar: gl.getUniformLocation(prog, 'uFogFar'),
+    alpha: gl.getUniformLocation(prog, 'uAlpha'),
+    pos: gl.getAttribLocation(prog, 'aPos'),
+    nor: gl.getAttribLocation(prog, 'aNor'),
+    col: gl.getAttribLocation(prog, 'aCol'),
   };
-}
+  gl.enable(gl.DEPTH_TEST);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.BACK);
+  gl.clearColor(WORLD.skyTop[0], WORLD.skyTop[1], WORLD.skyTop[2], 1);
 
-function onScreen(camera, x, y, margin) {
-  return (
-    x > camera.x - VIEW_W / 2 - margin && x < camera.x + VIEW_W / 2 + margin
-    && y > camera.y - VIEW_H / 2 - margin && y < camera.y + VIEW_H / 2 + margin
-  );
-}
+  const FLOATS_PER_BOX = 36 * 9;
+  const dynCapacity = 900; // boxes per frame, dynamic
+  const dynArray = new Float32Array(dynCapacity * FLOATS_PER_BOX);
+  const waterCapacity = 64;
+  const waterArray = new Float32Array(waterCapacity * FLOATS_PER_BOX);
+  let dynCount = 0;
+  let waterCount = 0;
 
-function drawGround(ctx, world, camera) {
-  ctx.fillStyle = COLORS.grass;
-  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  // Mow stripes, cheap and cheerful: alternating bands across the grass.
-  ctx.fillStyle = COLORS.grassDark;
-  const top = camera.y - VIEW_H / 2;
-  const first = Math.floor(top / 120) * 120;
-  for (let y = first; y < top + VIEW_H + 120; y += 240) {
-    const s = worldToScreen(camera, 0, y);
-    ctx.fillRect(0, s.y, VIEW_W, 120);
-  }
-  // Sand, then water, on the west edge.
-  const sand = worldToScreen(camera, SAND_X, 0);
-  const water = worldToScreen(camera, WATER_X, 0);
-  ctx.fillStyle = COLORS.sand;
-  ctx.fillRect(0, 0, sand.x, VIEW_H);
-  ctx.fillStyle = COLORS.water;
-  ctx.fillRect(0, 0, water.x, VIEW_H);
-  ctx.fillStyle = COLORS.waterDeep;
-  for (let y = 0; y < VIEW_H; y += 46) {
-    ctx.fillRect(0, ((y + Math.floor(camera.y / 3)) % 46), water.x, 3);
-  }
-}
+  const dynBuf = gl.createBuffer();
+  const waterBuf = gl.createBuffer();
+  let staticBuf = null;
+  let staticCount = 0;
 
-function drawRoads(ctx, world, camera) {
-  ctx.fillStyle = COLORS.road;
-  for (const cx of ROAD_X) {
-    const s = worldToScreen(camera, cx, 0);
-    ctx.fillRect(s.x - ROAD_W / 2, 0, ROAD_W, VIEW_H);
+  function upload(buf, data, verts) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, verts * 9), gl.DYNAMIC_DRAW);
+    gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, 36, 0);
+    gl.vertexAttribPointer(loc.nor, 3, gl.FLOAT, false, 36, 12);
+    gl.vertexAttribPointer(loc.col, 3, gl.FLOAT, false, 36, 24);
+    gl.enableVertexAttribArray(loc.pos);
+    gl.enableVertexAttribArray(loc.nor);
+    gl.enableVertexAttribArray(loc.col);
+    gl.drawArrays(gl.TRIANGLES, 0, verts);
   }
-  for (const cy of ROAD_Y) {
-    const s = worldToScreen(camera, 0, cy);
-    ctx.fillRect(0, s.y - ROAD_W / 2, VIEW_W, ROAD_W);
-  }
-  // Centre dashes.
-  ctx.fillStyle = COLORS.dash;
-  for (const cx of ROAD_X) {
-    const s = worldToScreen(camera, cx, 0);
-    const top = camera.y - VIEW_H / 2;
-    const first = Math.floor(top / 64) * 64;
-    for (let y = first; y < top + VIEW_H + 64; y += 64) {
-      const p = worldToScreen(camera, cx, y);
-      ctx.fillRect(s.x - 2, p.y, 4, 30);
-    }
-  }
-  for (const cy of ROAD_Y) {
-    const s = worldToScreen(camera, 0, cy);
-    const left = camera.x - VIEW_W / 2;
-    const first = Math.floor(left / 64) * 64;
-    for (let x = first; x < left + VIEW_W + 64; x += 64) {
-      const p = worldToScreen(camera, x, cy);
-      ctx.fillRect(p.x, s.y - 2, 30, 4);
-    }
-  }
-  // Road edges.
-  ctx.strokeStyle = COLORS.roadEdge;
-  ctx.lineWidth = 3;
-  for (const cx of ROAD_X) {
-    const s = worldToScreen(camera, cx, 0);
-    ctx.beginPath();
-    ctx.moveTo(s.x - ROAD_W / 2, 0);
-    ctx.lineTo(s.x - ROAD_W / 2, VIEW_H);
-    ctx.moveTo(s.x + ROAD_W / 2, 0);
-    ctx.lineTo(s.x + ROAD_W / 2, VIEW_H);
-    ctx.stroke();
-  }
-  for (const cy of ROAD_Y) {
-    const s = worldToScreen(camera, 0, cy);
-    ctx.beginPath();
-    ctx.moveTo(0, s.y - ROAD_W / 2);
-    ctx.lineTo(VIEW_W, s.y - ROAD_W / 2);
-    ctx.moveTo(0, s.y + ROAD_W / 2);
-    ctx.lineTo(VIEW_W, s.y + ROAD_W / 2);
-    ctx.stroke();
-  }
-}
 
-function drawBlocks(ctx, world, camera) {
-  for (const park of world.parks) {
-    const s = worldToScreen(camera, park.x, park.y);
-    ctx.fillStyle = COLORS.park;
-    ctx.fillRect(s.x, s.y, park.w, park.h);
-  }
-  for (const tree of world.trees) {
-    if (!onScreen(camera, tree.x, tree.y, 40)) continue;
-    const s = worldToScreen(camera, tree.x, tree.y);
-    ctx.fillStyle = '#5a4632';
-    ctx.fillRect(s.x - 2, s.y - 2, 4, 8);
-    ctx.fillStyle = COLORS.tree;
-    ctx.beginPath();
-    ctx.arc(s.x, s.y - 6, tree.r, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  for (const b of world.buildings) {
-    if (!onScreen(camera, b.x + b.w / 2, b.y + b.h / 2, 120)) continue;
-    const s = worldToScreen(camera, b.x, b.y);
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.fillRect(s.x + 5, s.y + 6, b.w, b.h);
-    ctx.fillStyle = b.color;
-    ctx.fillRect(s.x, s.y, b.w, b.h);
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(s.x, s.y, b.w, b.h);
-    // Windows in a loose grid.
-    ctx.fillStyle = 'rgba(255,255,220,0.55)';
-    const cols = Math.max(1, Math.floor(b.w / 34));
-    const rows = Math.max(1, Math.floor(b.h / 34));
-    for (let c = 0; c < cols; c += 1) {
-      for (let r = 0; r < rows; r += 1) {
-        if ((c + r) % 2 === 0) continue;
-        ctx.fillRect(s.x + 10 + c * 34, s.y + 10 + r * 34, 16, 12);
+  return {
+    gl,
+    // Bake the static city once. boxes: [{x,y,z,sx,sy,sz,yaw,color,top}]
+    bakeStatic(boxes) {
+      const arr = [];
+      for (const b of boxes) {
+        pushBoxVerts(arr, b.x, b.y, b.z, b.sx, b.sy, b.sz, b.yaw || 0, b.color, b.top || null);
       }
-    }
-    if (b.label) {
-      ctx.font = `700 34px ${FONT}`;
-      ctx.fillStyle = b.kind === 'hospital' ? '#c23b2e' : 'rgba(255,255,255,0.9)';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(b.label, s.x + b.w / 2, s.y + b.h / 2);
-    }
-  }
-}
-
-function drawCarShape(ctx, x, y, angle, color, police, damaged) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-  // Shadow.
-  ctx.fillStyle = 'rgba(0,0,0,0.28)';
-  ctx.beginPath();
-  ctx.roundRect(-24, -11, 48, 24, 7);
-  ctx.fill();
-  // Body.
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.roundRect(-23, -11, 46, 22, 7);
-  ctx.fill();
-  // Windshield and rear window.
-  ctx.fillStyle = 'rgba(20,30,44,0.85)';
-  ctx.fillRect(4, -8, 10, 16);
-  ctx.fillRect(-16, -8, 7, 16);
-  // Wheels.
-  ctx.fillStyle = '#16181c';
-  ctx.fillRect(-16, -14, 10, 5);
-  ctx.fillRect(-16, 9, 10, 5);
-  ctx.fillRect(8, -14, 10, 5);
-  ctx.fillRect(8, 9, 10, 5);
-  // Headlights.
-  ctx.fillStyle = '#ffe9a8';
-  ctx.fillRect(21, -8, 3, 5);
-  ctx.fillRect(21, 3, 3, 5);
-  if (police) {
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(-6, -11, 12, 22);
-    ctx.fillStyle = COLORS.policeDark;
-    ctx.font = '700 9px ' + FONT;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('POLICE', 0, 0);
-    ctx.fillStyle = '#ff3b30';
-    ctx.beginPath();
-    ctx.arc(-2, -11, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#2f6fd2';
-    ctx.beginPath();
-    ctx.arc(4, -11, 3, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  if (damaged) {
-    ctx.strokeStyle = 'rgba(30,30,30,0.7)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(-20, -8);
-    ctx.lineTo(-10, 2);
-    ctx.lineTo(-18, 8);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function drawPedShape(ctx, x, y, angle, shirt, down) {
-  ctx.save();
-  ctx.translate(x, y);
-  if (down) {
-    ctx.rotate(angle + Math.PI / 2);
-    ctx.fillStyle = shirt;
-    ctx.beginPath();
-    ctx.roundRect(-11, -6, 22, 12, 6);
-    ctx.fill();
-    ctx.fillStyle = '#e8c39a';
-    ctx.beginPath();
-    ctx.arc(13, 0, 5, 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    ctx.rotate(angle);
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    ctx.beginPath();
-    ctx.ellipse(0, 2, 9, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = shirt;
-    ctx.beginPath();
-    ctx.arc(0, 0, 9, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#e8c39a';
-    ctx.beginPath();
-    ctx.arc(Math.cos(0) * 0, -1, 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#22262c';
-    ctx.beginPath();
-    ctx.arc(6, -4, 2, 0, Math.PI * 2);
-    ctx.arc(6, 4, 2, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
-}
-
-function drawPlayerShape(ctx, x, y, angle, punchT, walkPhase) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.fillStyle = 'rgba(0,0,0,0.28)';
-  ctx.beginPath();
-  ctx.ellipse(0, 3, 11, 7, 0, 0, Math.PI * 2);
-  ctx.fill();
-  const bob = Math.sin(walkPhase * 0.09) * 1.5;
-  ctx.rotate(angle);
-  // Jacket, with a swinging arm when punching.
-  ctx.fillStyle = COLORS.player;
-  ctx.beginPath();
-  ctx.arc(0, bob * 0.3, 11, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#22262c';
-  ctx.beginPath();
-  ctx.arc(7, -5, 3, 0, Math.PI * 2);
-  ctx.arc(7, 5, 3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#e8c39a';
-  ctx.beginPath();
-  ctx.arc(8, 0, 5, 0, Math.PI * 2);
-  ctx.fill();
-  if (punchT > 0) {
-    ctx.strokeStyle = COLORS.player;
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(10, 0);
-    ctx.lineTo(24, 0);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
-
-function drawPickupShape(ctx, x, y, kind, bob) {
-  const yy = y + Math.sin(bob) * 3;
-  ctx.save();
-  ctx.translate(x, yy);
-  if (kind === 'health') {
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.arc(0, 0, 13, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = COLORS.red;
-    ctx.fillRect(-3, -9, 6, 18);
-    ctx.fillRect(-9, -3, 18, 6);
-  } else if (kind === 'armor') {
-    ctx.fillStyle = COLORS.blue;
-    ctx.beginPath();
-    ctx.moveTo(0, -12);
-    ctx.lineTo(11, -6);
-    ctx.lineTo(11, 3);
-    ctx.lineTo(0, 13);
-    ctx.lineTo(-11, 3);
-    ctx.lineTo(-11, -6);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '700 13px ' + FONT;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('A', 0, 0);
-  } else {
-    ctx.strokeStyle = '#c2c2c2';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    ctx.moveTo(-8, 8);
-    ctx.lineTo(8, -8);
-    ctx.stroke();
-    ctx.fillStyle = '#c2c2c2';
-    ctx.beginPath();
-    ctx.arc(9, -9, 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#0e1420';
-    ctx.beginPath();
-    ctx.arc(9, -9, 2.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
-}
-
-// The mission marker: a pulsing ring with a bouncing arrow above it.
-function drawMarker(ctx, camera, marker, time) {
-  const s = worldToScreen(camera, marker.x, marker.y);
-  const pulse = 26 + Math.sin(time * 5) * 5;
-  ctx.strokeStyle = COLORS.gold;
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.arc(s.x, s.y, pulse, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = COLORS.gold;
-  ctx.beginPath();
-  ctx.arc(s.x, s.y, 5, 0, Math.PI * 2);
-  ctx.fill();
-  const by = s.y - pulse - 14 + Math.sin(time * 4) * 4;
-  ctx.beginPath();
-  ctx.moveTo(s.x, by + 12);
-  ctx.lineTo(s.x - 8, by);
-  ctx.lineTo(s.x + 8, by);
-  ctx.closePath();
-  ctx.fill();
-}
-
-export function drawScene(ctx, state, camera) {
-  const world = state.world;
-  ctx.fillStyle = '#0e1420';
-  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-  drawGround(ctx, world, camera);
-  drawRoads(ctx, world, camera);
-  drawBlocks(ctx, world, camera);
-
-  for (const pickup of state.pickups) {
-    if (pickup.respawnT > 0 || !onScreen(camera, pickup.x, pickup.y, 30)) continue;
-    const s = worldToScreen(camera, pickup.x, pickup.y);
-    drawPickupShape(ctx, s.x, s.y, pickup.kind, pickup.bob);
-  }
-
-  const marker = state.marker;
-  if (marker && onScreen(camera, marker.x, marker.y, 80)) drawMarker(ctx, camera, marker, state.time);
-
-  for (const ped of state.peds) {
-    if (!onScreen(camera, ped.x, ped.y, 30)) continue;
-    const s = worldToScreen(camera, ped.x, ped.y);
-    drawPedShape(ctx, s.x, s.y, ped.angle, ped.shirt, ped.state === 'down');
-  }
-  for (const cop of state.cops) {
-    if (!onScreen(camera, cop.x, cop.y, 30)) continue;
-    const s = worldToScreen(camera, cop.x, cop.y);
-    drawPedShape(ctx, s.x, s.y, cop.angle, COLORS.policeDark, cop.downT > 0);
-  }
-  for (const car of state.cars) {
-    if (!onScreen(camera, car.x, car.y, 60)) continue;
-    const s = worldToScreen(camera, car.x, car.y);
-    drawCarShape(ctx, s.x, s.y, car.angle, car.color, car.kind === 'police', car.hp < 40);
-    if (car.smokeT > 0) {
-      ctx.fillStyle = 'rgba(120,120,120,0.5)';
-      ctx.beginPath();
-      ctx.arc(s.x - Math.cos(car.angle) * 18, s.y - Math.sin(car.angle) * 18, 8 + Math.sin(state.time * 9) * 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  const player = state.player;
-  if (player.onFoot) {
-    const s = worldToScreen(camera, player.x, player.y);
-    const blink = player.invulnT > 0 && Math.floor(player.invulnT * 10) % 2 === 0;
-    if (!blink) drawPlayerShape(ctx, s.x, s.y, player.angle, player.punchT, player.walkPhase);
-  }
-
-  for (const p of state.particles) {
-    const s = worldToScreen(camera, p.x, p.y);
-    ctx.globalAlpha = clamp(p.life / p.maxLife, 0, 1);
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, p.size, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.globalAlpha = 1;
+      staticBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, staticBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STATIC_DRAW);
+      staticCount = arr.length / 9;
+    },
+    // Begin a frame: set camera, clear, draw the static city.
+    beginFrame(eye, target, aspect) {
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      const proj = mat4Perspective(1.13, aspect, 0.1, 1400);
+      const view = mat4LookAt(eye, target, [0, 1, 0]);
+      const pv = mat4Multiply(proj, view);
+      gl.uniformMatrix4fv(loc.pv, false, pv);
+      gl.uniform3fv(loc.eye, eye);
+      gl.uniform3fv(loc.fogColor, WORLD.fogColor);
+      gl.uniform1f(loc.fogNear, WORLD.fogNear);
+      gl.uniform1f(loc.fogFar, WORLD.fogFar);
+      gl.uniform1f(loc.alpha, 1);
+      gl.disable(gl.BLEND);
+      gl.depthMask(true);
+      if (staticBuf) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, staticBuf);
+        gl.vertexAttribPointer(loc.pos, 3, gl.FLOAT, false, 36, 0);
+        gl.vertexAttribPointer(loc.nor, 3, gl.FLOAT, false, 36, 12);
+        gl.vertexAttribPointer(loc.col, 3, gl.FLOAT, false, 36, 24);
+        gl.enableVertexAttribArray(loc.pos);
+        gl.enableVertexAttribArray(loc.nor);
+        gl.enableVertexAttribArray(loc.col);
+        gl.drawArrays(gl.TRIANGLES, 0, staticCount);
+      }
+      dynCount = 0;
+      waterCount = 0;
+    },
+    // Queue a box for this frame (dynamic batch). pitch tilts it nose-up.
+    box(x, y, z, sx, sy, sz, yaw, color, top, pitch) {
+      if (dynCount >= dynCapacity) return;
+      const start = dynCount * FLOATS_PER_BOX;
+      const tmp = [];
+      pushBoxVerts(tmp, x, y, z, sx, sy, sz, yaw || 0, color, top || null, pitch || 0);
+      dynArray.set(tmp, start);
+      dynCount++;
+    },
+    // Queue a translucent water box (drawn last).
+    water(x, y, z, sx, sy, sz, color) {
+      if (waterCount >= waterCapacity) return;
+      const start = waterCount * FLOATS_PER_BOX;
+      const tmp = [];
+      pushBoxVerts(tmp, x, y, z, sx, sy, sz, 0, color, null);
+      waterArray.set(tmp, start);
+      waterCount++;
+    },
+    // Flush dynamic + water batches.
+    endFrame() {
+      gl.uniform1f(loc.alpha, 1);
+      gl.disable(gl.BLEND);
+      gl.depthMask(true);
+      if (dynCount > 0) upload(dynBuf, dynArray, dynCount * 36);
+      if (waterCount > 0) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false);
+        gl.uniform1f(loc.alpha, 0.72);
+        upload(waterBuf, waterArray, waterCount * 36);
+        gl.depthMask(true);
+        gl.disable(gl.BLEND);
+        gl.uniform1f(loc.alpha, 1);
+      }
+    },
+  };
 }

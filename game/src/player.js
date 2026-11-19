@@ -1,103 +1,138 @@
-// The player on foot: walking, running, getting in and out of cars,
-// and the punch. Car driving lives in vehicles.js; this file only
-// moves the person, never the car.
-import { TUNING, angleDiff, dist2 } from './config.js';
-import { collideCircle } from './world.js';
-import { nearestCar } from './vehicles.js';
+// Solmar Bay — the player character on foot. WASD moves relative to
+// the camera, Shift runs, E enters/exits vehicles, F punches, Space
+// deploys the parachute while falling. Falls use simple gravity.
 
-export function makePlayer(x, y) {
+import { PLAYER } from './config.js';
+import { resolveCollision, inWater } from './world.js';
+import { cameraForward, cameraRight } from './shots.js';
+
+export function createPlayer(spawn) {
   return {
-    x, y,
-    angle: 0,
-    onFoot: true,
-    car: null,
-    health: TUNING.maxHealth,
-    armor: 0,
-    punchT: 0,
-    punchCd: 0,
-    invulnT: 0,
-    walkPhase: 0,
+    x: spawn.x,
+    y: 0,
+    z: spawn.z,
+    heading: Math.PI,     // facing -z at start
     speed: 0,
+    vy: 0,                // vertical velocity while falling
+    falling: false,
+    parachute: false,
+    inVehicle: null,      // vehicle object when driving/riding
+    punchCd: 0,
+    punchAnim: 0,
+    walkPhase: 0,
+    onGround: true,
   };
 }
 
-// `move` is {x, y} in -1..1 (from the keys), `run` is the Shift key.
-export function updateOnFoot(player, move, run, dt, world) {
-  const len = Math.hypot(move.x, move.y);
-  if (len < 0.05) {
-    player.speed = 0;
-    return;
+export function updatePlayer(dt, game) {
+  const p = game.player;
+  const input = game.input;
+  const state = game.state;
+  if (p.inVehicle) return; // vehicles module owns movement then
+  if (p.punchCd > 0) p.punchCd -= dt;
+  if (p.punchAnim > 0) p.punchAnim -= dt;
+
+  const axes = input.moveAxes();
+  const fwd = cameraForward(game.camera);
+  const right = cameraRight(game.camera);
+  let mx = fwd[0] * axes.y + right[0] * axes.x;
+  let mz = fwd[1] * axes.y + right[1] * axes.x;
+  const mLen = Math.hypot(mx, mz);
+  const running = input.down('ShiftLeft') || input.down('ShiftRight');
+  const topSpeed = running ? PLAYER.runSpeed : PLAYER.walkSpeed;
+
+  if (mLen > 0.01) {
+    mx /= mLen; mz /= mLen;
+    const target = Math.atan2(mx, mz);
+    // turn smoothly toward the move direction
+    let d = (target - p.heading) % (Math.PI * 2);
+    if (d > Math.PI) d -= Math.PI * 2;
+    if (d < -Math.PI) d += Math.PI * 2;
+    p.heading += d * Math.min(1, dt * 12);
+    p.speed += PLAYER.accel * dt;
+    if (p.speed > topSpeed) p.speed = topSpeed;
+    p.walkPhase += dt * p.speed * 1.6;
+  } else {
+    p.speed -= PLAYER.accel * 1.4 * dt;
+    if (p.speed < 0) p.speed = 0;
   }
-  const speed = run ? TUNING.runSpeed : TUNING.walkSpeed;
-  const nx = move.x / len;
-  const ny = move.y / len;
-  player.speed = speed;
-  player.angle = Math.atan2(ny, nx);
-  player.walkPhase += speed * dt;
-  const fixed = collideCircle(
-    world,
-    player.x + nx * speed * dt,
-    player.y + ny * speed * dt,
-    TUNING.playerRadius,
-  );
-  player.x = fixed.x;
-  player.y = fixed.y;
-  if (player.punchCd > 0) player.punchCd -= dt;
-  if (player.punchT > 0) player.punchT -= dt;
-  if (player.invulnT > 0) player.invulnT -= dt;
-}
 
-// The nearest car the player can get into. Police cars are locked.
-export function tryEnterCar(state) {
-  const player = state.player;
-  const car = nearestCar(state.cars, player.x, player.y, 84);
-  if (!car || car.kind === 'police' || car.hp <= 0) return null;
-  const stolen = car.kind === 'parked' || car.kind === 'traffic';
-  player.onFoot = false;
-  player.car = car;
-  car.kind = 'player';
-  car.driver = 'player';
-  car.route = null;
-  player.x = car.x;
-  player.y = car.y;
-  player.angle = car.angle;
-  return { car, stolen };
-}
-
-// Step out beside the car, on the side away from the road centre.
-export function exitCar(state, world) {
-  const player = state.player;
-  const car = player.car;
-  if (!car) return;
-  const side = Math.PI / 2;
-  const px = car.x + Math.cos(car.angle + side) * 34;
-  const py = car.y + Math.sin(car.angle + side) * 34;
-  const fixed = collideCircle(world, px, py, TUNING.playerRadius);
-  player.x = fixed.x;
-  player.y = fixed.y;
-  player.angle = car.angle;
-  player.onFoot = true;
-  player.car = null;
-  car.kind = 'parked';
-  car.driver = null;
-  car.speed = 0;
-}
-
-// A punch: a short swing that hits peds and cops in front of the player.
-// Returns the targets it hit, so the caller can knock them down.
-export function punch(state, targets) {
-  const player = state.player;
-  if (player.punchCd > 0 || !player.onFoot) return [];
-  player.punchT = 0.25;
-  player.punchCd = TUNING.punchCooldown;
-  const hit = [];
-  for (const target of targets) {
-    if (target.state === 'down' || target.downT > 0) continue;
-    const d = dist2(player.x, player.y, target.x, target.y);
-    if (d > TUNING.punchRange * TUNING.punchRange) continue;
-    const to = Math.atan2(target.y - player.y, target.x - player.x);
-    if (Math.abs(angleDiff(player.angle, to)) > 1.1) continue;
-    hit.push(target);
+  if (p.speed > 0.05) {
+    const nx = p.x + Math.sin(p.heading) * p.speed * dt;
+    const nz = p.z + Math.cos(p.heading) * p.speed * dt;
+    const fixed = resolveCollision(nx, nz, PLAYER.radius, game.city.buildings);
+    // keep the player out of the sea unless they walk in (swim = slow)
+    p.x = fixed.x;
+    p.z = fixed.z;
+    state.stats.distanceDriven += 0; // on foot doesn't count as driving
   }
-  return hit;
+
+  // ---- falling / parachute ----
+  if (p.falling) {
+    p.vy -= 22 * dt; // gravity
+    if (p.parachute) {
+      p.vy = Math.max(p.vy, -3.2);
+      // steer while gliding
+      const ax = input.moveAxes();
+      const f2 = cameraForward(game.camera);
+      const r2 = cameraRight(game.camera);
+      p.x += (f2[0] * ax.y + r2[0] * ax.x) * 5 * dt;
+      p.z += (f2[1] * ax.y + r2[1] * ax.x) * 5 * dt;
+      const fixed = resolveCollision(p.x, p.z, PLAYER.radius, game.city.buildings);
+      p.x = fixed.x; p.z = fixed.z;
+    } else {
+      p.vy = Math.max(p.vy, -26);
+    }
+    p.y += p.vy * dt;
+    if (p.y <= 0) {
+      p.y = 0;
+      if (!p.parachute && p.vy < -18) {
+        // hard landing hurts
+        game.hurtPlayer(Math.round((-p.vy - 18) * 2), 'fall');
+      }
+      p.vy = 0;
+      p.falling = false;
+      p.parachute = false;
+    }
+  } else if (p.y > 0) {
+    p.falling = true; // walked off something (shouldn't happen on flat ground)
+  }
+
+  // deploy parachute while falling
+  if (p.falling && !p.parachute && p.y > 12 && input.down('Space')) {
+    p.parachute = true;
+    game.audio.blip(880, 0.12);
+  }
+}
+
+// Draw the blocky character as a few boxes via the renderer.
+export function drawPlayer(renderer, game) {
+  const p = game.player;
+  if (p.inVehicle) return;
+  const { COL } = game;
+  const yaw = p.heading;
+  const bob = Math.sin(p.walkPhase) * 0.06 * Math.min(1, p.speed / 6);
+  const legSwing = Math.sin(p.walkPhase) * 0.28 * Math.min(1, p.speed / 6);
+  const y = p.y + bob;
+  // legs
+  renderer.box(p.x - 0.14, y + 0.35, p.z, 0.24, 0.7, 0.26, yaw, COL.playerPants);
+  renderer.box(p.x + 0.14, y + 0.35, p.z, 0.24, 0.7, 0.26, yaw, COL.playerPants);
+  // torso (shirt), arms swing with the walk
+  renderer.box(p.x, y + 1.05, p.z, 0.62, 0.7, 0.34, yaw, COL.playerShirt);
+  const armY = y + 1.05 + legSwing * 0.4;
+  renderer.box(p.x - 0.42, armY, p.z, 0.2, 0.62, 0.22, yaw, COL.playerShirt);
+  renderer.box(p.x + 0.42, armY, p.z, 0.2, 0.62, 0.22, yaw, COL.playerShirt);
+  // head + cap
+  renderer.box(p.x, y + 1.62, p.z, 0.5, 0.46, 0.46, yaw, COL.playerSkin);
+  renderer.box(p.x, y + 1.88, p.z, 0.54, 0.12, 0.5, yaw, COL.playerShirt);
+  // held weapon
+  if (game.state.weapon !== 'pistol') {
+    const gx = p.x + Math.sin(yaw) * 0.5;
+    const gz = p.z + Math.cos(yaw) * 0.5;
+    renderer.box(gx, y + 1.05, gz, 0.12, 0.12, 0.55, yaw, COL.weapon);
+  }
+  // parachute canopy
+  if (p.parachute) {
+    renderer.box(p.x, y + 2.6, p.z, 2.4, 0.18, 2.4, yaw, COL.marker);
+  }
 }

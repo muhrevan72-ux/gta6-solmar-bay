@@ -1,52 +1,41 @@
-// Saving to this browser's localStorage: cash, mission progress, the
-// player's spot, and the run's stats. Every call is guarded, so a
-// private window or a disabled store just means the save does not last.
+// Solmar Bay — localStorage save / load. Cash, chapter, position,
+// stats, weapons. Nothing sensitive.
+
 import { SAVE_KEY } from './config.js';
 
-export function hasSave() {
+export function saveGame(game) {
   try {
-    return window.localStorage.getItem(SAVE_KEY) !== null;
-  } catch {
-    return false;
-  }
-}
-
-export function saveGame(state) {
-  try {
+    const s = game.state;
+    const p = game.player;
     const data = {
-      cash: state.cash,
-      missionIndex: state.mission.index,
-      missionsDone: state.stats.missionsDone,
-      playerX: state.player.x,
-      playerY: state.player.y,
-      health: state.player.health,
-      armor: state.player.armor,
-      stats: state.stats,
-      time: state.time,
+      cash: s.cash,
+      chapter: s.chapter,
+      chapterActive: s.chapterActive,
+      weapon: s.weapon,
+      ammo: s.ammo,
+      bombs: s.bombs,
+      stats: s.stats,
+      player: { x: p.inVehicle ? p.inVehicle.x : p.x, z: p.inVehicle ? p.inVehicle.z : p.z },
     };
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
     return true;
-  } catch {
+  } catch (e) {
     return false;
   }
 }
 
 export function loadGame() {
   try {
-    const raw = window.localStorage.getItem(SAVE_KEY);
+    const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
-    if (typeof data.cash !== 'number' || typeof data.missionIndex !== 'number') return null;
+    if (typeof data.cash !== 'number' || typeof data.chapter !== 'number') return null;
     return data;
-  } catch {
+  } catch (e) {
     return null;
   }
 }
 
 export function clearSave() {
-  try {
-    window.localStorage.removeItem(SAVE_KEY);
-  } catch {
-    // Nothing to clear.
-  }
+  try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignore */ }
 }

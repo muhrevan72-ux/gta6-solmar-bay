@@ -1,123 +1,185 @@
-// Solmar Bay — every tuning number and colour in one place.
-// Pure data and tiny helpers: no DOM, no imports, safe to load anywhere.
-export const VIEW_W = 1280;
-export const VIEW_H = 720;
+// Solmar Bay — tuning constants and colour palette.
+// 3D voxel rebuild (round 3). Every number here is original tuning.
 
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
-export const STEP = 1 / 60;
-
-export const WORLD_W = 3200;
-export const WORLD_H = 2400;
-
-// Road grid: centre lines of the vertical and horizontal roads.
-export const ROAD_X = [200, 600, 1000, 1400, 1800, 2200, 2600, 3000];
-export const ROAD_Y = [200, 600, 1000, 1400, 1800, 2200];
-export const ROAD_W = 96; // full asphalt width
-export const LANE = 22; // right-hand lane offset from a road centre line
-
-// West edge: open water, then sand.
-export const WATER_X = 90; // x < 90 is water (impassable)
-export const SAND_X = 200; // 90..200 is beach sand
-
-export const COLORS = {
-  grass: '#7fae5a',
-  grassDark: '#74a24f',
-  sand: '#e8d5a0',
-  water: '#3f8fd2',
-  waterDeep: '#2f74b8',
-  road: '#3c3f46',
-  roadEdge: '#565a63',
-  dash: '#e8e3c8',
-  sidewalk: '#b9b3a4',
-  roof: ['#c96f4a', '#4a7a96', '#8a6fa8', '#b89a4a', '#5a8a6a', '#96604a'],
-  hospital: '#e8e8e8',
-  garage: '#5a6a7a',
-  safehouse: '#a87a4a',
-  harbour: '#6a5a8a',
-  park: '#5f9e4a',
-  tree: '#3f7a34',
-  player: '#f2c14e',
-  police: '#2f6fd2',
-  policeDark: '#1e4a96',
-  pedShirt: ['#d24a4a', '#4a8ad2', '#4ad27a', '#d2a24a', '#8a4ad2', '#e8e8e8'],
-  hudBg: 'rgba(12, 16, 22, 0.72)',
-  hudText: '#f2f0e8',
-  gold: '#f2c14e',
-  red: '#e04030',
-  green: '#4ad27a',
-  blue: '#4a8ad2',
+export const WORLD = {
+  size: 800,
+  half: 400,
+  groundY: 0,
+  waterY: -0.35,
+  skyTop: [0.45, 0.72, 0.95],
+  fogColor: [0.62, 0.76, 0.9],
+  fogNear: 120,
+  fogFar: 520,
 };
 
-export const TUNING = {
-  walkSpeed: 210,
-  runSpeed: 330,
-  playerRadius: 12,
-  carRadius: 18,
-  carMaxSpeed: 520,
-  carAccel: 340,
-  carBrake: 520,
-  carReverseMax: 190,
-  carSteer: 2.6,
-  carDrag: 0.55,
-  handbrakeDrag: 2.4,
-  trafficSpeed: 150,
-  trafficMax: 190,
-  pedSpeed: 55,
-  pedFleeSpeed: 170,
-  copRunSpeed: 265,
-  policeCarSpeed: 545,
-  punchRange: 58,
+// Convert '#rrggbb' to [r, g, b] floats 0..1.
+export function hex(h) {
+  const n = parseInt(h.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+export const COL = {
+  grass: hex('#5da244'),
+  grassDark: hex('#4c8a38'),
+  sand: hex('#e8d28a'),
+  asphalt: hex('#33363d'),
+  asphaltLight: hex('#43474f'),
+  lane: hex('#e8e4c8'),
+  sidewalk: hex('#9aa0a8'),
+  concrete: hex('#8d9299'),
+  water: hex('#2f7fc9'),
+  waterDeep: hex('#1f5fa8'),
+  building: [
+    hex('#c8b8a0'), hex('#b0a89a'), hex('#8fa3b8'), hex('#a89a80'),
+    hex('#7d8aa0'), hex('#c0a080'), hex('#9a8a70'),
+  ],
+  towerGlass: hex('#7fb8d8'),
+  windowLit: hex('#ffd98a'),
+  windowDark: hex('#2c3e55'),
+  roof: hex('#6b5d4f'),
+  house: [hex('#d8a878'), hex('#c98f6a'), hex('#e0c090'), hex('#b08858')],
+  treeTrunk: hex('#6a4a28'),
+  treeLeaf: hex('#3e8a2f'),
+  treeLeaf2: hex('#57a83c'),
+  container: [hex('#c84a3a'), hex('#3a7ac8'), hex('#d8a03a'), hex('#4aa86a')],
+  dockWood: hex('#8a6a44'),
+  runway: hex('#2e3138'),
+  runwayMark: hex('#f0ead0'),
+  hangar: hex('#a8b0b8'),
+  tower: hex('#d8d8d8'),
+  hospital: hex('#e8e8e8'),
+  hospitalCross: hex('#e04040'),
+  playerSkin: hex('#e8b88a'),
+  playerShirt: hex('#2e7ad8'),
+  playerPants: hex('#2a2f38'),
+  pedShirt: [hex('#d84a4a'), hex('#4aa84a'), hex('#d8a03a'), hex('#8a5ad8'), hex('#38b8b8')],
+  copShirt: hex('#1e3a6e'),
+  copHat: hex('#16294e'),
+  carBody: [
+    hex('#c83a2e'), hex('#2e6ac8'), hex('#e8c832'), hex('#38a858'),
+    hex('#c86a2e'), hex('#8a3ac8'), hex('#d8d8d8'), hex('#22262c'),
+  ],
+  bikeBody: [hex('#e03a3a'), hex('#e8a03a'), hex('#3a9ad8')],
+  boatBody: hex('#e8e8e8'),
+  planeBody: hex('#e8e8e8'),
+  planeStripe: hex('#c83a2e'),
+  policeCar: hex('#e8e8e8'),
+  policeStripe: hex('#1e3a6e'),
+  marker: hex('#ffd23a'),
+  markerGreen: hex('#4ae08a'),
+  cash: hex('#4ae08a'),
+  health: hex('#ff5a5a'),
+  armor: hex('#5a9aff'),
+  wrench: hex('#c8c8c8'),
+  weapon: hex('#3a3f48'),
+  bomb: hex('#222222'),
+  smoke: hex('#888888'),
+};
+
+export const PLAYER = {
+  walkSpeed: 6.5,
+  runSpeed: 11,
+  radius: 0.55,
+  height: 1.8,
+  accel: 40,
+  health: 100,
   punchDamage: 12,
+  punchRange: 1.6,
   punchCooldown: 0.45,
-  maxHealth: 100,
-  maxArmor: 50,
-  maxWanted: 5,
-  wantedDecayDelay: 6,
-  wantedDecayEvery: 3,
-  bustedCashLoss: 0.2,
 };
 
-export const CAR_COLORS = [
-  '#c23b2e', '#2e6fc2', '#e0a32e', '#3aa655', '#7a4a9e',
-  '#c2c2c2', '#22262c', '#d2691e', '#4a9e9e', '#b03060',
-];
+export const CAR = {
+  accel: 16,
+  brake: 30,
+  maxSpeed: 38,
+  reverseSpeed: 13,
+  steer: 1.9,
+  grip: 8,
+  radius: 1.6,
+  health: 100,
+  damageSmoke: 35,
+};
 
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
+export const BIKE = {
+  accel: 22,
+  brake: 32,
+  maxSpeed: 48,
+  reverseSpeed: 10,
+  steer: 2.6,
+  grip: 6,
+  radius: 1.1,
+  health: 70,
+  wobble: 0.35,
+};
 
-/** Where the save is kept between visits (this browser only). */
-export const SAVE_KEY = 'solmar-bay-save-v1';
+export const BOAT = {
+  accel: 10,
+  brake: 14,
+  maxSpeed: 26,
+  steer: 1.4,
+  radius: 1.8,
+  health: 90,
+};
 
-// A tiny deterministic RNG (mulberry32) so the city layout is the same
-// on every load. Gameplay randomness uses Math.random.
-export function mulberry32(seed) {
-  let a = seed >>> 0;
-  return function next() {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+export const PLANE = {
+  accel: 12,
+  maxSpeed: 72,
+  takeoffSpeed: 30,
+  climbRate: 9,
+  steer: 1.1,
+  radius: 2.2,
+  health: 120,
+};
 
-export function clamp(v, lo, hi) {
-  return v < lo ? lo : v > hi ? hi : v;
-}
+export const WEAPONS = {
+  pistol: { name: 'Pistol', damage: 26, rate: 0.22, range: 95, spread: 0.012, ammo: Infinity, auto: false, color: hex('#3a3f48') },
+  smg: { name: 'SMG', damage: 14, rate: 0.07, range: 75, spread: 0.05, ammo: 150, auto: true, color: hex('#2a2e36') },
+  shotgun: { name: 'Shotgun', damage: 11, pellets: 6, rate: 0.95, range: 42, spread: 0.11, ammo: 30, auto: false, color: hex('#5a3a28') },
+};
 
-export function dist2(ax, ay, bx, by) {
-  const dx = ax - bx;
-  const dy = ay - by;
-  return dx * dx + dy * dy;
-}
+export const BOMB = {
+  count: 3,
+  maxCount: 6,
+  fuse: 1.2,
+  radius: 9,
+  damage: 200,
+  throwSpeed: 16,
+};
 
-export function angleTo(ax, ay, bx, by) {
-  return Math.atan2(by - ay, bx - ax);
-}
+export const WANTED = {
+  decayTime: 22,        // seconds out of sight before one star drops
+  hideTime: 8,          // seconds hidden before decay starts ticking faster
+  stealStars: 1,
+  killStars: 1,
+  explosionStars: 1,
+  maxStars: 5,
+  // police cars chasing per star level (index = stars)
+  copCars: [0, 1, 2, 3, 4, 5],
+  // on-foot cops per star level
+  footCops: [0, 0, 1, 2, 3, 4],
+  bustFine: 0.2,        // fraction of cash lost when busted
+};
 
-// Shortest signed turn from angle `from` towards angle `to`.
-export function angleDiff(from, to) {
-  let d = to - from;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return d;
-}
+export const PICKUPS = {
+  cashMin: 10,
+  cashMax: 50,
+  healthAmount: 30,
+  armorAmount: 50,
+  wrenchAmount: 45,
+  smgAmmo: 150,
+  shotgunAmmo: 30,
+  bombAdd: 2,
+};
+
+export const MISSION_REWARDS = {
+  chapter1: 200,
+  chapter2: 400,
+  chapter3: 500,
+  chapter4: 600,
+  chapter5: 1500,
+  taxi: 120,
+  courier: 160,
+  timeTrial: 200,
+};
+
+export const SAVE_KEY = 'solmar-bay-3d-save-v1';

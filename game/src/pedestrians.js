@@ -1,110 +1,125 @@
-// Pedestrians: they stroll the sidewalks, and run when a car comes at
-// them or a fight breaks out. No drawing, no browser.
-import { COLORS, ROAD_W, TUNING, angleTo, clamp, dist2 } from './config.js';
-import { collideCircle, nearestRoadPoint } from './world.js';
+// Solmar Bay — pedestrians: walk the sidewalks, flee from danger,
+// wait as taxi passengers, fall down when hurt.
 
-export function makePed(x, y) {
-  return {
-    x, y,
-    angle: Math.random() * Math.PI * 2,
-    speed: TUNING.pedSpeed * (0.8 + Math.random() * 0.4),
-    state: 'walk', // 'walk' | 'flee' | 'down'
-    downT: 0,
-    shirt: COLORS.pedShirt[Math.floor(Math.random() * COLORS.pedShirt.length)],
-    target: null,
-    waitT: 0,
-  };
-}
+import { COL } from './config.js';
+import { resolveCollision } from './world.js';
 
-// Peds stand on sidewalks: just off a road edge.
-export function spawnPeds(world, rng, count, nearX, nearY, minDist) {
-  const peds = [];
-  for (let i = 0; i < count; i += 1) {
-    const p = nearestRoadPoint(
-      220 + rng() * (world.w - 440),
-      60 + rng() * (world.h - 120),
-    );
-    const dx = p.x - nearX;
-    const dy = p.y - nearY;
-    if (dx * dx + dy * dy < minDist * minDist) continue;
-    const side = rng() < 0.5 ? -1 : 1;
-    const x = p.axis === 'v' ? p.x + side * (ROAD_W / 2 + 16) : p.x + (rng() - 0.5) * 120;
-    const y = p.axis === 'v' ? p.y + (rng() - 0.5) * 120 : p.y + side * (ROAD_W / 2 + 16);
-    const ped = makePed(clamp(x, 110, world.w - 20), clamp(y, 20, world.h - 20));
-    ped.target = pickSidewalkTarget(world, rng, ped.x, ped.y);
-    peds.push(ped);
+export function createPeds(city) {
+  const list = [];
+  const spots = [];
+  // seed pedestrians near downtown intersections + beach + suburbs
+  for (const n of city.nodes) {
+    if (Math.abs(n.x) < 160 && Math.abs(n.z) < 160 && Math.random() < 0.22) {
+      spots.push([n.x + 8, n.z + 8]);
+    }
   }
-  return peds;
-}
-
-function pickSidewalkTarget(world, rng, x, y) {
-  const p = nearestRoadPoint(x, y);
-  const along = (rng() - 0.5) * 500;
-  const side = rng() < 0.5 ? -1 : 1;
-  if (p.axis === 'v') {
-    return {
-      x: clamp(p.x + side * (ROAD_W / 2 + 16), 110, world.w - 20),
-      y: clamp(p.y + along, 20, world.h - 20),
-    };
+  spots.push([-300, 40], [-296, -80], [-100, -280], [40, -300], [210, 210], [260, -200]);
+  for (const [x, z] of spots.slice(0, 30)) {
+    list.push({
+      x: x + Math.random() * 4 - 2,
+      z: z + Math.random() * 4 - 2,
+      heading: Math.random() * Math.PI * 2,
+      speed: 1.6 + Math.random() * 1.2,
+      state: 'walk', // walk | flee | dead | passenger
+      health: 100,
+      shirt: COL.pedShirt[Math.floor(Math.random() * COL.pedShirt.length)],
+      target: null,
+      fleeT: 0,
+      deadT: 0,
+      walkPhase: Math.random() * 6,
+    });
   }
-  return {
-    x: clamp(p.x + along, 110, world.w - 20),
-    y: clamp(p.y + side * (ROAD_W / 2 + 16), 20, world.h - 20),
-  };
+  return { list };
 }
 
-export function updatePeds(world, peds, dt, danger, rng) {
-  for (const ped of peds) {
-    if (ped.state === 'down') {
-      ped.downT -= dt;
-      if (ped.downT <= 0) ped.state = 'walk';
+// Make every ped near (x,z) run away from it.
+export function fleeFrom(peds, x, z, radius) {
+  for (const p of peds.list) {
+    if (p.state === 'dead') continue;
+    const d = Math.hypot(p.x - x, p.z - z);
+    if (d < radius) {
+      p.state = 'flee';
+      p.fleeT = 3 + Math.random();
+      p.heading = Math.atan2(p.x - x, p.z - z);
+    }
+  }
+}
+
+export function updatePeds(dt, game) {
+  const city = game.city;
+  const list = game.peds.list;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const p = list[i];
+    if (p.state === 'dead') {
+      p.deadT += dt;
+      if (p.deadT > 25) list.splice(i, 1);
       continue;
     }
-    // Flee a fast car or a fight nearby.
-    if (danger && dist2(ped.x, ped.y, danger.x, danger.y) < 170 * 170) {
-      ped.state = 'flee';
-    } else if (ped.state === 'flee' && (!danger || dist2(ped.x, ped.y, danger.x, danger.y) > 320 * 320)) {
-      ped.state = 'walk';
-      ped.target = pickSidewalkTarget(world, rng, ped.x, ped.y);
+    if (p.state === 'passenger') continue; // stands still, waiting for the taxi
+
+    if (p.state === 'flee') {
+      p.fleeT -= dt;
+      const sp = 5.5;
+      p.x += Math.sin(p.heading) * sp * dt;
+      p.z += Math.cos(p.heading) * sp * dt;
+      const fixed = resolveCollision(p.x, p.z, 0.5, city.buildings);
+      p.x = fixed.x; p.z = fixed.z;
+      p.walkPhase += dt * 10;
+      if (p.fleeT <= 0) p.state = 'walk';
+      continue;
     }
-    if (ped.state === 'flee' && danger) {
-      const away = angleTo(danger.x, danger.y, ped.x, ped.y);
-      ped.angle = away;
-      ped.x += Math.cos(away) * TUNING.pedFleeSpeed * dt;
-      ped.y += Math.sin(away) * TUNING.pedFleeSpeed * dt;
-    } else {
-      if (!ped.target || dist2(ped.x, ped.y, ped.target.x, ped.target.y) < 24 * 24) {
-        if (ped.waitT > 0) {
-          ped.waitT -= dt;
-          continue;
-        }
-        ped.target = pickSidewalkTarget(world, rng, ped.x, ped.y);
-        if (rng() < 0.25) ped.waitT = 1 + rng() * 2;
+
+    // walking: head for a target road node, pick a new one on arrival
+    if (!p.target) {
+      const n = city.nodes[Math.floor(Math.random() * city.nodes.length)];
+      p.target = { x: n.x + 8, z: n.z + 8 };
+    }
+    const dx = p.target.x - p.x, dz = p.target.z - p.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 2) { p.target = null; continue; }
+    const want = Math.atan2(dx, dz);
+    let d = (want - p.heading) % (Math.PI * 2);
+    if (d > Math.PI) d -= Math.PI * 2;
+    if (d < -Math.PI) d += Math.PI * 2;
+    p.heading += d * Math.min(1, dt * 4);
+    p.x += Math.sin(p.heading) * p.speed * dt;
+    p.z += Math.cos(p.heading) * p.speed * dt;
+    const fixed = resolveCollision(p.x, p.z, 0.5, city.buildings);
+    p.x = fixed.x; p.z = fixed.z;
+    p.walkPhase += dt * p.speed * 2.2;
+
+    // hit by the player's vehicle?
+    const pv = game.player.inVehicle;
+    if (pv && Math.abs(pv.speed) > 5) {
+      const dd = Math.hypot(p.x - pv.x, p.z - pv.z);
+      if (dd < 2.2) {
+        game.combat.damagePed(game, p, 60, 'car');
+        game.audio.thud();
       }
-      const go = angleTo(ped.x, ped.y, ped.target.x, ped.target.y);
-      ped.angle = go;
-      ped.x += Math.cos(go) * ped.speed * dt;
-      ped.y += Math.sin(go) * ped.speed * dt;
     }
-    const fixed = collideCircle(world, ped.x, ped.y, 10);
-    ped.x = fixed.x;
-    ped.y = fixed.y;
   }
 }
 
-// Peds a car is about to hit: close, and the car is moving fast.
-// The caller decides the consequences (knock-down, wanted level).
-export function pedsHitByCar(peds, car) {
-  const hit = [];
-  if (Math.abs(car.speed) < 120) return hit;
-  for (const ped of peds) {
-    if (ped.state === 'down') continue;
-    if (dist2(ped.x, ped.y, car.x, car.y) < 30 * 30) hit.push(ped);
+export function drawPeds(renderer, game) {
+  for (const p of game.peds.list) {
+    const yaw = p.heading;
+    if (p.state === 'dead') {
+      // lying flat
+      renderer.box(p.x, 0.3, p.z, 0.6, 0.5, 1.7, yaw, p.shirt, p.shirt);
+      renderer.box(p.x, 0.35, p.z + 1.0, 0.45, 0.4, 0.45, yaw, COL.playerSkin, COL.playerSkin);
+      continue;
+    }
+    const swing = Math.sin(p.walkPhase) * 0.25;
+    const bob = Math.abs(Math.sin(p.walkPhase)) * 0.05;
+    renderer.box(p.x - 0.13, 0.35 + bob, p.z, 0.22, 0.7, 0.24, yaw, COL.playerPants);
+    renderer.box(p.x + 0.13, 0.35 + bob, p.z, 0.22, 0.7, 0.24, yaw, COL.playerPants);
+    renderer.box(p.x, 1.02 + bob, p.z, 0.6, 0.66, 0.32, yaw, p.shirt);
+    renderer.box(p.x - 0.4, 1.02 + bob + swing * 0.4, p.z, 0.18, 0.55, 0.2, yaw, p.shirt);
+    renderer.box(p.x + 0.4, 1.02 + bob - swing * 0.4, p.z, 0.18, 0.55, 0.2, yaw, p.shirt);
+    renderer.box(p.x, 1.58 + bob, p.z, 0.48, 0.44, 0.44, yaw, COL.playerSkin);
+    if (p.state === 'passenger') {
+      // yellow marker above a waiting passenger
+      renderer.box(p.x, 2.5 + Math.sin(game.time * 3) * 0.15, p.z, 0.5, 0.5, 0.5, 0, COL.marker, COL.marker);
+    }
   }
-  return hit;
-}
-
-export function knockDown(ped, seconds) {
-  ped.state = 'down';
-  ped.downT = seconds;
 }
