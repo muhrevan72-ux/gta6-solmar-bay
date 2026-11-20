@@ -37,8 +37,7 @@ export function closeFoodMenu(game) {
   game.food.menuOpen = null;
 }
 
-// Buy by number key (1/2/3) while a menu is open. The menu items
-// carry a numeric heal (Feast heals 100 = full) and an armour bonus.
+// Buy by number key (1/2/3) while a menu is open.
 export function buyFood(game, idx) {
   const s = game.state;
   if (!game.food.menuOpen) return false;
@@ -49,9 +48,13 @@ export function buyFood(game, idx) {
     return false;
   }
   addCash(s, -item.price);
-  healPlayer(s, item.heal);
-  if (item.armour) s.armour = Math.min(100, s.armour + item.armour);
-  showToast(s, item.name + ' — +' + item.heal + ' HP' + (item.armour ? ' + ' + item.armour + ' armour' : '') + ' (-$' + item.price + ')', 3);
+  if (item.heal === 'full') {
+    s.health = 100;
+    s.armour = Math.min(100, s.armour + 25);
+  } else {
+    healPlayer(s, item.heal);
+  }
+  showToast(s, item.name + ' — ' + (item.heal === 'full' ? 'full health + 25 armour' : '+' + item.heal + ' HP') + ' (-$' + item.price + ')', 3);
   return true;
 }
 

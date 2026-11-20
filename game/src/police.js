@@ -32,8 +32,7 @@ export function createPolice() {
 
 export function commitCrime(game, kind) {
   const s = game.state;
-  const entry = CRIME[kind];
-  const level = entry ? entry.stars : 1;
+  const level = CRIME[kind] || 1;
   if (level > s.wanted) {
     s.wanted = level;
     game.police.wantedT = 0;
@@ -211,7 +210,7 @@ export function hasLineOfSight(game, x0, y0, z0, x1, y1, z1) {
     const z = z0 + (z1 - z0) * t;
     const y = y0 + (y1 - y0) * t;
     for (const b of game.city.buildings) {
-      if (b.h > 15 && Math.abs(x - b.x) < b.sx / 2 + 3 && Math.abs(z - b.z) < b.sz / 2 + 3 && y < b.h) {
+      if (b.h > 15 && Math.abs(x - b.x) < b.w / 2 + 3 && Math.abs(z - b.z) < b.d / 2 + 3 && y < b.h) {
         return false;
       }
     }

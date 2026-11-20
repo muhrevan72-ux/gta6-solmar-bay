@@ -4,17 +4,16 @@
 // the player (and each other) on sight inside their turf.
 
 import { GANGS, COL, TUNE } from './config.js';
-import { showToast, addRespect, addCash } from './state.js';
+import { showToast, addRespect } from './state.js';
 import { dropCash } from './pedestrians.js';
 
 export function createGangs(city) {
   const gangs = { members: [], turfJobs: [] };
-  // 25 members split across the two turfs. The turf fields hx/hz
-  // are the FULL width/height (kings 160x140, sharks 90x110).
+  // 25 members split across the two turfs.
   for (let i = 0; i < 25; i++) {
     const def = i % 2 === 0 ? GANGS.kings : GANGS.sharks;
-    const x = def.turf.x + (Math.random() - 0.5) * def.turf.hx;
-    const z = def.turf.z + (Math.random() - 0.5) * def.turf.hz;
+    const x = def.turf.x + (Math.random() - 0.5) * def.turf.w;
+    const z = def.turf.z + (Math.random() - 0.5) * def.turf.h;
     const ped = {
       x, z, heading: Math.random() * Math.PI * 2,
       speed: 2 + Math.random(),
@@ -37,12 +36,11 @@ export function createGangs(city) {
   return gangs;
 }
 
-// Which gang's turf is (x, z) in, if any. hx/hz are the full
-// width/height, so the test is against half of each.
+// Which gang's turf is (x, z) in, if any.
 export function gangAt(x, z) {
   for (const key of ['kings', 'sharks']) {
     const t = GANGS[key].turf;
-    if (Math.abs(x - t.x) < t.hx / 2 && Math.abs(z - t.z) < t.hz / 2) return key;
+    if (Math.abs(x - t.x) < t.w / 2 && Math.abs(z - t.z) < t.h / 2) return key;
   }
   return null;
 }
@@ -84,8 +82,8 @@ export function stepGangs(game, dt) {
         m.waitT = 5 + Math.random() * 10;
         const def = GANGS[m.gang];
         m.target = {
-          x: def.turf.x + (Math.random() - 0.5) * def.turf.hx,
-          z: def.turf.z + (Math.random() - 0.5) * def.turf.hz,
+          x: def.turf.x + (Math.random() - 0.5) * def.turf.w,
+          z: def.turf.z + (Math.random() - 0.5) * def.turf.h,
         };
       }
       if (m.target) {

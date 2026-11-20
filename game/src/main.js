@@ -11,7 +11,7 @@
 // E while the phone is open does nothing. Every branch is gated by
 // pressedKey('KeyE') && eCooldown <= 0 — never `!eCooldown`.
 
-import { TUNE, SIDE_MARKERS, GARAGE_DOOR, BARREL_SPOTS, BARREL_COLOR } from './config.js';
+import { TUNE, SIDE_MARKERS, INTERIOR_DOORS, GARAGE_DOOR, BARREL_SPOTS, BARREL_COLOR, clamp } from './config.js';
 import { newGameState, showToast, showMenu, hideMenu, addCash, stepToasts } from './state.js';
 import { createInput, attachInput, pressedKey, endFrame } from './input.js';
 import { createAudio, createRadio, nextStation, advanceRadio, engineHum, setMuted, playJingle } from './audio.js';
@@ -38,7 +38,7 @@ import { createLiving, stepLiving, tryTrain, tryElevator, livingBoxes } from './
 import { createPhone, togglePhone, phoneDigit, renderPhone } from './phone.js';
 import { createGarage, tryGarage, garageDigit, garageBoxes } from './garage.js';
 import { createActivities, stepActivities, tryActivity, atmDigit, activityBoxes } from './activities.js';
-import { stepInteriors, tryInteriorDoor, tryInteriorCounter, interiorBoxes, isInside, createInteriors } from './interiors.js';
+import { stepInteriors, tryInteriorDoor, tryInteriorCounter, interiorBoxes, isInside } from './interiors.js';
 import { loadGLB, addGLBToBatch } from './gltf.js';
 import { updateHud } from './hud.js';
 import { saveGame, loadGame, hasSave } from './save.js';
@@ -70,7 +70,6 @@ export function createGame() {
     phone: createPhone(),
     garage: createGarage(),
     activities: createActivities(),
-    interiors: createInteriors(),
     peds: createPedestrians(city),
     gangs: createGangs(city),
     vehicles: createVehicles(city),

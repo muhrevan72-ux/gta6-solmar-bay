@@ -19,7 +19,7 @@
 // test-qa) — the same code path runs, so the boot test proves the
 // real behaviour.
 
-import { RESPECT, districtAt, respectLevel } from './config.js';
+import { RESPECT, districtAt } from './config.js';
 import { clockText } from './weather.js';
 import { radioNow } from './audio.js';
 import { policeResponseList } from './police.js';
@@ -84,13 +84,10 @@ export function updateHud(game) {
     dom.wanted.textContent = '★'.repeat(s.wanted) + '☆'.repeat(5 - s.wanted);
   }
   if (dom.weapons) {
-    // Weapon names are proper nouns/acronyms (SMG is an acronym, not
-    // title case — the old code rendered "Smg").
-    const names = { pistol: 'Pistol', smg: 'SMG', shotgun: 'Shotgun' };
     const slots = ['pistol', 'smg', 'shotgun'].map((w) => {
-      if (!s.weapons[w]) return names[w] + ' —';
+      if (!s.weapons[w]) return w[0].toUpperCase() + w.slice(1) + ' —';
       const ammo = s.ammo[w] === Infinity ? '∞' : s.ammo[w];
-      const cur = s.weapon === w ? '[' + names[w] + ' ' + ammo + ']' : names[w] + ' ' + ammo;
+      const cur = s.weapon === w ? '[' + w[0].toUpperCase() + w.slice(1) + ' ' + ammo + ']' : w[0].toUpperCase() + w.slice(1) + ' ' + ammo;
       return cur;
     });
     dom.weapons.textContent = slots.join(' ');
@@ -102,10 +99,13 @@ export function updateHud(game) {
     dom.radio.textContent = r.station + ' / \'' + r.song + '\'';
   }
   if (dom.respect) {
-    dom.respect.textContent = 'REP ' + respectLevel(s.respect).name + ' · ' + s.respect;
+    // Take the highest level the player qualifies for.
+    let name = RESPECT.levels[0].name;
+    for (const l of RESPECT.levels) if (s.respect >= l.min) name = l.name;
+    dom.respect.textContent = 'REP ' + name + ' · ' + s.respect;
   }
   if (dom.location) {
-    dom.location.textContent = districtAt(s.player.x, s.player.z) + ' · ' + completionPct(s) + '% complete';
+    dom.location.textContent = districtAt(game.city, s.player.x, s.player.z) + ' · ' + completionPct(s) + '% complete';
   }
   if (dom.mission) {
     const ch = game.missions;

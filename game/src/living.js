@@ -120,19 +120,17 @@ export function tryTrain(game) {
   return false;
 }
 
-// Ride the elevator in the tallest tower (E at its door). The
-// elevator platform is on the tower's east face (city.elevator).
+// Ride the elevator in the tallest tower (E at its door).
 export function tryElevator(game) {
   const s = game.state;
   const p = s.player;
-  const el = game.city.elevator;
-  if (!el) return false;
-  if (Math.hypot(p.x - el.x, p.z - el.z) < 4) {
-    const elev = game.living.elevator;
-    if (!elev.moving) {
-      elev.moving = true;
-      elev.t = 0;
-      showToast(s, elev.floor === 0 ? 'Elevator going up…' : 'Elevator going down…', 3);
+  const t = game.city.tallestTower;
+  if (Math.hypot(p.x - t.x, p.z - (t.z + t.d / 2 + 2)) < 4) {
+    const el = game.living.elevator;
+    if (!el.moving) {
+      el.moving = true;
+      el.t = 0;
+      showToast(s, el.floor === 0 ? 'Elevator going up…' : 'Elevator going down…', 3);
       return true;
     }
   }

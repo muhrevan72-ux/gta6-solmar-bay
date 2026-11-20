@@ -79,10 +79,8 @@ export function spawnTraffic(game) {
 }
 
 // Traffic lights: a car approaching a red light on its road stops.
-// The lights cycle green 6 s / red 6 s (their `t` timer counts down
-// in stepVehicles).
 function lightIsRed(game, car) {
-  const lights = game.city.lights;
+  const lights = game.city.trafficLights;
   for (const L of lights) {
     const d = Math.hypot(L.x - car.x, L.z - car.z);
     if (d < 12) return L.state === 'red';
@@ -94,14 +92,6 @@ export function stepVehicles(game, dt) {
   const v = game.vehicles;
   const s = game.state;
   const p = s.player;
-  // Cycle the traffic lights (green 6 s, red 6 s).
-  for (const L of game.city.lights) {
-    L.t -= dt;
-    if (L.t <= 0) {
-      L.t = 6;
-      L.state = L.state === 'green' ? 'red' : 'green';
-    }
-  }
   // Traffic.
   const kept = [];
   for (const c of v.traffic) {

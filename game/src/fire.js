@@ -26,8 +26,7 @@ export function stepFire(game, dt) {
     if (f.fires.length < 3) {
       const b = game.city.buildings[Math.floor(Math.random() * game.city.buildings.length)];
       f.fires.push({ x: b.x, z: b.z, size: 2 + Math.random() * 2, t: 0 });
-      const label = b.kind.startsWith('shop') ? 'a shop' : b.kind === 'tower' ? 'a tower' : 'a ' + b.kind;
-      showToast(s, 'A fire broke out in ' + label + '! Put it out for $150.', 5);
+      showToast(s, 'A fire broke out in ' + (b.district || 'the city') + '! Put it out for $150.', 5);
     }
   }
   for (const fire of f.fires) fire.t += dt;

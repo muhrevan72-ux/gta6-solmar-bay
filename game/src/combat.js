@@ -25,7 +25,7 @@ export function createCombat() {
 const WEAPON_STATS = {
   pistol: { damage: TUNE.pistolDamage, rate: 0.35, range: 60 },
   smg: { damage: TUNE.smgDamage, rate: 0.09, range: 50 },
-  shotgun: { damage: TUNE.shotgunDamage, rate: 0.8, range: 25, pellets: 6 },
+  shotgun: { damage: TUNE.shotgunDamage, rate: 0.8, range: 25, pellets: 5 },
 };
 
 export function stepCombat(game, dt) {

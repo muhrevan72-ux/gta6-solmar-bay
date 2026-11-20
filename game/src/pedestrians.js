@@ -13,8 +13,7 @@
 // (with a 1.5 m dead zone at the road edge so crossing peds do not
 // oscillate).
 
-import { TUNE, COL, makeRng, clamp } from './config.js';
-import { randomSidewalkPoint, isRoadAt } from './world.js';
+import { TUNE, COL, randomSidewalkPoint, isRoadAt, clamp } from './config.js';
 import { showToast, addCash } from './state.js';
 
 export function createPedestrians(city) {
@@ -33,7 +32,7 @@ function spawnPed(city, i) {
   else if (roll < 82) role = 'chat';
   else if (roll < 91) role = 'queue';
   else role = 'vendor';
-  const pt = randomSidewalkPoint(city, makeRng(i + 1));
+  const pt = randomSidewalkPoint(city, i);
   const ped = {
     x: pt.x, z: pt.z,
     heading: Math.random() * Math.PI * 2,
@@ -41,7 +40,6 @@ function spawnPed(city, i) {
     role,
     target: null,
     waitT: 0,
-    roadT: 0, // seconds spent standing on a road while walking
     bob: Math.random() * Math.PI * 2,
     shirt: COL.shirt[i % COL.shirt.length],
     pants: COL.pants[i % COL.pants.length],
@@ -54,25 +52,22 @@ function spawnPed(city, i) {
     hp: 30,
     dead: false,
     activity: 'walk',
-    shop: null, // the food shop this ped queues at / vends for
   };
   if (role === 'sit') {
     const bench = city.benches[i % city.benches.length];
     ped.x = bench.x;
     ped.z = bench.z;
-    ped.heading = bench.rot || 0;
+    ped.heading = bench.yaw || 0;
   } else if (role === 'chat') {
     const spot = city.chatSpots[i % city.chatSpots.length];
     ped.x = spot.x + ((i % 2) - 0.5) * 1.6;
     ped.z = spot.z + ((i % 3) - 1) * 1.2;
   } else if (role === 'queue') {
     const shop = city.foodShops[i % city.foodShops.length];
-    ped.shop = shop;
     ped.x = shop.x + ((i % 3) - 1) * 1.5;
     ped.z = shop.z + 6 + (i % 3);
   } else if (role === 'vendor') {
     const shop = city.foodShops[i % city.foodShops.length];
-    ped.shop = shop;
     ped.x = shop.x + 4;
     ped.z = shop.z + 2;
     ped.heading = Math.PI / 2;
@@ -84,7 +79,7 @@ function pickWalkTarget(city, ped, i) {
   // A nearby sidewalk point; if the ped is on a road, step off it
   // first (the 1.5 m dead zone keeps crossing peds from oscillating
   // at the road edge).
-  const pt = randomSidewalkPoint(city, Math.random);
+  const pt = randomSidewalkPoint(city, i + Math.floor(Math.random() * 1000));
   return pt;
 }
 
@@ -102,46 +97,6 @@ export function stepPed(game, ped, dt, i) {
       ped.activity = ped.role;
     }
     if (ped.activity === 'walk') ped.target = pickWalkTarget(city, ped, i);
-  }
-  // Queuers walk toward their shop until they are in line (< 4 m),
-  // then stand in the queue. (The old code left them standing 6-8 m
-  // from the shop forever; the re-roll overwrote any walk target.)
-  if (ped.role === 'queue' && ped.shop) {
-    const d = Math.hypot(ped.x - ped.shop.x, ped.z - ped.shop.z);
-    if (d > 4) {
-      ped.activity = 'walk';
-      ped.target = { x: ped.shop.x, z: ped.shop.z + 4 };
-    } else {
-      ped.activity = 'queue';
-      ped.target = null;
-    }
-  }
-  // If the ped has been stuck ON a road for > 1 s (walking in place),
-  // step it off toward the nearest edge. The old sideways step ran
-  // ALONG a north-south road (perpendicular to an eastward heading),
-  // so a ped in the middle of a road could never leave it. The 1 s
-  // grace matters: a ped only briefly on a road (placed there, or
-  // standing next to the player on a road during combat) must NOT be
-  // teleported away before the player can punch it.
-  if (isRoadAt(city, ped.x, ped.z)) {
-    ped.roadT += dt;
-    if (ped.roadT > 1) {
-      const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-      let escaped = false;
-      for (let dist = 2; dist <= 12 && !escaped; dist += 2) {
-        for (const [dx, dz] of dirs) {
-          const nx = ped.x + dx * dist;
-          const nz = ped.z + dz * dist;
-          if (!isRoadAt(city, nx, nz)) { ped.x = nx; ped.z = nz; escaped = true; break; }
-        }
-      }
-      ped.roadT = 0;
-      ped.target = pickWalkTarget(city, ped, i);
-      ped.bob += dt * ped.speed * 2.2;
-      return;
-    }
-  } else {
-    ped.roadT = 0;
   }
   if (ped.activity === 'walk' && ped.target) {
     const dx = ped.target.x - ped.x;

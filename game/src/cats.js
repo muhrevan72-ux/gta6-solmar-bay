@@ -5,13 +5,12 @@
 
 import { showToast, addCash } from './state.js';
 import { playBlip } from './audio.js';
-import { randomSidewalkPoint } from './world.js';
-import { makeRng } from './config.js';
+import { randomSidewalkPoint } from './config.js';
 
 export function createCats(city) {
   const cats = [];
   for (let i = 0; i < 5; i++) {
-    const pt = randomSidewalkPoint(city, makeRng(500 + i * 17));
+    const pt = randomSidewalkPoint(city, 500 + i * 17);
     cats.push({
       x: pt.x, z: pt.z, heading: Math.random() * Math.PI * 2,
       bob: Math.random() * Math.PI * 2,
@@ -35,7 +34,7 @@ export function stepCats(game, dt) {
     cat.waitT -= dt;
     if (cat.waitT <= 0) {
       cat.waitT = 3 + Math.random() * 5;
-      cat.target = randomSidewalkPoint(game.city, Math.random);
+      cat.target = randomSidewalkPoint(game.city, Math.floor(Math.random() * 1000));
     }
     if (cat.target) {
       const dx = cat.target.x - cat.x, dz = cat.target.z - cat.z;

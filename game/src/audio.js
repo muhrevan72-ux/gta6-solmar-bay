@@ -117,7 +117,7 @@ export function createRadio() {
 export function radioNow(radio) {
   const st = STATIONS[radio.station];
   const song = st.songs[radio.songIdx];
-  return { station: st.name + ' ' + st.freq, freq: st.freq, genre: st.genre, song: song.title };
+  return { station: st.name, freq: st.freq, genre: st.genre, song: song.title };
 }
 
 export function nextStation(radio) {

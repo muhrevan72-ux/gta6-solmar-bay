@@ -36,25 +36,16 @@ export function startChapter(game, n) {
   m.passengers = 0;
   m.target = null;
   s.mode = 'chapter';
-  // The config title already reads 'Chapter 1 — First Wheels'.
-  s.hud.card = { title: ch.title.toUpperCase(), text: ch.intro, t: 0 };
-  const speakers = {
-    1: ['Rico', 'Your fixer'],
-    2: ['Rico', 'Your fixer'],
-    3: ['City Radio', 'Police scanner'],
-    4: ['Maya', 'Crew driver'],
-    5: ['Rico', 'Your fixer'],
-  };
-  const sp = speakers[n] || ['Rico', 'Your fixer'];
-  showDialogue(s, sp[0], sp[1], ch.intro, 10);
+  s.hud.card = { title: 'CHAPTER ' + n + ' — ' + ch.title, text: ch.intro, t: 0 };
+  showDialogue(s, ch.npc, ch.npcRole, ch.intro, 10);
   if (n === 3) {
     // Chapter 3 opens hot.
     s.wanted = 3;
   }
   if (n === 1) m.target = { x: 150, z: -120, label: 'Garage' };
-  if (n === 2) m.target = { x: 330, z: -100, label: 'Harbour docks' };
+  if (n === 2) m.target = { x: -150, z: -106, label: 'Police station' };
   if (n === 4) m.target = { x: 0, z: 50, label: 'Taxi stand' };
-  if (n === 5) m.target = { x: 320, z: -120, label: 'Vault' };
+  if (n === 5) m.target = { x: 330, z: -100, label: 'Harbour' };
 }
 
 export function completeChapter(game) {
@@ -120,16 +111,13 @@ export function stepMissions(game, dt) {
       break;
     }
     case 2: {
-      // Pick up the package at the harbour docks, then deliver it
-      // to the hideout within 90 s.
+      // Deliver the package to the police station in 90 s.
       if (m.stage === 0) {
-        if (Math.hypot(p.x - 330, p.z + 100) < 12) {
-          m.stage = 1;
-          m.timer = 90;
-          m.target = { x: 250, z: -220, label: 'Hideout' };
-          showToast(s, 'Package picked up! Deliver it to the hideout — 90 seconds!', 5);
-        }
-      } else if (m.stage === 1) {
+        m.stage = 1;
+        m.timer = 90;
+        showToast(s, 'Deliver the package to the police station — 90 seconds!', 5);
+      }
+      if (m.stage === 1) {
         m.timer -= dt;
         if (m.timer <= 0) {
           showToast(s, 'Too slow! The package job failed — try again.', 4);
@@ -137,7 +125,7 @@ export function stepMissions(game, dt) {
           startChapter(game, 2);
           return;
         }
-        if (Math.hypot(p.x - 250, p.z + 220) < 12) completeChapter(game);
+        if (Math.hypot(p.x + 150, p.z + 106) < 10) completeChapter(game);
       }
       break;
     }
@@ -158,9 +146,9 @@ export function stepMissions(game, dt) {
       break;
     }
     case 5: {
-      // Grab the cash from the vault container at the harbour, then
-      // lose the heat and reach the safehouse.
-      if (m.stage === 0 && Math.hypot(p.x - 320, p.z + 120) < 12) {
+      // Grab the cash at the harbour, then lose the heat and reach
+      // the safehouse.
+      if (m.stage === 0 && Math.hypot(p.x - 330, p.z + 100) < 12) {
         m.stage = 1;
         s.wanted = Math.max(s.wanted, 4);
         addCash(s, 500);
@@ -188,13 +176,9 @@ function stepSideJobs(game, dt) {
   // interact dispatcher, which calls startSideJob).
 }
 
-function sideJobById(kind) {
-  return SIDE_JOBS.find((j) => j.id === kind);
-}
-
 export function startSideJob(game, kind) {
   const s = game.state;
-  const job = sideJobById(kind);
+  const job = SIDE_JOBS[kind];
   if (!job) return false;
   if (kind === 'taxi') {
     game.taxi.fare = { active: true, pickup: null, dropoff: null, stage: 0 };
@@ -217,12 +201,12 @@ export function startSideJob(game, kind) {
 
 export function completeSideJob(game, kind) {
   const s = game.state;
-  const job = sideJobById(kind);
+  const job = SIDE_JOBS[kind];
   game.sideJob = null;
   if (kind === 'taxi' && game.taxi) game.taxi.fare = null;
   addCash(s, job.reward);
   addRespect(s, 25);
   s.stats.sideJobsDone++;
-  showToast(s, job.label + ' done! +$' + job.reward + ', +25 REP', 5);
+  showToast(s, job.name + ' done! +$' + job.reward + ', +25 REP', 5);
   playJingle(game.audio);
 }

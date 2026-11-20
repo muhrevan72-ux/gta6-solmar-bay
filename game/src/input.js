@@ -94,10 +94,7 @@ export function endFrame(inp, dt) {
   inp.mouse.dx = 0;
   inp.mouse.dy = 0;
   inp.mouse.wheel = 0;
-  // Clamp at 0: the old code let the cooldown decay slightly
-  // negative, which made `!cooldown` false forever (the round-3
-  // E bug). The gate everywhere is `cooldown <= 0`.
-  if (inp.eCooldown > 0) inp.eCooldown = Math.max(0, inp.eCooldown - dt);
+  if (inp.eCooldown > 0) inp.eCooldown -= dt;
   else if (inp.eCooldown < 0) inp.eCooldown = 0;
 }
 

@@ -19,7 +19,7 @@ export function createTaxi() {
 }
 
 // Call a taxi to the player. Spawns a yellow taxi on the nearest
-// road, 30 m along it from the player, and drives it to the player.
+// road and drives it to the player.
 export function callTaxi(game) {
   const s = game.state;
   const p = s.player;
@@ -27,20 +27,18 @@ export function callTaxi(game) {
     showToast(s, 'A taxi is already on its way.', 3);
     return false;
   }
-  // Spawn on the nearest road line, 30 m along the road from the
-  // player (not on top of the player).
+  // Spawn on the nearest road line.
   const road = game.city.roads.reduce((best, r) => {
     const d = r.vertical ? Math.abs(r.coord - p.x) : Math.abs(r.coord - p.z);
     return d < best.d ? { r, d } : best;
   }, { r: game.city.roads[0], d: Infinity }).r;
-  const along = 30;
-  const x = road.vertical ? road.coord : p.x + along;
-  const z = road.vertical ? p.z + along : road.coord;
+  const x = road.vertical ? road.coord : p.x;
+  const z = road.vertical ? p.z : road.coord;
   const taxi = {
     kind: 'taxi', x, z, heading: road.vertical ? 0 : Math.PI / 2,
     speed: 0, color: [1, 0.85, 0.1], name: 'Solmar Cab',
     condition: 100, driver: 'npc', route: null,
-    stuckT: 0, calledTaxi: true, parkedT: 0, wheelSpin: 0, alt: 0,
+    stuckT: 0, calledTaxi: true, parkedT: 0, wheelSpin: 0,
   };
   game.vehicles.traffic.push(taxi);
   game.taxi.called = taxi;
