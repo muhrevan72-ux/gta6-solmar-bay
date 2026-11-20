@@ -195,14 +195,16 @@ export function vehicleBoxes(g, v, b, camera) {
   const yaw = v.heading || 0;
   const col = v.color || [0.5, 0.5, 0.5];
   const dark = [col[0] * 0.6, col[1] * 0.6, col[2] * 0.6];
-  // Body and cabin.
-  pushBoxRot(b, v.x, 0.35, v.z, 2, 0.7, 4.4, yaw, col);
-  pushBoxRot(b, v.x, 1.05, v.z - 0.3, 1.7, 0.6, 2.2, yaw, dark);
+  // Body and cabin. The wheels sit at y=0 (on the ground, no
+  // floating gap) and the body at y=0.3, so the car reads as a
+  // car on the road, not a floating cube.
+  pushBoxRot(b, v.x, 0.3, v.z, 2, 0.7, 4.4, yaw, col);
+  pushBoxRot(b, v.x, 1.0, v.z - 0.3, 1.7, 0.6, 2.2, yaw, dark);
   // Windshield (glass).
-  pushBoxRot(b, v.x, 1.0, v.z + 0.9, 1.6, 0.5, 0.15, yaw, [0.4, 0.65, 0.85]);
-  // Four wheels.
+  pushBoxRot(b, v.x, 0.95, v.z + 0.9, 1.6, 0.5, 0.15, yaw, [0.4, 0.65, 0.85]);
+  // Four wheels (base at y=0, on the ground).
   for (const [sx, sz] of [[-0.95, 1.4], [0.95, 1.4], [-0.95, -1.4], [0.95, -1.4]]) {
-    pushBoxRot(b, v.x + sx, 0.05, v.z + sz, 0.3, 0.7, 0.7, yaw, [0.1, 0.1, 0.1]);
+    pushBoxRot(b, v.x + sx, 0, v.z + sz, 0.3, 0.7, 0.7, yaw, [0.1, 0.1, 0.1]);
   }
   // Bumper.
   pushBoxRot(b, v.x, 0.3, v.z + 2.2, 1.9, 0.3, 0.2, yaw, [0.7, 0.7, 0.72]);

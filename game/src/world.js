@@ -253,31 +253,57 @@ export function buildStaticBoxes(city, b) {
   const brickUV = tileUV('brick');
   const windowUV = tileUV('window');
 
-  // Ground slab (grass, top y=0).
-  pushBox(b, 0, -1, 0, 800, 1, 800, COL.grass, grassUV);
-  // Roads: x-lines (top 0.38) and z-lines (top 0.375, avoids
-  // coplanar z-fighting at the crossings).
+  // Ground: 8x8 tiles of 100 m (top y=0), NOT one 800 m slab.
+  // A single 800 m slab is one huge triangle pair spanning
+  // behind the camera, so a rasterizer (or any clipper that
+  // drops whole triangles with a vertex behind the eye) drops
+  // the entire ground — the play-test saw a flat sky-coloured
+  // plane and floating buildings. Tiles are small enough that
+  // only the tile under the camera is ever dropped.
+  for (let tx = -350; tx <= 350; tx += 100) {
+    for (let tz = -350; tz <= 350; tz += 100) {
+      pushBox(b, tx, -1, tz, 100, 1, 100, COL.grass, grassUV);
+    }
+  }
+  // Roads in 100 m segments: x-lines (top 0.38) and z-lines
+  // (top 0.375, avoids coplanar z-fighting at the crossings).
+  // Same reason as the ground: no 800 m triangle spanning the
+  // camera, so the roads actually render instead of vanishing.
   for (const x of ROAD_LINES) {
-    pushBox(b, x, -0.02, 0, 12, 0.4, 800, COL.road, asphaltUV);
+    for (let s = 0; s < 8; s++) {
+      pushBox(b, x, -0.02, -350 + s * 100, 12, 0.4, 100, COL.road, asphaltUV);
+    }
   }
   for (const z of ROAD_LINES) {
-    pushBox(b, 0, -0.025, z, 800, 0.4, 12, COL.road, asphaltUV);
+    for (let s = 0; s < 8; s++) {
+      pushBox(b, -350 + s * 100, -0.025, z, 100, 0.4, 12, COL.road, asphaltUV);
+    }
   }
-  // Sidewalks flanking every road (top 0.45).
+  // Sidewalks flanking every road (top 0.45), in 400 m halves
+  // so a strip under the camera is the only part ever dropped.
   const walkCol = [0.62, 0.62, 0.58];
   for (const x of ROAD_LINES) {
-    pushBox(b, x - 9, 0.05, 0, 6, 0.4, 800, walkCol, sidewalkUV);
-    pushBox(b, x + 9, 0.05, 0, 6, 0.4, 800, walkCol, sidewalkUV);
+    for (const zc of [-200, 200]) {
+      pushBox(b, x - 9, 0.05, zc, 6, 0.4, 400, walkCol, sidewalkUV);
+      pushBox(b, x + 9, 0.05, zc, 6, 0.4, 400, walkCol, sidewalkUV);
+    }
   }
   for (const z of ROAD_LINES) {
-    pushBox(b, 0, 0.05, z - 9, 800, 0.4, 6, walkCol, sidewalkUV);
-    pushBox(b, 0, 0.05, z + 9, 800, 0.4, 6, walkCol, sidewalkUV);
+    for (const xc of [-200, 200]) {
+      pushBox(b, xc, 0.05, z - 9, 400, 0.4, 6, walkCol, sidewalkUV);
+      pushBox(b, xc, 0.05, z + 9, 400, 0.4, 6, walkCol, sidewalkUV);
+    }
   }
-  // Beach sand (x -340..-300, top 0.45) and sea (x -400..-340, top 0.5).
-  pushBox(b, -320, -0.05, 0, 40, 0.5, 800, [0.85, 0.75, 0.5], sandUV);
-  pushBox(b, -370, 0, 0, 60, 0.5, 800, COL.water, waterUV);
-  // Airport runway (dark strip, top 0.38).
-  pushBox(b, 300, -0.02, -260, 30, 0.4, 220, [0.12, 0.12, 0.14], asphaltUV);
+  // Beach sand (x -340..-300, top 0.45) and sea (x -400..-340, top
+  // 0.5), in 100 m segments so they survive the same clipping.
+  for (let s = 0; s < 8; s++) {
+    pushBox(b, -320, -0.05, -350 + s * 100, 40, 0.5, 100, [0.85, 0.75, 0.5], sandUV);
+    pushBox(b, -370, 0, -350 + s * 100, 60, 0.5, 100, COL.water, waterUV);
+  }
+  // Airport runway (dark strip, top 0.38), in two halves.
+  for (const zc of [-315, -205]) {
+    pushBox(b, 300, -0.02, zc, 30, 0.4, 110, [0.12, 0.12, 0.14], asphaltUV);
+  }
 
   // Road dashes (lane markings, yellow quads on the road tops).
   for (const x of ROAD_LINES) {

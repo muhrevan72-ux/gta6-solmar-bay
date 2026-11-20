@@ -84,8 +84,18 @@ export function updateCamera(cam, target, dt, input) {
   cam.ty += ((target.y || 0) + 1 - cam.ty) * k;
   cam.tz += (target.z - cam.tz) * k;
   if (input) {
-    cam.yaw += (input.mouseDX || 0) * 0.004;
-    cam.pitch = Math.max(0.05, Math.min(0.9, cam.pitch + (input.mouseDY || 0) * 0.003));
+    // Mouse drag rotates the camera. The input object carries the
+    // per-frame delta as mouse.dx/mouse.dy (set by the mousemove
+    // handler, cleared by endFrame); the old mouseDX/mouseDY
+    // names never existed on it, so the camera never rotated and
+    // the view felt like it drifted on its own. Read the real
+    // properties, falling back to the old names if a caller set
+    // those. With no mouse movement both are 0, so the camera
+    // stays put (no auto-orbit).
+    const mdx = (input.mouse && input.mouse.dx) || input.mouseDX || 0;
+    const mdy = (input.mouse && input.mouse.dy) || input.mouseDY || 0;
+    cam.yaw += mdx * 0.004;
+    cam.pitch = Math.max(0.05, Math.min(0.9, cam.pitch + mdy * 0.003));
     if (input.wheel) cam.dist = Math.max(8, Math.min(26, cam.dist + input.wheel * 0.01));
   }
   const cp = Math.cos(cam.pitch);

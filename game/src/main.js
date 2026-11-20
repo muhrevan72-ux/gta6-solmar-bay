@@ -144,6 +144,16 @@ export function boot(canvas, doc) {
     const loop = (t) => {
       const dt = Math.min(0.1, (t - (g._lastT || t)) / 1000 || 0.016);
       g._lastT = t;
+      // Route keyboard taps FIRST (the #14 play-test regression:
+      // handleTaps was defined and tested but never invoked in
+      // the loop, so no real key ever did anything — Enter never
+      // dismissed the Chapter 1 card, Escape never paused, Tab
+      // never opened the phone, E never entered a car, and the
+      // mode stayed on the card so stepGame early-returned and W
+      // never moved either). Taps are read before the tick so a
+      // mode change (card -> play) takes effect this same frame,
+      // and before endFrame clears the edge set.
+      handleTaps(g, g.input);
       stepGame(g, dt, g.input);
       renderFrame(g, dt);
       g.input.endFrame();

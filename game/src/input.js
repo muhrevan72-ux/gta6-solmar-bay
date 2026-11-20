@@ -66,6 +66,17 @@ export function createInput() {
     target.addEventListener('mouseup', h.onMouseUp);
     input.attached = true;
   };
+  // Auto-attach to the real window when one exists (the browser).
+  // Without this, createInput() defines attach() but no DOM
+  // listener is ever registered, so the keyboard is dead even
+  // though the handlers exist (the #14 play-test regression:
+  // Enter/Tab/Escape/W/E/Space were all ignored in a real
+  // browser). In Node there is no window, so this is a safe
+  // no-op, and the round-9 test that attach(plainObject) is a
+  // no-op is unaffected (it still sets attached = false).
+  // Calling attach twice (here and in boot) is harmless: the
+  // browser deduplicates identical addEventListener calls.
+  if (typeof window !== 'undefined') input.attach(window);
   input.injectTap = (code) => {
     input.pressed.add(code);
     input.down.add(code);
