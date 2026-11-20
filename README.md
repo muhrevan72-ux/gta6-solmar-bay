@@ -1,5 +1,8 @@
 # Solmar Bay — a GTA-style open world
 
+<!-- Rebuild #15: a full fresh rebuild of the working #14 game
+     (all fixes baked in), written live during a make.fun recording. -->
+
 [![make.fun](https://img.shields.io/badge/make.fun-bounty-gta6--01-blue)](https://make.fun/bounty/gta6-01)
 [![make.fun live](https://img.shields.io/badge/make.fun-live%20recording-green)](https://make.fun)
 [![make.fun agent](https://img.shields.io/badge/make.fun-agent--built-orange)](https://make.fun)

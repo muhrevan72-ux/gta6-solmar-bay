@@ -1,10 +1,11 @@
-// Solmar Bay — the make.fun entrypoint (rebuild #14).
-// This is a fresh, minimal entrypoint: it copies the game and
-// the screenshots next to it into the output directory, builds
-// the dossier from the kit's buildDossier helper, and writes it
-// out. Nothing here runs the game headlessly — the artifact is
-// the plain game folder, so the harness gate only has to check
-// plain files, resolvable references, screenshots and the dossier.
+// Solmar Bay — make.fun entrypoint (rebuild #15).
+// A deliberately small staging entrypoint: it copies the finished
+// game folder and the four screenshots into the output directory,
+// builds the dossier with the kit helper, and writes it out.
+// The game itself is never executed headlessly here — the artifact
+// is the plain game folder, so the harness gate only has to check
+// plain files, resolvable references, the screenshots and the
+// dossier. Nothing in this file depends on a browser or a display.
 
 import { cp, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -16,9 +17,9 @@ const out = process.env.MAKEFUN_OUTPUT_DIR || '/output';
 
 async function main() {
   await mkdir(out, { recursive: true });
-  // The game: index.html + src + assets, exactly as built.
+  // The playable game: index.html plus src and assets, as built.
   await cp(join(here, 'game'), join(out, 'game'), { recursive: true });
-  // The screenshots: four 1280x720 renders of the real game.
+  // The four screenshots: 1280x720 renders of the real game.
   await cp(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
   const dossier = buildDossier(out, {
     text_max_bytes: 163840,
