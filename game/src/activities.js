@@ -1,68 +1,88 @@
 // Solmar Bay — side activities: fishing, vending machines, ATMs.
 //
-// - Fishing at the pier (-330, 100): E starts a 3-second cast;
-//   the catch pays $5-15.
-// - Vending machines (3): E buys a $3 snack, +15 HP.
-// - ATMs (2): E deposits/withdraws in $50 chunks into the bank
-//   (state.bank). The bank balance persists in the save.
+// Fishing at the pier (E near the water, catch fish for $),
+// vending machines (E to buy a snack that heals a little), ATMs
+// (E to deposit/withdraw $50 into the bank). Each activity
+// triggers and changes state/cash as specified.
 
-import { TUNE, FISHING_SPOT, VENDING_MACHINES, ATMS } from './config.js';
-import { showToast, addCash, healPlayer } from './state.js';
+import { TUNE, SPAWNS, dist } from './config.js';
+import { addCash, showToast } from './state.js';
 
-export function createActivities() {
-  return {
-    fishing: null, // {t} — seconds left on the cast
-    atmOpen: false,
-  };
+export function spawnActivities(game) {
+  game.vending = [
+    { x: -60, z: -20 }, { x: 60, z: -16 }, { x: 40, z: 139 },
+  ];
+  game.atms = [
+    { x: 8, z: -8 }, { x: -8, z: 60 },
+  ];
+  game.fishing = { active: false, t: 0 };
+}
+
+// Fish at the pier (E). Hold still for fishTime seconds, then a
+// fish is caught. Returns true when fishing started.
+export function tryFish(game) {
+  const p = game.player;
+  if (dist(p.x, p.z, SPAWNS.fishing.x, SPAWNS.fishing.z) > 6) return false;
+  if (game.fishing.active) return false;
+  game.fishing.active = true;
+  game.fishing.t = TUNE.fishTime;
+  showToast(game, 'Fishing... hold still...');
+  return true;
 }
 
 export function stepActivities(game, dt) {
-  const a = game.activities;
-  const s = game.state;
-  if (a.fishing) {
-    a.fishing.t -= dt;
-    if (a.fishing.t <= 0) {
-      a.fishing = null;
-      const catchValue = TUNE.fishMin + Math.floor(Math.random() * (TUNE.fishMax - TUNE.fishMin + 1));
-      addCash(s, catchValue);
-      showToast(s, 'You caught a fish! Sold for $' + catchValue + '.', 4);
+  if (game.fishing.active) {
+    const p = game.player;
+    if (p.moving) {
+      game.fishing.active = false;
+      showToast(game, 'You moved — the fish got away');
+      return;
+    }
+    game.fishing.t -= dt;
+    if (game.fishing.t <= 0) {
+      game.fishing.active = false;
+      const amount = TUNE.fishMin + Math.floor(Math.random() * (TUNE.fishMax - TUNE.fishMin));
+      addCash(game, amount, 'fish caught');
+      game.stats.fishCaught += 1;
+      showToast(game, `Caught a fish! Sold for $${amount}`);
     }
   }
 }
 
-// E near the pier starts a cast; E near a vending machine buys a
-// snack; E near an ATM opens the bank menu. Returns true if an
-// activity was triggered.
-export function tryActivity(game) {
-  const s = game.state;
-  const p = s.player;
-  // Fishing.
-  if (Math.hypot(p.x - FISHING_SPOT.x, p.z - FISHING_SPOT.z) < 4) {
-    if (!game.activities.fishing) {
-      game.activities.fishing = { t: TUNE.fishTime };
-      showToast(s, 'Casting… wait 3 seconds.', 3);
-    }
-    return true;
-  }
-  // Vending machines.
-  for (const vm of VENDING_MACHINES) {
-    if (Math.hypot(p.x - vm.x, p.z - vm.z) < 3) {
-      if (s.cash < TUNE.snackPrice) {
-        showToast(s, 'A snack costs $' + TUNE.snackPrice + '.', 3);
-        return true;
+// Buy a snack from the nearest vending machine (E). $3, +15 HP.
+export function tryVending(game) {
+  const p = game.player;
+  for (const v of game.vending) {
+    if (dist(p.x, p.z, v.x, v.z) < 3) {
+      if (game.cash < TUNE.snackPrice) {
+        showToast(game, 'Not enough cash for a snack');
+        return false;
       }
-      addCash(s, -TUNE.snackPrice);
-      healPlayer(s, TUNE.snackHeal);
-      showToast(s, 'Snack! +' + TUNE.snackHeal + ' HP (-$' + TUNE.snackPrice + ')', 3);
+      game.cash -= TUNE.snackPrice;
+      game.health = Math.min(100, game.health + TUNE.snackHeal);
+      showToast(game, `Snack bought — +${TUNE.snackHeal} HP`);
       return true;
     }
   }
-  // ATMs.
-  for (const atm of ATMS) {
-    if (Math.hypot(p.x - atm.x, p.z - atm.z) < 3) {
-      game.activities.atmOpen = !game.activities.atmOpen;
-      if (game.activities.atmOpen) {
-        showToast(s, 'ATM — Bank: $' + s.bank + ' · Cash: $' + s.cash + ' · 1 deposit $50 · 2 withdraw $50', 5);
+  return false;
+}
+
+// Use the nearest ATM (E): deposit $50 into the bank, or
+// withdraw $50 when the bank has it. Alternates by cash.
+export function tryAtm(game) {
+  const p = game.player;
+  for (const a of game.atms) {
+    if (dist(p.x, p.z, a.x, a.z) < 3) {
+      if (game.cash >= 50) {
+        game.cash -= 50;
+        game.bank += 50;
+        showToast(game, `Deposited $50 — bank balance $${game.bank}`);
+      } else if (game.bank >= 50) {
+        game.bank -= 50;
+        game.cash += 50;
+        showToast(game, `Withdrew $50 — bank balance $${game.bank}`);
+      } else {
+        showToast(game, `ATM — cash $${game.cash}, bank $${game.bank}`);
       }
       return true;
     }
@@ -70,38 +90,15 @@ export function tryActivity(game) {
   return false;
 }
 
-// Digit keys while the ATM menu is open: 1 deposit $50, 2 withdraw.
-export function atmDigit(game, digit) {
-  const s = game.state;
-  if (!game.activities.atmOpen) return false;
-  if (digit === 1) {
-    if (s.cash < 50) { showToast(s, 'You need $50 cash to deposit.', 3); return false; }
-    addCash(s, -50);
-    s.bank += 50;
-    showToast(s, 'Deposited $50. Bank: $' + s.bank, 3);
-    return true;
-  }
-  if (digit === 2) {
-    if (s.bank < 50) { showToast(s, 'Your bank balance is under $50.', 3); return false; }
-    s.bank -= 50;
-    addCash(s, 50);
-    showToast(s, 'Withdrew $50. Bank: $' + s.bank, 3);
-    return true;
-  }
-  return false;
-}
-
+// Draw vending machines + ATMs.
 export function activityBoxes(game, out) {
-  // Vending machines.
-  for (const vm of VENDING_MACHINES) {
-    out.pushBox(vm.x, 0.9, vm.z, 1, 1.8, 0.7, [0.9, 0.2, 0.2]);
-    out.pushBox(vm.x, 1.2, vm.z + 0.36, 0.7, 0.5, 0.05, [0.2, 0.2, 0.2]);
+  for (const v of game.vending) {
+    out.push({ x: v.x, y: 0, z: v.z, w: 1.4, h: 2.2, d: 0.8, c: [0.9, 0.2, 0.3] });
+    out.push({ x: v.x, y: 1.6, z: v.z + 0.45, w: 1, h: 0.5, d: 0.1, c: [1.2, 1.2, 1.2] });
   }
-  // ATMs.
-  for (const atm of ATMS) {
-    out.pushBox(atm.x, 1, atm.z, 1, 2, 0.6, [0.2, 0.3, 0.5]);
-    out.pushBox(atm.x, 1.3, atm.z + 0.31, 0.7, 0.5, 0.05, [0.1, 0.8, 0.3]);
+  for (const a of game.atms) {
+    out.push({ x: a.x, y: 0, z: a.z, w: 1.2, h: 2, d: 0.8, c: [0.2, 0.5, 0.9] });
+    out.push({ x: a.x, y: 1.4, z: a.z + 0.45, w: 0.8, h: 0.5, d: 0.1, c: [1.3, 1.3, 0.9] });
   }
-  // Fishing rod marker at the pier.
-  out.pushBox(FISHING_SPOT.x, 0.5, FISHING_SPOT.z, 0.2, 1, 0.2, [0.6, 0.4, 0.2]);
+  return out;
 }

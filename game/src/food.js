@@ -1,65 +1,70 @@
-// Solmar Bay — food shops: eat to restore health (and armour).
+// Solmar Bay — food shops.
 //
-// Five shops, each with a menu (Snack $5 / +10 HP, Meal $10 /
-// +25 HP, Feast $15 / full HP + 25 armour). E within 5 m of a shop's
-// FRONT point opens its menu; E at the door (4 m) steps inside the
-// interior instead. The two radii are deliberately different, and
-// the menu points sit 5 m south of the interior doors, so the two
-// actions never overlap (the round-5 bug: 3 of 5 menus were
-// unreachable because the points were inside the shop colliders).
+// Five original food shops (pizza, burger, chicken, donut,
+// taco). Walk up to the shop front point, press E, pick a menu
+// item with 1/2/3: Snack +10 HP ($5), Meal +25 HP ($10), Feast
+// full HP + armour ($15). The interaction points sit at the
+// shop FRONTS — just outside the building, on standable ground
+// — never inside a collider (round-5 bug: 3 of 5 menus were
+// unreachable because the points sat inside the shops).
 
-import { FOOD_MENU, FOOD_SHOPS } from './config.js';
-import { showToast, addCash, healPlayer } from './state.js';
+import { FOOD_MENU, FOOD_SHOPS, dist } from './config.js';
+import { showToast } from './state.js';
 
-export function createFood() {
-  return {
-    menuOpen: null, // shop name whose menu is open, or null
-  };
-}
-
-// The nearest shop whose menu point is within 5 m of (x, z).
-export function foodShopNear(game, x, z) {
+export function nearestFoodShop(game) {
+  const p = game.player;
   let best = null;
   let bestD = 5;
-  for (const shop of FOOD_SHOPS) {
-    const d = Math.hypot(shop.x - x, shop.z - z);
-    if (d < bestD) { bestD = d; best = shop; }
+  for (const s of FOOD_SHOPS) {
+    const d = dist(p.x, p.z, s.x, s.z);
+    if (d < bestD) {
+      bestD = d;
+      best = s;
+    }
   }
   return best;
 }
 
-export function openFoodMenu(game, shop) {
-  game.food.menuOpen = shop.name;
-  showToast(game.state, shop.name + ' — 1 Snack $5 · 2 Meal $10 · 3 Feast $15', 5);
+// Open the food menu for the nearest shop (E). Returns the shop
+// or null. The menu itself is rendered by hud.js; the choice is
+// handled by buyFood().
+export function tryFoodShop(game) {
+  const shop = nearestFoodShop(game);
+  if (!shop) return null;
+  game.modal = {
+    kind: 'food',
+    title: shop.name,
+    lines: FOOD_MENU.map((m, i) => `${i + 1}. ${m.name} — $${m.price} (+${m.heal} HP${m.armour ? `, +${m.armour} armour` : ''})`),
+    shop,
+  };
+  return shop;
 }
 
-export function closeFoodMenu(game) {
-  game.food.menuOpen = null;
-}
-
-// Buy by number key (1/2/3) while a menu is open. The menu items
-// carry a numeric heal (Feast heals 100 = full) and an armour bonus.
-export function buyFood(game, idx) {
-  const s = game.state;
-  if (!game.food.menuOpen) return false;
-  const item = FOOD_MENU[idx];
-  if (!item) return false;
-  if (s.cash < item.price) {
-    showToast(s, 'Not enough cash for a ' + item.name + '.', 3);
+// Buy menu item i (0-based) at the open food menu.
+export function buyFood(game, i) {
+  const m = FOOD_MENU[i];
+  if (!m || !game.modal || game.modal.kind !== 'food') return false;
+  if (game.cash < m.price) {
+    showToast(game, 'Not enough cash for that');
     return false;
   }
-  addCash(s, -item.price);
-  healPlayer(s, item.heal);
-  if (item.armour) s.armour = Math.min(100, s.armour + item.armour);
-  showToast(s, item.name + ' — +' + item.heal + ' HP' + (item.armour ? ' + ' + item.armour + ' armour' : '') + ' (-$' + item.price + ')', 3);
+  game.cash -= m.price;
+  game.health = Math.min(100, game.health + m.heal);
+  game.armour = Math.min(100, game.armour + m.armour);
+  showToast(game, `Ate a ${m.name} — +${m.heal} HP`);
+  if (game.maya.onDate) {
+    game.maya.rel = Math.min(100, game.maya.rel + 5);
+    showToast(game, 'Maya liked the meal (+5%)');
+  }
+  game.modal = null;
   return true;
 }
 
-// Food stalls: a counter + awning + sign in front of each shop.
-export function foodBoxes(game, out) {
-  for (const shop of FOOD_SHOPS) {
-    out.pushBox(shop.x, 0.5, shop.z + 2, 3, 1, 1, [0.9, 0.85, 0.75]);
-    out.pushBox(shop.x, 1.2, shop.z + 2, 3.2, 0.15, 1.4, [0.9, 0.3, 0.2]);
-    out.pushBox(shop.x, 2.2, shop.z - 1, 2.5, 0.6, 0.1, [1, 0.9, 0.4]);
+// Draw the food-shop signs (the shop bodies are static geometry;
+// the signs are dynamic so they can glow at night).
+export function foodSignBoxes(game, out) {
+  for (const s of FOOD_SHOPS) {
+    out.push({ x: s.x, y: 5.2, z: s.z - 8 + 7 + 0.4, w: 8, h: 1.4, d: 0.5, c: [1.2, 1.2, 1.2] });
   }
+  return out;
 }

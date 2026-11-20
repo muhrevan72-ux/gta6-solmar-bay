@@ -1,87 +1,74 @@
-// Solmar Bay — the garage: store cars, take them out, repaint.
+// Solmar Bay — garage + car ownership.
 //
-// Drive a stopped car/bike to the garage door (150, -128) and press
-// E to store it. On foot, E at the door opens the menu: Digit 1-9
-// takes a stored car out, Digit 0 repaints the current car for $50
-// (cycles the paint colours). Owned cars persist in the save.
+// Drive into the garage (E at the door while in a car): store
+// the current car, list owned cars, take one out (1–9), repaint
+// the current car ($50). Owned cars persist in the save.
 
-import { TUNE, COL } from './config.js';
-import { showToast, addCash } from './state.js';
+import { SPAWNS, TUNE, dist } from './config.js';
+import { showToast } from './state.js';
+import { makeVehicle } from './vehicles.js';
 
-export function createGarage() {
-  return {
-    owned: [], // car objects owned by the player
-    menuOpen: false,
-  };
-}
-
-// E at the garage door: store the car you are driving, or open the
-// menu on foot.
 export function tryGarage(game) {
-  const s = game.state;
-  const p = s.player;
-  const d = Math.hypot(p.x - 150, p.z + 128);
-  if (d > 5) return false;
-  if (p.inCar) {
+  const p = game.player;
+  // Enter the garage: in a car, at the door.
+  if (p.inCar && dist(p.x, p.z, SPAWNS.garageDoor.x, SPAWNS.garageDoor.z) < 8) {
     const car = p.inCar;
-    if (car.speed > 1) {
-      showToast(s, 'Stop the car first.', 3);
-      return false;
+    if (!game.ownedCars.find((c) => c.id === car.id)) {
+      game.ownedCars.push({ id: car.id, name: car.name, colour: car.colour, kind: car.kind });
+      showToast(game, `${car.name} stored in the garage (${game.ownedCars.length} owned)`);
     }
-    // Store it.
-    p.inCar = null;
-    car.driver = null;
-    car.x = 150;
-    car.z = -150;
-    if (!game.garage.owned.includes(car)) {
-      game.garage.owned.push(car);
-      s.ownedCars.push(car.name);
-    }
-    showToast(s, car.name + ' stored in the garage.', 4);
+    game.modal = {
+      kind: 'garage',
+      title: 'Garage — Bay Street',
+      lines: [
+        ...game.ownedCars.map((c, i) => `${i + 1}. ${c.name} — press ${i + 1} to take out`),
+        `0. Repaint current car — $${TUNE.repaintPrice}`,
+        'Esc. Leave',
+      ],
+    };
     return true;
   }
-  game.garage.menuOpen = !game.garage.menuOpen;
-  if (game.garage.menuOpen) {
-    const list = game.garage.owned.map((c, i) => (i + 1) + ' ' + c.name).join(' · ') || 'empty';
-    showToast(s, 'Garage: ' + list + ' · 0 repaint $50', 5);
-  }
+  return false;
+}
+
+// Take out owned car i (number key).
+export function takeOutCar(game, i) {
+  if (!game.modal || game.modal.kind !== 'garage') return false;
+  const owned = game.ownedCars[i];
+  if (!owned) return false;
+  const p = game.player;
+  // Spawn the car just outside the garage door.
+  const v = makeVehicle(owned.kind, SPAWNS.garageDoor.x + 4, SPAWNS.garageDoor.z + 8, 0, {
+    name: owned.name, colour: owned.colour, owner: 'player', parked: false,
+  });
+  v.id = owned.id;
+  game.vehicles.push(v);
+  p.inCar = v;
+  v.driver = 'player';
+  game.modal = null;
+  showToast(game, `Took out the ${owned.name}`);
   return true;
 }
 
-// Digit keys while the garage menu is open: 1-9 take a car out,
-// 0 repaints the car you are driving (or the first owned car).
-export function garageDigit(game, digit) {
-  const s = game.state;
-  const p = s.player;
-  if (digit === 0) {
-    const car = p.inCar || game.garage.owned[0];
-    if (!car) { showToast(s, 'No car to repaint.', 3); return false; }
-    if (s.cash < TUNE.repaintPrice) {
-      showToast(s, 'Repaint costs $' + TUNE.repaintPrice + '.', 3);
-      return false;
-    }
-    addCash(s, -TUNE.repaintPrice);
-    const idx = (COL.carPaint.indexOf(car.color) + 1) % COL.carPaint.length;
-    car.color = COL.carPaint[idx];
-    showToast(s, 'Repainted ' + car.name + ' (-$' + TUNE.repaintPrice + ').', 4);
-    return true;
+// Repaint the current car (key 0 in the garage menu).
+export function repaintCar(game) {
+  const p = game.player;
+  if (!p.inCar) return false;
+  if (game.cash < TUNE.repaintPrice) {
+    showToast(game, `Repaint costs $${TUNE.repaintPrice}`);
+    return false;
   }
-  const car = game.garage.owned[digit - 1];
-  if (!car) return false;
-  // Take it out: park it at the door, ready to drive.
-  car.x = 150;
-  car.z = -120;
-  car.heading = 0;
-  car.driver = null;
-  game.vehicles.parked.push(car);
-  game.garage.menuOpen = false;
-  showToast(s, car.name + ' is outside the garage. Press E to drive it.', 4);
+  const palette = [
+    [0.85, 0.15, 0.15], [0.15, 0.35, 0.85], [0.95, 0.75, 0.15],
+    [0.2, 0.7, 0.3], [0.9, 0.9, 0.9], [0.5, 0.2, 0.7],
+  ];
+  const cur = palette.findIndex((c) => c[0] === p.inCar.colour[0] && c[1] === p.inCar.colour[1]);
+  const next = palette[(cur + 1) % palette.length];
+  game.cash -= TUNE.repaintPrice;
+  p.inCar.colour = next;
+  const owned = game.ownedCars.find((c) => c.id === p.inCar.id);
+  if (owned) owned.colour = next;
+  showToast(game, `Repainted the ${p.inCar.name} — $${TUNE.repaintPrice}`);
+  game.modal = null;
   return true;
-}
-
-export function garageBoxes(game, out) {
-  // A car lift + tool wall inside the garage (room coordinates are
-  // the garage building itself — drawn here for the door area).
-  out.pushBox(150, 0.5, -140, 3, 1, 1, [0.7, 0.7, 0.7]);
-  out.pushBox(150, 1.5, -160, 4, 0.2, 0.5, [0.9, 0.6, 0.1]);
 }

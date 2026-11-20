@@ -1,326 +1,286 @@
-// Solmar Bay — police, wanted, busts, helicopter, roadblocks.
+// Solmar Bay — wanted level + police.
 //
-// Crime raises wanted by the CRIME table (like real GTA: stealing a
-// car is 1 star, killing a cop is 3, a massacre is 5). Wanted decays
-// one star per 14 clean seconds. Cop cars chase and ram; foot cops
-// punch. At 4-5 stars a helicopter joins (real line-of-sight through
-// tall buildings). At 3+ stars roadblocks appear 50 m ahead.
+// commitCrime(type) is the ONLY way wanted stars go up — every
+// crime site in the game calls it (stealing, kills, bombs, gang
+// kills). Nothing else raises wanted: no gang hostility, no
+// explosion splash, no traffic collision, no event may add stars
+// on its own. That is the round-4 "wanted on idle" fix: a fresh
+// game with no input for 60 s MUST stay at 0 stars.
 //
-// PLAY-TEST #4 TUNING (do not regress): a stationary player at 1
-// star must survive 60 s (per-car ram cooldown 2.5 s, 0.8 s reverse
-// after a ram, damage scaled by wanted, 1-star cop cars cut to 2,
-// foot-cop baton cooldown 1.2 s). A bust costs 20% of cash and
-// respawns the player at the hospital STREET (-88, 150) — 34 units
-// from the hospital building's east face (x=-122), clear of every
-// collider. The round-4 bug respawned the player INSIDE the hospital
-// collider and soft-locked the game; the respawn test asserts the
-// player can move >= 5 m in each direction afterwards.
+// Police: foot cops chase near the player, cop cars chase and
+// ram. Ram tuning (play-test #4): per-car 2.5 s cooldown, damage
+// scales with wanted, a 1-star car does little — a player
+// standing still at 1 star for 60 s keeps HP 100. Helicopter at
+// 4–5 stars with REAL line-of-sight through tall buildings.
+// Roadblocks at 3+ stars. Busted = hospital respawn + 20% fine;
+// wasted = respawn too.
 
-import { TUNE, CRIME, COL, clamp } from './config.js';
-import { showToast, showMenu, hideMenu, addCash, damagePlayer } from './state.js';
+import { TUNE, CRIME, SPAWNS, clamp, dist, makeRng } from './config.js';
+import { isBlocked } from './world.js';
+import { damagePlayer, dropCash } from './combat.js';
+import { showToast, addCash } from './state.js';
 
-export function createPolice() {
-  return {
-    cops: [], // foot cops {x, z, heading, batonT}
-    cars: [], // cop cars {x, z, heading, speed, ramT, reverseT}
-    heli: null, // {x, y, z, heading, rotor}
-    roadblocks: [], // {x, z, heading}
-    wantedT: 0, // seconds since the last crime (decay timer)
-    bustT: 0, // seconds a cop has been in bust range
-  };
-}
-
-export function commitCrime(game, kind) {
-  const s = game.state;
-  const entry = CRIME[kind];
-  const level = entry ? entry.stars : 1;
-  if (level > s.wanted) {
-    s.wanted = level;
-    game.police.wantedT = 0;
+// The one and only crime entry point.
+export function commitCrime(game, type) {
+  const c = CRIME[type];
+  if (!c) return;
+  const before = game.wanted;
+  game.wanted = clamp(game.wanted + c.stars, 0, 5);
+  game.wantedTimer = 0;
+  if (game.wanted > before) {
+    showToast(game, `${c.label} — wanted ${'★'.repeat(game.wanted)}`);
+  }
+  // Mass crimes jump straight up.
+  if (type === 'massRampage' || type === 'copMassacre') {
+    game.wanted = type === 'copMassacre' ? 5 : 4;
   }
 }
 
-function desiredCopCars(wanted) {
-  if (wanted <= 0) return 0;
-  if (wanted === 1) return 2;
-  if (wanted === 2) return 3;
-  if (wanted === 3) return 4;
-  return 5;
+export function spawnPolice(game) {
+  game.cops = [];
+  game.copCars = [];
+  game.heli = null;
+  game.roadblocks = [];
 }
 
-export function stepPolice(game, dt) {
-  const s = game.state;
-  const p = s.player;
-  const pol = game.police;
-  // Wanted decay: 14 clean seconds loses one star.
-  if (s.wanted > 0) {
-    pol.wantedT += dt;
-    if (pol.wantedT >= TUNE.wantedDecayTime) {
-      pol.wantedT = 0;
-      s.wanted--;
-      if (s.wanted === 0) showToast(s, 'You lost the heat.', 3);
+// Wanted decay: out of sight for wantedDecayTime seconds loses
+// one star. "Out of sight" means no cop or cop car within
+// copSightRange with a clear line.
+export function stepWanted(game, dt) {
+  if (game.wanted === 0) return;
+  const p = game.player;
+  let seen = false;
+  for (const cop of game.cops) {
+    if (dist(p.x, p.z, cop.x, cop.z) < TUNE.copSightRange && hasLineOfSight(game, cop.x, cop.z, p.x, p.z)) {
+      seen = true;
+      break;
     }
-  } else {
-    pol.wantedT = 0;
   }
-  // Cop cars: spawn to the desired count near the player.
-  const want = desiredCopCars(s.wanted);
-  while (pol.cars.length < want) {
-    const a = Math.random() * Math.PI * 2;
-    pol.cars.push({
-      x: p.x + Math.cos(a) * 40,
-      z: p.z + Math.sin(a) * 40,
-      heading: 0, speed: 0, ramT: 0, reverseT: 0, circleT: 0,
-    });
-  }
-  if (pol.cars.length > want) pol.cars.length = want;
-  // Cop cars chase. A ram has a LONG per-car cooldown (25 s at 1
-  // star, scaling down with wanted) and the car then circles at a
-  // distance instead of re-ramming immediately — a stationary player
-  // at 1 star must survive 60 s (HP 100, car not wrecked). The
-  // play-test #4 bug was a cop shredding an idle player in ~20 s.
-  for (const c of pol.cars) {
-    const dx = p.x - c.x, dz = p.z - c.z;
-    const d = Math.hypot(dx, dz) || 1;
-    c.heading = Math.atan2(dx, dz);
-    c.ramT -= dt;
-    c.reverseT -= dt;
-    c.circleT -= dt;
-    if (c.reverseT > 0) {
-      c.speed = -6;
-    } else if (c.circleT > 0) {
-      // Circle the player at ~20 m while the ram cooldown runs:
-      // heading is tangential to the radius (game convention:
-      // heading = atan2(dx, dz), movement = (sin h, cos h)).
-      const theta = Math.atan2(c.x - p.x, c.z - p.z);
-      c.heading = theta + Math.PI / 2;
-      c.speed = 10;
-      c.x += Math.sin(c.heading) * c.speed * dt;
-      c.z += Math.cos(c.heading) * c.speed * dt;
-    } else if (d > 3) {
-      c.speed = Math.min(26, c.speed + 12 * dt);
-      c.x += Math.sin(c.heading) * c.speed * dt;
-      c.z += Math.cos(c.heading) * c.speed * dt;
-    } else {
-      c.speed = 0;
-    }
-    if (d < 3 && c.ramT <= 0 && c.circleT <= 0) {
-      c.ramT = Math.max(5, 25 / Math.max(1, s.wanted));
-      c.circleT = c.ramT;
-      c.reverseT = 0.8;
-      const dmg = 4 * s.wanted;
-      if (p.inCar) {
-        p.inCar.condition = Math.max(0, p.inCar.condition - dmg);
-        showToast(s, 'Police rammed your car! Condition ' + Math.round(p.inCar.condition) + '%', 2);
-      } else {
-        damagePlayer(s, dmg);
-        showToast(s, 'Police rammed you!', 2);
+  if (!seen) {
+    for (const car of game.copCars) {
+      if (dist(p.x, p.z, car.x, car.z) < TUNE.copSightRange) {
+        seen = true;
+        break;
       }
     }
   }
-  // Foot cops: spawn when wanted, chase, baton (1.2 s cooldown).
-  const wantCops = s.wanted > 0 ? Math.min(4, s.wanted + 1) : 0;
-  while (pol.cops.length < wantCops) {
-    const a = Math.random() * Math.PI * 2;
-    pol.cops.push({ x: p.x + Math.cos(a) * 25, z: p.z + Math.sin(a) * 25, heading: 0, batonT: 0 });
-  }
-  if (pol.cops.length > wantCops) pol.cops.length = wantCops;
-  for (const c of pol.cops) {
-    const dx = p.x - c.x, dz = p.z - c.z;
-    const d = Math.hypot(dx, dz) || 1;
-    c.heading = Math.atan2(dx, dz);
-    c.batonT -= dt;
-    if (d > 1.5) {
-      c.x += (dx / d) * 6 * dt;
-      c.z += (dz / d) * 6 * dt;
-    } else if (c.batonT <= 0 && !p.inCar) {
-      // A foot cop cannot baton a player inside a car.
-      c.batonT = 1.2;
-      damagePlayer(s, 6);
-      showToast(s, 'A cop hit you with a baton!', 2);
-    }
-  }
-  // Helicopter at 4-5 stars: altitude 80, chases at 22 u/s, with a
-  // spotlight. It despawns the moment wanted drops below 4.
-  if (s.wanted >= 4) {
-    if (!pol.heli) {
-      pol.heli = { x: p.x + 30, y: TUNE.heliAltitude, z: p.z - 30, heading: 0, rotor: 0 };
-      showToast(s, 'Police helicopter overhead! Break line of sight!', 5);
-    }
-    const h = pol.heli;
-    const dx = p.x - h.x, dz = p.z - h.z;
-    const d = Math.hypot(dx, dz) || 1;
-    h.heading = Math.atan2(dx, dz);
-    h.x += (dx / d) * TUNE.heliSpeed * dt;
-    h.z += (dz / d) * TUNE.heliSpeed * dt;
-    h.rotor += dt * 30;
-    // Spotlight only matters when the heli can SEE the player: real
-    // line-of-sight — a tall building between heli and player blocks
-    // it (the spotlight cone is drawn only when the LOS is clear).
-    h.losClear = hasLineOfSight(game, h.x, h.y, h.z, p.x, 1.5, p.z);
+  if (seen) {
+    game.wantedTimer = 0;
   } else {
-    pol.heli = null;
-  }
-  // Roadblocks at 3+ stars: 3 parked cop cars 50 m ahead of the
-  // player (in the direction the player is facing).
-  if (s.wanted >= 3 && pol.roadblocks.length === 0) {
-    const hx = Math.sin(p.heading), hz = Math.cos(p.heading);
-    for (let i = -1; i <= 1; i++) {
-      pol.roadblocks.push({
-        x: p.x + hx * 50 - hz * i * 6,
-        z: p.z + hz * 50 + hx * i * 6,
-        heading: p.heading + Math.PI / 2,
-      });
+    game.wantedTimer += dt;
+    if (game.wantedTimer >= TUNE.wantedDecayTime) {
+      game.wantedTimer = 0;
+      game.wanted = Math.max(0, game.wanted - 1);
+      if (game.wanted === 0) showToast(game, 'You lost the heat');
     }
-    showToast(s, 'Roadblock ahead!', 4);
-  } else if (s.wanted < 3) {
-    pol.roadblocks = [];
-  }
-  // Bust: a cop within 2 m for 2 s while wanted.
-  if (s.wanted > 0 && !p.inCar) {
-    let near = false;
-    for (const c of pol.cops) {
-      if (Math.hypot(c.x - p.x, c.z - p.z) < 2) near = true;
-    }
-    for (const c of pol.cars) {
-      if (Math.hypot(c.x - p.x, c.z - p.z) < 2.5) near = true;
-    }
-    if (near) {
-      pol.bustT += dt;
-      if (pol.bustT > 2) {
-        pol.bustT = 0;
-        bustPlayer(game);
-      }
-    } else {
-      pol.bustT = 0;
-    }
-  } else {
-    pol.bustT = 0;
-  }
-  // Wasted: HP hit zero.
-  if (s.health <= 0) {
-    wastedPlayer(game);
   }
 }
 
-// Real line-of-sight: sample the segment; blocked if a tall building
-// (h > 15) stands within 3 m of any sample point.
-export function hasLineOfSight(game, x0, y0, z0, x1, y1, z1) {
-  for (let t = 0.1; t < 1; t += 0.1) {
+// Line of sight: true when no building stands between the two
+// points (sampled along the segment). Used by the helicopter and
+// the wanted decay.
+export function hasLineOfSight(game, x0, z0, x1, z1) {
+  const steps = 12;
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
     const x = x0 + (x1 - x0) * t;
     const z = z0 + (z1 - z0) * t;
-    const y = y0 + (y1 - y0) * t;
+    // A building taller than 12 blocks sight at ground level.
     for (const b of game.city.buildings) {
-      if (b.h > 15 && Math.abs(x - b.x) < b.sx / 2 + 3 && Math.abs(z - b.z) < b.sz / 2 + 3 && y < b.h) {
-        return false;
-      }
+      if (b.h < 12) continue;
+      if (Math.abs(x - b.x) < b.w / 2 && Math.abs(z - b.z) < b.d / 2) return false;
     }
   }
   return true;
 }
 
-export function bustPlayer(game) {
-  const s = game.state;
-  const fine = Math.floor(s.cash * TUNE.bustedFine);
-  addCash(s, -fine);
-  s.wanted = 0;
-  s.health = 100;
-  respawnAfterBusted(game);
-  showMenu(s, 'BUSTED', 'The police caught you. Fine: -$' + fine + '.', 'Press Enter to respawn at the hospital.');
-  s.mode = 'busted';
+function spawnCopCar(game) {
+  const rng = Math.random;
+  const p = game.player;
+  const ang = rng() * Math.PI * 2;
+  const x = p.x + Math.cos(ang) * 60;
+  const z = p.z + Math.sin(ang) * 60;
+  const car = {
+    x: clamp(x, -380, 380), z: clamp(z, -380, 380),
+    heading: Math.atan2(p.x - x, p.z - z),
+    speed: 0, damage: 0, ramCooldown: 0, kind: 'cop',
+    name: 'Police Cruiser', colour: [0.15, 0.2, 0.35],
+  };
+  game.copCars.push(car);
+  return car;
 }
 
-// Respawn on the STREET east of the hospital (-88, 150) — 34 units
-// from the hospital building's east face (x=-122), clear of every
-// collider. The round-4 bug respawned the player at the building's
-// centre (-100, 100) and soft-locked the game.
-export function respawnAfterBusted(game) {
-  const s = game.state;
-  s.player.x = game.city.spawns.hospital.x;
-  s.player.z = game.city.spawns.hospital.z;
-  s.player.inCar = null;
-  s.player.vx = 0;
-  s.player.vz = 0;
-  s.player.heading = 0;
-  hideMenu(s);
+function spawnFootCop(game) {
+  const p = game.player;
+  const ang = Math.random() * Math.PI * 2;
+  const cop = {
+    x: p.x + Math.cos(ang) * 25,
+    z: p.z + Math.sin(ang) * 25,
+    heading: 0, hp: 100, speed: 5.5, batonCooldown: 0,
+  };
+  game.cops.push(cop);
+  return cop;
 }
 
-export function wastedPlayer(game) {
-  const s = game.state;
-  const fine = Math.floor(s.cash * TUNE.bustedFine);
-  addCash(s, -fine);
-  s.wanted = 0;
-  s.health = 100;
-  respawnAfterBusted(game);
-  showMenu(s, 'WASTED', 'You died. Hospital bill: -$' + fine + '.', 'Press Enter to respawn at the hospital.');
-  s.mode = 'wasted';
-}
-
-// The named police-response list for the dense HUD: unit name,
-// distance, and status (RAMMING / PURSUIT / RESPONDING / SPOTLIGHT /
-// SEARCHING / ROADBLOCK).
-export function policeResponseList(game) {
-  const s = game.state;
-  const p = s.player;
-  const list = [];
-  const names = ['OSPREY', 'KESTREL', 'FALCON', 'HAWK'];
-  game.police.cars.forEach((c, i) => {
-    const d = Math.round(Math.hypot(c.x - p.x, c.z - p.z));
-    const status = d < 5 ? 'RAMMING' : d < 30 ? 'PURSUIT' : 'RESPONDING';
-    list.push({ name: names[i % names.length] + '-' + (i + 1), dist: d, status });
-  });
-  game.police.cops.forEach((c, i) => {
-    const d = Math.round(Math.hypot(c.x - p.x, c.z - p.z));
-    list.push({ name: 'OFFICER-' + (i + 1), dist: d, status: d < 5 ? 'RAMMING' : 'PURSUIT' });
-  });
-  if (game.police.heli) {
-    const h = game.police.heli;
-    const d = Math.round(Math.hypot(h.x - p.x, h.z - p.z));
-    list.push({ name: 'HELI-1', dist: d, status: h.losClear ? 'SPOTLIGHT' : 'SEARCHING' });
-  }
-  for (const rb of game.police.roadblocks) {
-    const d = Math.round(Math.hypot(rb.x - p.x, rb.z - p.z));
-    list.push({ name: 'ROADBLOCK', dist: d, status: 'ROADBLOCK' });
-  }
-  return list;
-}
-
-// Police as boxes: foot cops (dark blue, cap), cop cars (black +
-// white doors, light bar), heli (body + rotor + spotlight cone),
-// roadblock cars.
-export function policeBoxes(game, out) {
-  const pol = game.police;
-  const p = game.state.player;
-  for (const c of pol.cops) {
-    out.pushBoxRot(c.x - 0.11, 0.45, c.z, 0.18, 0.9, 0.18, [0.1, 0.1, 0.2], c.heading);
-    out.pushBoxRot(c.x + 0.11, 0.45, c.z, 0.18, 0.9, 0.18, [0.1, 0.1, 0.2], c.heading);
-    out.pushBoxRot(c.x, 1.25, c.z, 0.5, 0.7, 0.28, [0.1, 0.15, 0.4], c.heading);
-    out.pushBoxRot(c.x, 1.82, c.z, 0.34, 0.36, 0.32, COL.skin[1], c.heading);
-    out.pushBoxRot(c.x, 2.02, c.z, 0.36, 0.1, 0.34, [0.1, 0.15, 0.4], c.heading);
-    out.pushFlat(c.x, 0.06, c.z, 0.7, 0.7, [0, 0, 0], c.heading);
-  }
-  for (const c of pol.cars) {
-    out.pushBoxRot(c.x, 0.55, c.z, 1.8, 0.7, 4.2, [0.08, 0.08, 0.1], c.heading);
-    out.pushBoxRot(c.x, 1.15, c.z - 0.3, 1.6, 0.6, 2.2, [0.9, 0.9, 0.9], c.heading);
-    out.pushBoxRot(c.x, 1.5, c.z - 0.3, 1.2, 0.15, 0.6, [0.9, 0.1, 0.1], c.heading);
-    out.pushBoxRot(c.x, 1.5, c.z + 0.3, 1.2, 0.15, 0.6, [0.1, 0.3, 1], c.heading);
-    out.pushFlat(c.x, 0.06, c.z, 2.2, 4.6, [0, 0, 0], c.heading);
-  }
-  for (const rb of pol.roadblocks) {
-    out.pushBoxRot(rb.x, 0.55, rb.z, 1.8, 0.7, 4.2, [0.08, 0.08, 0.1], rb.heading);
-    out.pushBoxRot(rb.x, 1.15, rb.z - 0.3, 1.6, 0.6, 2.2, [0.9, 0.9, 0.9], rb.heading);
-    out.pushFlat(rb.x, 0.06, rb.z, 2.2, 4.6, [0, 0, 0], rb.heading);
-  }
-  if (pol.heli) {
-    const h = pol.heli;
-    out.pushBoxRot(h.x, h.y, h.z, 2.5, 1.2, 5, [0.1, 0.15, 0.3], h.heading);
-    out.pushBoxRot(h.x, h.y + 0.9, h.z, 0.3, 0.3, 5.5, [0.2, 0.2, 0.2], h.heading + h.rotor);
-    out.pushBoxRot(h.x, h.y + 0.9, h.z, 5.5, 0.3, 0.3, [0.2, 0.2, 0.2], h.heading + h.rotor);
-    // Spotlight cone + ground pool (only when the LOS is clear).
-    if (h.losClear) {
-      const midX = (h.x + p.x) / 2, midZ = (h.z + p.z) / 2;
-      out.pushBoxRot(midX, (h.y + 1.5) / 2, midZ, 0.8, h.y - 1.5, 0.8, [1, 1, 0.7], h.heading);
-      out.pushFlat(p.x, 0.08, p.z, 6, 6, [1, 1, 0.6], 0);
+export function stepPolice(game, dt) {
+  const p = game.player;
+  stepWanted(game, dt);
+  const wanted = game.wanted;
+  // Spawn pressure scales with wanted.
+  const wantCars = wanted >= 1 ? Math.min(2 + wanted, 6) : 0;
+  const wantCops = wanted >= 1 ? Math.min(wanted * 2, 8) : 0;
+  while (game.copCars.length < wantCars) spawnCopCar(game);
+  while (game.cops.length < wantCops) spawnFootCop(game);
+  // Cop cars chase + ram.
+  for (const car of game.copCars) {
+    car.ramCooldown = Math.max(0, car.ramCooldown - dt);
+    const d = dist(car.x, car.z, p.x, p.z);
+    const target = Math.atan2(p.x - car.x, p.z - car.z);
+    let diff = target - car.heading;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    car.heading += clamp(diff, -2.4 * dt, 2.4 * dt);
+    const speed = d > 40 ? 26 : d > 12 ? 20 : 12;
+    car.speed += clamp(speed - car.speed, -10 * dt, 8 * dt);
+    const nx = car.x + Math.sin(car.heading) * car.speed * dt;
+    const nz = car.z + Math.cos(car.heading) * car.speed * dt;
+    if (!isBlocked(game.city, nx, car.z, 1.6)) car.x = nx;
+    if (!isBlocked(game.city, car.x, nz, 1.6)) car.z = nz;
+    // Ram: only when close, only every 2.5 s per car, damage
+    // scales with wanted. A 1-star ram barely scratches.
+    if (d < 3.2 && car.ramCooldown <= 0) {
+      car.ramCooldown = 2.5;
+      if (p.inCar) {
+        p.inCar.damage += 4 + wanted * 3;
+        if (p.inCar.damage >= 100) p.inCar.wrecked = true;
+      } else {
+        // On foot the cop busts the player instead of ramming.
+        bustPlayer(game, 'rammed by a cop car');
+        return;
+      }
     }
   }
+  // Foot cops chase; in range they swing a baton (1.2 s cooldown).
+  for (const cop of [...game.cops]) {
+    const d = dist(cop.x, cop.z, p.x, cop.z);
+    cop.batonCooldown = Math.max(0, cop.batonCooldown - dt);
+    if (d > 90) {
+      game.cops.splice(game.cops.indexOf(cop), 1);
+      continue;
+    }
+    const target = Math.atan2(p.x - cop.x, p.z - cop.z);
+    cop.heading = target;
+    if (d > 2) {
+      cop.x += Math.sin(target) * cop.speed * dt;
+      cop.z += Math.cos(target) * cop.speed * dt;
+    } else if (cop.batonCooldown <= 0 && !p.inCar) {
+      cop.batonCooldown = 1.2;
+      damagePlayer(game, 8 + wanted * 2, 'beaten by a cop');
+      if (game.health <= 0) return;
+    }
+    // A foot cop that reaches an idle player busts them.
+    if (d < 1.6 && !p.inCar && game.mode === 'play') {
+      bustPlayer(game, 'busted by a foot cop');
+      return;
+    }
+  }
+  // Helicopter at 4–5 stars.
+  if (wanted >= 4) {
+    if (!game.heli) {
+      game.heli = {
+        x: p.x + 40, z: p.z - 40, y: TUNE.heliAltitude,
+        heading: 0, rotor: 0, spotlight: false,
+      };
+      showToast(game, 'Police helicopter overhead — break line of sight!');
+    }
+    const h = game.heli;
+    h.rotor += dt * 20;
+    const d = dist(h.x, h.z, p.x, p.z);
+    const target = Math.atan2(p.x - h.x, p.z - h.z);
+    h.heading = target;
+    const sp = Math.min(TUNE.heliSpeed, d * 0.5 + 6);
+    h.x += Math.sin(target) * sp * dt;
+    h.z += Math.cos(target) * sp * dt;
+    // Spotlight only when the heli can actually see the player
+    // (real line-of-sight through tall buildings).
+    h.spotlight = hasLineOfSight(game, h.x, h.z, p.x, p.z);
+    if (h.spotlight) game.wantedTimer = 0; // seen: no decay
+  } else if (game.heli) {
+    game.heli = null;
+  }
+  // Roadblocks at 3+ stars: 3 parked cop cars ahead of the player.
+  if (wanted >= 3 && game.roadblocks.length === 0) {
+    const a = p.heading;
+    for (let i = -1; i <= 1; i++) {
+      game.roadblocks.push({
+        x: p.x + Math.sin(a) * 50 + Math.cos(a) * i * 6,
+        z: p.z + Math.cos(a) * 50 - Math.sin(a) * i * 6,
+        heading: a + Math.PI / 2,
+      });
+    }
+  }
+  if (wanted < 3) game.roadblocks = [];
+  // Despawn extra cars when wanted falls.
+  while (game.copCars.length > wantCars) game.copCars.pop();
+  while (game.cops.length > wantCops) game.cops.pop();
+}
+
+// Busted: lose 20% of cash, respawn on the hospital street.
+export function bustPlayer(game, why) {
+  const fine = Math.floor(game.cash * TUNE.bustedFine);
+  game.cash -= fine;
+  game.wanted = 0;
+  game.wantedTimer = 0;
+  game.mode = 'busted';
+  game.bustedBy = why || 'busted';
+  game.copCars = [];
+  game.cops = [];
+  game.heli = null;
+  game.roadblocks = [];
+  if (game.player.inCar) {
+    game.player.inCar.driver = null;
+    game.player.inCar = null;
+  }
+  showToast(game, `Busted! Fine $${fine}`);
+}
+
+export function respawnAfterBusted(game) {
+  const p = game.player;
+  // Hospital spawn is on the street in front of the hospital,
+  // 30+ units from every building collider — never inside one.
+  p.x = SPAWNS.hospital.x;
+  p.z = SPAWNS.hospital.z;
+  p.y = 0;
+  p.heading = 0;
+  p.vx = 0;
+  p.vz = 0;
+  p.inCar = null;
+  game.health = 100;
+  game.mode = 'play';
+  game.menu = null;
+  game.card = null;
+}
+
+// Police response list for the dense HUD: named units + distance
+// + status.
+export function policeList(game) {
+  const list = [];
+  const p = game.player;
+  const names = ['OSPREY-1', 'KESTREL-2', 'FALCON-3', 'HAWK-4', 'EAGLE-5', 'VIPER-6'];
+  game.copCars.forEach((car, i) => {
+    const d = Math.round(dist(p.x, p.z, car.x, car.z));
+    const status = d < 12 ? 'RAMMING' : d < 40 ? 'PURSUIT' : 'RESPONDING';
+    list.push({ name: names[i % names.length], dist: d, status });
+  });
+  if (game.heli) {
+    list.push({
+      name: 'OSPREY-1 (HELI)',
+      dist: Math.round(dist(p.x, p.z, game.heli.x, game.heli.z)),
+      status: game.heli.spotlight ? 'SPOTLIGHT' : 'SEARCHING',
+    });
+  }
+  if (game.roadblocks.length > 0) {
+    list.push({ name: 'ROADBLOCK', dist: 50, status: 'ROADBLOCK' });
+  }
+  return list;
 }

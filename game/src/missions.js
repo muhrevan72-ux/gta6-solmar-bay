@@ -1,228 +1,227 @@
-// Solmar Bay — story missions (5 chapters) + side jobs.
+// Solmar Bay — story chapters + side jobs.
 //
-// Chapter flow: startChapter sets mode 'chapter' and shows the intro
-// card; Enter starts play. Completing a chapter pays the reward,
-// +50 respect, and shows the MISSION PASSED card (reward + REP +
-// unlock + completion %); Enter on that card starts the next
-// chapter's intro. Chapter 5 is the finale: grab the cash at the
-// harbour (wanted jumps to 4), lose the heat, reach the safehouse.
-//
-// Side jobs (markers on the map): taxi fares ($120), courier runs
-// ($150), the driving trial ($180), turf war ($250), gang runs
-// ($200). Each completion is +25 respect and counts toward the
-// completion %.
+// 5 sequential chapters with intro cards, objective markers and
+// a MISSION PASSED screen (reward + respect + completion %).
+// Side jobs (taxi, courier, time trial, turf, gang delivery)
+// are repeatable markers after chapter 1. Every chapter's
+// objective is a real position in the city — no fake markers.
 
-import { CHAPTERS, SIDE_JOBS, TUNE } from './config.js';
-import { showToast, showMenu, hideMenu, addCash, addRespect, showDialogue } from './state.js';
-import { playJingle } from './audio.js';
-import { startTurfJob } from './gangs.js';
+import { CHAPTERS, SIDE_JOBS, SPAWNS, dist } from './config.js';
+import { addCash, showToast, showDialogue, completionPercent } from './state.js';
 
-export function createMissions() {
-  return {
-    stage: 0, // stage within the current chapter
-    timer: 0, // chapter 2 countdown
-    passengers: 0, // chapter 4
-    target: null, // current objective point {x, z, label}
-  };
-}
+// Chapter anchors (real places).
+const ANCHORS = {
+  garage: { x: SPAWNS.garage.x, z: SPAWNS.garage.z - 14, label: 'Garage' },
+  harbourPackage: { x: -60, z: 320, label: 'Package at the docks' },
+  hideout: { x: 200, z: 180, label: 'Hideout' },
+  safehouse: { x: -220, z: -220, label: 'Safehouse' },
+  vault: { x: 60, z: 310, label: 'Vault container' },
+  passengers: [
+    { x: 60, z: 60, label: 'Passenger 1' },
+    { x: -180, z: -60, label: 'Passenger 2' },
+    { x: 120, z: 200, label: 'Passenger 3' },
+  ],
+  dropoffs: [
+    { x: -60, z: 120, label: 'Dropoff 1' },
+    { x: 180, z: -120, label: 'Dropoff 2' },
+    { x: 0, z: -220, label: 'Dropoff 3' },
+  ],
+};
 
 export function startChapter(game, n) {
-  const s = game.state;
-  s.chapter = n;
-  const ch = CHAPTERS[n - 1];
-  const m = game.missions;
-  m.stage = 0;
-  m.timer = 0;
-  m.passengers = 0;
-  m.target = null;
-  s.mode = 'chapter';
-  // The config title already reads 'Chapter 1 — First Wheels'.
-  s.hud.card = { title: ch.title.toUpperCase(), text: ch.intro, t: 0 };
-  const speakers = {
-    1: ['Rico', 'Your fixer'],
-    2: ['Rico', 'Your fixer'],
-    3: ['City Radio', 'Police scanner'],
-    4: ['Maya', 'Crew driver'],
-    5: ['Rico', 'Your fixer'],
-  };
-  const sp = speakers[n] || ['Rico', 'Your fixer'];
-  showDialogue(s, sp[0], sp[1], ch.intro, 10);
-  if (n === 3) {
-    // Chapter 3 opens hot.
-    s.wanted = 3;
+  game.chapter = n;
+  game.chapterStage = 0;
+  const c = CHAPTERS[n - 1];
+  if (!c) return;
+  game.card = { title: c.title, text: c.intro };
+  game.mode = 'card';
+  game.missionTimer = 0;
+  if (n === 1) {
+    game.missionMarker = ANCHORS.garage;
+    showDialogue(game, 'Rico', 'Your fixer', 'Take any car on the street and bring it to the garage on Bay Street.');
+  } else if (n === 2) {
+    game.missionMarker = ANCHORS.harbourPackage;
+    game.missionTimer = 240;
+    showDialogue(game, 'Rico', 'Your fixer', 'The package is at the harbour docks. Four minutes. Do not get cute with the cops.');
+  } else if (n === 3) {
+    game.policeCommit && game.policeCommit('massRampage');
+    game.wanted = 3;
+    game.missionMarker = null;
+    showDialogue(game, 'Rico', 'Your fixer', 'Three stars and every cop in the city. Lose them — hide, outrun, outsmart.');
+  } else if (n === 4) {
+    game.missionMarker = ANCHORS.passengers[0];
+    showDialogue(game, 'Maya', 'Your girl', 'Night shift. Three fares, three dropoffs. Be nice — tips included.');
+  } else if (n === 5) {
+    game.missionMarker = ANCHORS.vault;
+    showDialogue(game, 'Rico', 'Your fixer', 'The vault container at the harbour. Grab the cash, lose four stars, reach the safehouse.');
   }
-  if (n === 1) m.target = { x: 150, z: -120, label: 'Garage' };
-  if (n === 2) m.target = { x: 330, z: -100, label: 'Harbour docks' };
-  if (n === 4) m.target = { x: 0, z: 50, label: 'Taxi stand' };
-  if (n === 5) m.target = { x: 320, z: -120, label: 'Vault' };
+}
+
+// Advance the current chapter. Called every frame while playing.
+export function stepMissions(game, dt) {
+  if (game.mode !== 'play') return;
+  const p = game.player;
+  if (game.missionTimer > 0) {
+    game.missionTimer -= dt;
+    if (game.missionTimer <= 0) {
+      // Chapter 2 timeout: restart the chapter.
+      showToast(game, 'Out of time — the drop failed. Try again.');
+      startChapter(game, game.chapter);
+      return;
+    }
+  }
+  const at = (a, r = 8) => a && dist(p.x, p.z, a.x, a.z) < r;
+  if (game.chapter === 1) {
+    if (game.chapterStage === 0 && p.inCar) {
+      game.chapterStage = 1;
+      showToast(game, 'Nice wheels. Now drive to the garage.');
+    } else if (game.chapterStage === 1 && at(ANCHORS.garage, 10)) {
+      completeChapter(game);
+    }
+  } else if (game.chapter === 2) {
+    if (game.chapterStage === 0 && at(ANCHORS.harbourPackage, 6)) {
+      game.chapterStage = 1;
+      game.missionMarker = ANCHORS.hideout;
+      showToast(game, 'Package secured. Deliver it to the hideout!');
+    } else if (game.chapterStage === 1 && at(ANCHORS.hideout, 8)) {
+      completeChapter(game);
+    }
+  } else if (game.chapter === 3) {
+    if (game.wanted === 0) completeChapter(game);
+  } else if (game.chapter === 4) {
+    const stage = game.chapterStage;
+    const leg = Math.floor(stage / 2);
+    if (stage % 2 === 0) {
+      // Pick up passenger `leg`.
+      if (at(ANCHORS.passengers[leg], 7)) {
+        game.chapterStage = stage + 1;
+        game.missionMarker = ANCHORS.dropoffs[leg];
+        showToast(game, `Passenger ${leg + 1} aboard — drive to the dropoff.`);
+      }
+    } else if (at(ANCHORS.dropoffs[leg], 8)) {
+      addCash(game, 100, 'fare + tip');
+      game.stats.fares += 1;
+      if (leg >= 2) {
+        completeChapter(game);
+      } else {
+        game.chapterStage = stage + 1;
+        game.missionMarker = ANCHORS.passengers[leg + 1];
+        showToast(game, `Fare done. Next passenger: ${ANCHORS.passengers[leg + 1].label}.`);
+      }
+    }
+  } else if (game.chapter === 5) {
+    if (game.chapterStage === 0 && at(ANCHORS.vault, 7)) {
+      game.chapterStage = 1;
+      addCash(game, 500, 'heist cash');
+      game.wanted = 4;
+      game.missionMarker = ANCHORS.safehouse;
+      showToast(game, 'Cash grabbed! Lose the heat and reach the safehouse.');
+    } else if (game.chapterStage === 1 && game.wanted === 0 && at(ANCHORS.safehouse, 10)) {
+      completeChapter(game);
+    } else if (game.chapterStage === 1 && game.wanted === 0) {
+      game.missionMarker = ANCHORS.safehouse;
+    }
+  }
+  // Side jobs (repeatable, after chapter 1).
+  if (game.sideJob) stepSideJob(game, dt);
 }
 
 export function completeChapter(game) {
-  const s = game.state;
-  const ch = CHAPTERS[s.chapter - 1];
-  addCash(s, ch.reward);
-  addRespect(s, 50);
-  s.stats.missionsDone++;
-  playJingle(game.audio);
-  const next = s.chapter + 1;
-  const pct = completionPct(game);
-  if (next > CHAPTERS.length) {
-    showMenu(s, 'STORY COMPLETE', 'You finished all 5 chapters! Reward: +$' + ch.reward + ', +50 REP. Completion: ' + pct + '%.', 'Press Enter to keep playing in free roam.');
-    s.mode = 'passed';
-    game.missions.target = null;
+  const c = CHAPTERS[game.chapter - 1];
+  if (!c) return;
+  addCash(game, c.reward, `Chapter ${game.chapter} complete`);
+  game.respect += 50;
+  game.chapterDone = Math.max(game.chapterDone, game.chapter);
+  game.completion = completionPercent(game);
+  game.missionMarker = null;
+  game.missionTimer = 0;
+  // Respect unlocks.
+  if (game.respect >= 100 && !game.unlocks.smgUnlocked) {
+    game.unlocks.smgUnlocked = true;
+    game.pickups.push({ kind: 'smg', x: 260, z: 120, amount: 0, t: 600 });
+  }
+  if (game.respect >= 250 && !game.unlocks.shotgunUnlocked) {
+    game.unlocks.shotgunUnlocked = true;
+    game.pickups.push({ kind: 'shotgun', x: 60, z: 310, amount: 0, t: 600 });
+  }
+  if (game.respect >= 500 && !game.unlocks.sportsCarSpawned) {
+    game.unlocks.sportsCarSpawned = true;
+    showToast(game, 'Unlock: Solmar Comet sports car at the garage!');
+  }
+  game.mode = 'passed';
+  game.card = {
+    title: 'MISSION PASSED',
+    text: `${c.title} — $${c.reward} earned, +50 respect. Completion ${game.completion}%.`,
+  };
+  if (game.audio) game.audio.jingle();
+}
+
+// Continue after the MISSION PASSED screen.
+export function nextChapter(game) {
+  if (game.chapter >= CHAPTERS.length) {
+    game.mode = 'play';
+    game.card = null;
+    game.missionMarker = null;
+    showToast(game, 'Story complete — free roam. The city is yours.');
     return;
   }
-  showMenu(s, 'MISSION PASSED', ch.title + ' — +$' + ch.reward + ', +50 REP. Completion: ' + pct + '%.', 'Press Enter for Chapter ' + next + '.');
-  s.mode = 'passed';
-  game.missions.nextChapter = next;
+  startChapter(game, game.chapter + 1);
 }
 
-function completionPct(game) {
-  const s = game.state;
-  const story = Math.min(5, s.chapter - 1) * 12;
-  const side = Math.min(20, s.stats.sideJobsDone * 4);
-  const garage = Math.min(8, s.ownedCars.length * 2);
-  const rep = Math.min(12, Math.floor(s.respect / 100));
-  return Math.min(100, story + side + garage + rep);
-}
+// ---- side jobs ----
 
-// Advance to the next chapter after the MISSION PASSED card.
-export function advanceChapter(game) {
-  const next = game.missions.nextChapter;
-  if (next) {
-    game.missions.nextChapter = null;
-    hideMenu(game.state);
-    startChapter(game, next);
-  } else {
-    hideMenu(game.state);
-    game.state.mode = 'play';
-  }
-}
+const SIDE_SPOTS = {
+  taxi: [{ x: -40, z: -80 }, { x: 140, z: 80 }],
+  courier: [{ x: -200, z: 140 }, { x: 220, z: -160 }],
+  trial: [{ x: 0, z: -300 }, { x: 0, z: 300 }],
+  turf: [{ x: 0, z: -40 }],
+  gangrun: [{ x: -180, z: 180 }],
+};
 
-export function stepMissions(game, dt) {
-  const s = game.state;
-  if (s.mode !== 'play') return;
-  const m = game.missions;
-  const p = s.player;
-  const ch = CHAPTERS[s.chapter - 1];
-  if (!ch) return;
-  switch (s.chapter) {
-    case 1: {
-      // Steal a car and drive to the garage.
-      if (m.stage === 0 && p.inCar) {
-        m.stage = 1;
-        m.target = { x: 150, z: -120, label: 'Garage' };
-        showToast(s, 'Nice wheels. Now drive to the garage.', 4);
-      }
-      if (m.stage === 1 && p.inCar && Math.hypot(p.x - 150, p.z + 120) < 12) {
-        completeChapter(game);
-      }
-      break;
-    }
-    case 2: {
-      // Pick up the package at the harbour docks, then deliver it
-      // to the hideout within 90 s.
-      if (m.stage === 0) {
-        if (Math.hypot(p.x - 330, p.z + 100) < 12) {
-          m.stage = 1;
-          m.timer = 90;
-          m.target = { x: 250, z: -220, label: 'Hideout' };
-          showToast(s, 'Package picked up! Deliver it to the hideout — 90 seconds!', 5);
-        }
-      } else if (m.stage === 1) {
-        m.timer -= dt;
-        if (m.timer <= 0) {
-          showToast(s, 'Too slow! The package job failed — try again.', 4);
-          m.stage = 0;
-          startChapter(game, 2);
-          return;
-        }
-        if (Math.hypot(p.x - 250, p.z + 220) < 12) completeChapter(game);
-      }
-      break;
-    }
-    case 3: {
-      // Lose the heat: survive until wanted hits 0.
-      if (s.wanted === 0) completeChapter(game);
-      break;
-    }
-    case 4: {
-      // Pick up 3 passengers at the taxi stand (one every 3 s).
-      m.passengerT = (m.passengerT || 0) - dt;
-      if (m.passengerT <= 0 && Math.hypot(p.x - 0, p.z - 50) < 8 && p.inCar) {
-        m.passengers++;
-        m.passengerT = 3;
-        showToast(s, 'Passenger ' + m.passengers + '/3 picked up!', 3);
-        if (m.passengers >= 3) completeChapter(game);
-      }
-      break;
-    }
-    case 5: {
-      // Grab the cash from the vault container at the harbour, then
-      // lose the heat and reach the safehouse.
-      if (m.stage === 0 && Math.hypot(p.x - 320, p.z + 120) < 12) {
-        m.stage = 1;
-        s.wanted = Math.max(s.wanted, 4);
-        addCash(s, 500);
-        showToast(s, 'You grabbed $500! Now lose the heat and reach the safehouse.', 5);
-        m.target = { x: -250, z: 190, label: 'Safehouse' };
-      }
-      if (m.stage === 1 && s.wanted === 0 && Math.hypot(p.x + 250, p.z - 190) < 12) {
-        completeChapter(game);
-      }
-      break;
-    }
-  }
-  // Side jobs: standing at a marker with E starts one.
-  stepSideJobs(game, dt);
-}
-
-function stepSideJobs(game, dt) {
-  const s = game.state;
-  if (game.sideJob) {
-    // Taxi fares and courier runs are handled by taxi.js / their own
-    // timers; the turf and gang-run jobs are tracked in gangs.js.
-    return;
-  }
-  // E at a side-job marker starts the job (handled by main.js's
-  // interact dispatcher, which calls startSideJob).
-}
-
-function sideJobById(kind) {
-  return SIDE_JOBS.find((j) => j.id === kind);
-}
-
-export function startSideJob(game, kind) {
-  const s = game.state;
-  const job = sideJobById(kind);
-  if (!job) return false;
-  if (kind === 'taxi') {
-    game.taxi.fare = { active: true, pickup: null, dropoff: null, stage: 0 };
-    showToast(s, 'Taxi job: pick up a passenger at the taxi stand.', 5);
-  } else if (kind === 'courier') {
-    game.sideJob = { kind: 'courier', stage: 0, timer: 120 };
-    showToast(s, 'Courier job: deliver to the harbour in 120 s. +$' + job.reward, 5);
-  } else if (kind === 'trial') {
-    game.sideJob = { kind: 'trial', stage: 0, checkpoints: 0 };
-    showToast(s, 'Driving trial: hit 5 checkpoints. +$' + job.reward, 5);
-  } else if (kind === 'turf') {
-    // gangs.js owns the turf job.
-    startTurfJob(game);
-  } else if (kind === 'gangrun') {
-    game.sideJob = { kind: 'gangrun', stage: 0 };
-    showToast(s, 'Gang run: drive to the hideout, then the safehouse. +$' + job.reward, 5);
-  }
+export function startSideJob(game, id) {
+  const def = SIDE_JOBS.find((j) => j.id === id);
+  if (!def) return false;
+  const spots = SIDE_SPOTS[id] || [{ x: 0, z: 0 }];
+  game.sideJob = { id, label: def.label, reward: def.reward, stage: 0, spot: spots[0], spots, t: id === 'trial' ? 90 : 0 };
+  game.missionMarker = { x: spots[0].x, z: spots[0].z, label: def.label };
+  showToast(game, `Side job: ${def.label} — ${def.desc}`);
   return true;
 }
 
-export function completeSideJob(game, kind) {
-  const s = game.state;
-  const job = sideJobById(kind);
+function stepSideJob(game, dt) {
+  const job = game.sideJob;
+  if (!job) return;
+  if (job.t > 0) {
+    job.t -= dt;
+    if (job.t <= 0) {
+      showToast(game, 'Time trial failed — too slow.');
+      game.sideJob = null;
+      game.missionMarker = null;
+      return;
+    }
+  }
+  const p = game.player;
+  if (dist(p.x, p.z, job.spot.x, job.spot.z) > 8) return;
+  if (job.id === 'turf') {
+    // Clear the gang members in the turf.
+    const left = game.gangMembers.filter((g) => g.gang === 'sharks').length;
+    if (left > 0) {
+      showToast(game, `${left} Sharks left in the turf — clear them out!`);
+      return;
+    }
+  }
+  if (job.id === 'trial' && job.stage < job.spots.length - 1) {
+    job.stage += 1;
+    job.spot = job.spots[job.stage];
+    game.missionMarker = { x: job.spot.x, z: job.spot.z, label: 'Next checkpoint' };
+    return;
+  }
+  addCash(game, job.reward, job.label);
+  game.respect += 25;
+  game.completion = completionPercent(game);
+  showToast(game, `Side job done: ${job.label} +$${job.reward}`);
   game.sideJob = null;
-  if (kind === 'taxi' && game.taxi) game.taxi.fare = null;
-  addCash(s, job.reward);
-  addRespect(s, 25);
-  s.stats.sideJobsDone++;
-  showToast(s, job.label + ' done! +$' + job.reward + ', +25 REP', 5);
-  playJingle(game.audio);
+  game.missionMarker = null;
 }
+
+export { ANCHORS };

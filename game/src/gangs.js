@@ -1,147 +1,118 @@
-// Solmar Bay — gangs: Bay Kings (gold, downtown) vs Harbour Sharks
-// (teal, harbour). Two rival gangs with turf, members, hostility,
-// and turf jobs. Gang members wear their gang's bandana and fight
-// the player (and each other) on sight inside their turf.
+// Solmar Bay — gangs: Bay Kings vs Harbour Sharks.
+//
+// Two original rival gangs in gold (downtown) and teal
+// (harbour). Members hang out in groups in their turf; they turn
+// hostile if the player attacks them or causes trouble in their
+// turf. Killing one drops cash and raises wanted (gang murder).
+// Two gang side jobs run through missions.js.
 
-import { GANGS, COL, TUNE } from './config.js';
-import { showToast, addRespect, addCash } from './state.js';
-import { dropCash } from './pedestrians.js';
+import { GANGS, TUNE, dist, makeRng, clamp } from './config.js';
+import { isBlocked } from './world.js';
 
-export function createGangs(city) {
-  const gangs = { members: [], turfJobs: [] };
-  // 25 members split across the two turfs. The turf fields hx/hz
-  // are the FULL width/height (kings 160x140, sharks 90x110).
-  for (let i = 0; i < 25; i++) {
-    const def = i % 2 === 0 ? GANGS.kings : GANGS.sharks;
-    const x = def.turf.x + (Math.random() - 0.5) * def.turf.hx;
-    const z = def.turf.z + (Math.random() - 0.5) * def.turf.hz;
-    const ped = {
-      x, z, heading: Math.random() * Math.PI * 2,
-      speed: 2 + Math.random(),
-      role: 'walk', activity: 'walk', target: null, waitT: 0,
-      bob: Math.random() * Math.PI * 2,
-      shirt: [0.1, 0.1, 0.1],
-      pants: [0.2, 0.2, 0.2],
-      skin: COL.skin[i % COL.skin.length],
-      hair: COL.hair[i % COL.hair.length],
-      hairStyle: 'buzz',
-      height: 0.95 + ((i * 5) % 10) / 100,
-      bulk: 0.85 + ((i * 3) % 10) / 100,
-      gang: i % 2 === 0 ? 'kings' : 'sharks',
-      hp: 40,
-      dead: false,
-      hostile: false,
-    };
-    gangs.members.push(ped);
-  }
-  return gangs;
+export function spawnGangs(game) {
+  const rng = makeRng(99);
+  game.gangMembers = [];
+  const spawn = (gangId, turf, count) => {
+    const g = GANGS[gangId];
+    for (let i = 0; i < count; i++) {
+      const a = rng() * Math.PI * 2;
+      const r = rng() * turf.r * 0.7;
+      const x = turf.x + Math.cos(a) * r;
+      const z = turf.z + Math.sin(a) * r;
+      if (isBlocked(game.city, x, z, 1)) continue;
+      game.gangMembers.push({
+        gang: gangId,
+        x, z,
+        heading: rng() * Math.PI * 2,
+        hp: 100,
+        hostile: false,
+        speed: 2 + rng() * 1.5,
+        colour: g.colour,
+        bandana: g.colour,
+        walkPhase: rng() * Math.PI * 2,
+        target: null,
+      });
+    }
+  };
+  spawn('kings', GANGS.kings.turf, 13);
+  spawn('sharks', GANGS.sharks.turf, 12);
 }
 
-// Which gang's turf is (x, z) in, if any. hx/hz are the full
-// width/height, so the test is against half of each.
-export function gangAt(x, z) {
-  for (const key of ['kings', 'sharks']) {
-    const t = GANGS[key].turf;
-    if (Math.abs(x - t.x) < t.hx / 2 && Math.abs(z - t.z) < t.hz / 2) return key;
-  }
-  return null;
-}
-
+// Gang members wander their turf; hostile ones chase the player
+// and punch. A member turns hostile when the player attacks a
+// member of the same gang, or commits a crime inside the turf.
 export function stepGangs(game, dt) {
-  const s = game.state;
-  const p = s.player;
-  for (const m of game.gangs.members) {
-    if (m.dead) continue;
-    const d = Math.hypot(m.x - p.x, m.z - p.z);
-    const turf = gangAt(p.x, p.z);
-    // Hostile when the player is inside their turf, or already
-    // hostile from an earlier fight.
-    if ((turf === m.gang && d < 25) || m.hostile) {
-      m.hostile = true;
-      m.activity = 'walk';
-      // Chase and punch the player.
-      const dx = p.x - m.x, dz = p.z - m.z;
-      const dd = Math.hypot(dx, dz) || 1;
-      m.heading = Math.atan2(dx, dz);
-      if (d > 1.5) {
-        m.x += (dx / dd) * m.speed * dt;
-        m.z += (dz / dd) * m.speed * dt;
-        m.bob += dt * m.speed * 2.2;
-      } else {
-        // In range: punch (with a cooldown so the player is not
-        // instantly shredded).
-        m.waitT -= dt;
-        if (m.waitT <= 0) {
-          m.waitT = 1.2;
-          game.state.health = Math.max(0, game.state.health - 8);
-          showToast(s, 'A ' + (m.gang === 'kings' ? 'Bay King' : 'Harbour Shark') + ' hit you!', 2);
-        }
-      }
-    } else {
-      // Idle: wander their turf.
-      m.waitT -= dt;
-      if (m.waitT <= 0) {
-        m.waitT = 5 + Math.random() * 10;
-        const def = GANGS[m.gang];
-        m.target = {
-          x: def.turf.x + (Math.random() - 0.5) * def.turf.hx,
-          z: def.turf.z + (Math.random() - 0.5) * def.turf.hz,
-        };
-      }
-      if (m.target) {
-        const dx = m.target.x - m.x, dz = m.target.z - m.z;
-        const dd = Math.hypot(dx, dz);
-        if (dd > 1) {
-          m.heading = Math.atan2(dx, dz);
-          m.x += (dx / dd) * m.speed * 0.5 * dt;
-          m.z += (dz / dd) * m.speed * 0.5 * dt;
-          m.bob += dt * m.speed;
-        }
+  const p = game.player;
+  for (const gm of game.gangMembers) {
+    // Hostility: player hurt this gang, or is committing crimes
+    // inside their turf right now.
+    if (!gm.hostile) {
+      const g = GANGS[gm.gang];
+      if (game.wanted > 0 && dist(p.x, p.z, g.turf.x, g.turf.z) < g.turf.r) {
+        gm.hostile = true;
       }
     }
-  }
-}
-
-// Turf job: clear the rival gang's turf (kill or scare off 3
-// members) for $250 + 25 respect. Started from the side-job marker
-// at (-100, -100).
-export function startTurfJob(game) {
-  const s = game.state;
-  game.sideJob = { kind: 'turf', need: 3, done: 0, target: 'sharks' };
-  showToast(s, 'Turf war: clear 3 Harbour Sharks from the harbour.', 5);
-}
-
-export function gangMemberKilled(game, member) {
-  const s = game.state;
-  member.dead = true;
-  dropCash(game, member.x, member.z);
-  if (game.sideJob && game.sideJob.kind === 'turf') {
-    game.sideJob.done++;
-    if (game.sideJob.done >= game.sideJob.need) {
-      game.sideJob = null;
-      addCash(s, 250);
-      addRespect(s, 25);
-      s.stats.sideJobsDone++;
-      showToast(s, 'Turf cleared! +$250, +25 REP', 5);
+    if (gm.hostile) {
+      const d = dist(gm.x, gm.z, p.x, p.z);
+      if (d < 60) {
+        const a = Math.atan2(p.x - gm.x, p.z - gm.z);
+        gm.heading = a;
+        if (d > 2) {
+          gm.x += Math.sin(a) * gm.speed * 1.6 * dt;
+          gm.z += Math.cos(a) * gm.speed * 1.6 * dt;
+        } else if (!p.inCar) {
+          // Gang punch.
+          gm.punchT = (gm.punchT || 0) - dt;
+          if (gm.punchT <= 0) {
+            gm.punchT = 1;
+            game.health = Math.max(0, game.health - 6);
+            if (game.health <= 0) {
+              game.mode = 'wasted';
+              game.bustedBy = 'beaten by the ' + GANGS[gm.gang].name;
+            }
+          }
+        }
+        continue;
+      }
+      gm.hostile = false;
     }
+    // Idle wander inside the turf.
+    if (!gm.target || dist(gm.x, gm.z, gm.target.x, gm.target.z) < 2) {
+      const g = GANGS[gm.gang];
+      const a = Math.random() * Math.PI * 2;
+      const r = Math.random() * g.turf.r * 0.6;
+      gm.target = { x: g.turf.x + Math.cos(a) * r, z: g.turf.z + Math.sin(a) * r };
+    }
+    const a = Math.atan2(gm.target.x - gm.x, gm.target.z - gm.z);
+    let diff = a - gm.heading;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    gm.heading += clamp(diff, -3 * dt, 3 * dt);
+    const nx = gm.x + Math.sin(gm.heading) * gm.speed * dt;
+    const nz = gm.z + Math.cos(gm.heading) * gm.speed * dt;
+    if (!isBlocked(game.city, nx, gm.z, 0.6)) gm.x = nx;
+    if (!isBlocked(game.city, gm.x, nz, 0.6)) gm.z = nz;
+    gm.walkPhase += dt * 3;
   }
 }
 
-export function gangBoxes(game, out) {
-  const p = game.state.player;
-  for (const m of game.gangs.members) {
-    if (m.dead) continue;
-    const d = Math.hypot(m.x - p.x, m.z - p.z);
-    if (d > 220) continue;
-    const swing = m.activity === 'walk' ? Math.sin(m.bob) * 0.5 : 0;
-    const color = m.gang === 'kings' ? COL.gangKings : COL.gangSharks;
-    out.pushBoxRot(m.x - 0.11, 0.45, m.z, 0.18, 0.9, 0.18, [0.2, 0.2, 0.2], m.heading + swing * 0.1);
-    out.pushBoxRot(m.x + 0.11, 0.45, m.z, 0.18, 0.9, 0.18, [0.2, 0.2, 0.2], m.heading - swing * 0.1);
-    out.pushBoxRot(m.x, 1.25, m.z, 0.55, 0.7, 0.3, [0.12, 0.12, 0.12], m.heading);
-    out.pushBoxRot(m.x - 0.32, 1.25, m.z, 0.14, 0.65, 0.14, m.skin, m.heading + swing * 0.4);
-    out.pushBoxRot(m.x + 0.32, 1.25, m.z, 0.14, 0.65, 0.14, m.skin, m.heading - swing * 0.4);
-    out.pushBoxRot(m.x, 1.82, m.z, 0.34, 0.36, 0.32, m.skin, m.heading);
-    out.pushBoxRot(m.x, 1.78, m.z, 0.36, 0.08, 0.34, color, m.heading);
-    out.pushFlat(m.x, 0.06, m.z, 0.7, 0.7, [0, 0, 0], m.heading);
-  }
+// Draw a gang member: like a ped, but in gang colours with a
+// bandana. Reuses the ped body layout (same boxes, own colours).
+export function gangBoxes(game, gm, out) {
+  const bob = Math.sin(gm.walkPhase) * 0.08;
+  out.push({ x: gm.x - 0.2, y: 0.15, z: gm.z, w: 0.32, h: 0.7, d: 0.32, c: [0.2, 0.2, 0.25] });
+  out.push({ x: gm.x + 0.2, y: 0.15, z: gm.z, w: 0.32, h: 0.7, d: 0.32, c: [0.2, 0.2, 0.25] });
+  out.push({ x: gm.x, y: 0.85 + bob, z: gm.z, w: 0.8, h: 0.8, d: 0.45, c: gm.colour });
+  out.push({ x: gm.x - 0.5, y: 0.85 + bob, z: gm.z, w: 0.24, h: 0.75, d: 0.28, c: gm.colour });
+  out.push({ x: gm.x + 0.5, y: 0.85 + bob, z: gm.z, w: 0.24, h: 0.75, d: 0.28, c: gm.colour });
+  out.push({ x: gm.x, y: 1.65 + bob, z: gm.z, w: 0.58, h: 0.55, d: 0.5, c: [0.85, 0.65, 0.5] });
+  // Bandana across the forehead.
+  out.push({ x: gm.x, y: 1.82 + bob, z: gm.z, w: 0.62, h: 0.16, d: 0.54, c: gm.bandana });
+  out.push({ x: gm.x, y: 1.95 + bob, z: gm.z, w: 0.5, h: 0.22, d: 0.5, c: [0.15, 0.12, 0.1] });
+  return out;
+}
+
+export function gangInTurf(gangId, x, z) {
+  const g = GANGS[gangId];
+  return dist(x, z, g.turf.x, g.turf.z) < g.turf.r;
 }

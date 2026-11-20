@@ -1,172 +1,127 @@
-// Solmar Bay — interiors: enterable shops.
+// Solmar Bay — enterable interiors.
 //
-// Pizza Palace, Burger Barn and the outfit shop have a door: press E
-// at the door to step into a small interior room (floor, counter,
-// shelves, shopkeeper, sign), E at the counter opens that shop's
-// menu, E at the door to step back out. Interiors are simple box
-// rooms at (0, 380) — a fenced-off patch south of the city — NOT
-// full buildings. While inside, the camera switches to close mode,
-// police/gangs don't update, and the player is clamped to the room.
+// 3 shops (pizza, burger, outfit) have small interior rooms: a
+// floor, a counter, shelves and a shopkeeper. Press E at the door
+// to step in, E again to step back out. Interiors are simple box
+// rooms at (0, 380) — far from the city, so the player can never
+// walk into them by accident. While inside, the player stands in
+// the room and the shop functions still work there (food menu,
+// outfit menu).
 
-import { dist2, FOOD_SHOPS } from './config.js';
+import { SPAWNS, FOOD_SHOPS, dist } from './config.js';
 import { showToast } from './state.js';
-import { openFoodMenu } from './food.js';
-import { outfitMenuText } from './outfit.js';
 
-// Door points (just outside the shop buildings, on standable ground).
-// Pizza/Burger doors sit 5 m north of their food-shop points so the
-// 5 m food radius and the 4 m door radius do not overlap.
-export const INTERIOR_DOORS = [
-  { shop: 'Pizza Palace', x: -60, z: -32, kind: 'food', menu: 'pizza' },
-  { shop: 'Burger Barn', x: 60, z: -28, kind: 'food', menu: 'burger' },
-  // Outfit door: 2 m south of the outfit shop's south face (the shop
-  // sits at (-120, 40), 24 x 20, so its south face is z = 50).
-  { shop: 'Outfit Shop', x: -120, z: 52, kind: 'outfit', menu: 'outfit' },
+// Room layout: each interior is a 16x12 room, centred at
+// (originX + i*24, 380). Doors on the south wall.
+const ROOMS = [
+  { id: 'pizza', name: 'Pizza Palace', colour: [0.9, 0.3, 0.2] },
+  { id: 'burger', name: 'Burger Barn', colour: [0.95, 0.6, 0.1] },
+  { id: 'outfit', name: 'Outfit Shop', colour: [0.85, 0.6, 0.9] },
 ];
 
-const ROOM = { x: 0, z: 380, w: 14, d: 10, h: 5 };
-
-export function createInteriors() {
-  return {
-    inside: null, // {shop, kind, menu} or null
-    savedPos: null, // where the player stood before entering
-  };
+export function roomOrigin(i) {
+  return { x: SPAWNS.interiorOrigin.x + i * 24, z: SPAWNS.interiorOrigin.z };
 }
 
-export function nearestDoor(game, x, z, range) {
-  let best = null;
-  let bestD = range * range;
-  for (const d of INTERIOR_DOORS) {
-    const dd = dist2(x, z, d.x, d.z);
-    if (dd < bestD) {
-      bestD = dd;
-      best = d;
-    }
-  }
-  return best;
-}
-
-export function enterInterior(game, door) {
-  const it = game.interiors;
-  if (it.inside) return false;
-  it.inside = { shop: door.shop, kind: door.kind, menu: door.menu };
-  it.savedPos = { x: game.state.player.x, z: game.state.player.z };
-  game.state.player.x = ROOM.x;
-  game.state.player.z = ROOM.z;
-  game.state.player.vx = 0;
-  game.state.player.vz = 0;
-  showToast(game.state, 'You step inside ' + door.shop + '. E at the counter to browse, E at the door to leave.', 4);
-  return true;
-}
-
-export function exitInterior(game) {
-  const it = game.interiors;
-  if (!it.inside) return false;
-  const saved = it.savedPos || { x: -60, z: -27 };
-  it.inside = null;
-  it.savedPos = null;
-  game.state.player.x = saved.x;
-  game.state.player.z = saved.z;
-  game.state.player.vx = 0;
-  game.state.player.vz = 0;
-  showToast(game.state, 'You step back out onto the street.', 2);
-  return true;
-}
-
-// Counter point inside the room (north end).
-export function counterPoint() {
-  return { x: ROOM.x, z: ROOM.z - ROOM.d / 2 + 1 };
-}
-// Door point inside the room (south end).
-export function roomDoorPoint() {
-  return { x: ROOM.x, z: ROOM.z + ROOM.d / 2 - 1 };
-}
-
-// Keep the player inside the room while in it.
-export function clampToRoom(game) {
-  if (!game.interiors.inside) return;
-  const p = game.state.player;
-  const hw = ROOM.w / 2 - 1;
-  const hd = ROOM.d / 2 - 1;
-  if (p.x < ROOM.x - hw) p.x = ROOM.x - hw;
-  if (p.x > ROOM.x + hw) p.x = ROOM.x + hw;
-  if (p.z < ROOM.z - hd) p.z = ROOM.z - hd;
-  if (p.z > ROOM.z + hd) p.z = ROOM.z + hd;
-}
-
-// Per-frame: clamp the player to the room while inside.
-export function stepInteriors(game, dt) {
-  clampToRoom(game);
-}
-
-// True while the player is inside an interior room.
 export function isInside(game) {
-  return !!game.interiors.inside;
+  return !!game.player.inside;
 }
 
-// E at a door: enter it (outside) or leave it (inside, at the room
-// door point). Returns true if a door was used.
+// Try to enter an interior (E at a shop door). Returns the room
+// id or null.
 export function tryInteriorDoor(game) {
-  const p = game.state.player;
-  if (game.interiors.inside) {
-    const dp = roomDoorPoint();
-    if (Math.hypot(p.x - dp.x, p.z - dp.z) < 3) {
-      return exitInterior(game);
-    }
-    return false;
+  const p = game.player;
+  if (p.inside) {
+    // Step back out to the door the player came in through.
+    const room = ROOMS.find((r) => r.id === p.inside);
+    const door = doorFor(room ? room.id : 'pizza');
+    p.inside = null;
+    p.x = door.x;
+    p.z = door.z + 3;
+    showToast(game, 'You stepped outside');
+    return 'exit';
   }
-  const door = nearestDoor(game, p.x, p.z, 4);
-  if (door) return enterInterior(game, door);
-  return false;
+  for (const door of game.city.doors) {
+    if (!door.id.startsWith('shop-') && door.id !== 'outfit') continue;
+    if (dist(p.x, p.z, door.x, door.z) < 4) {
+      const roomId = door.id === 'outfit' ? 'outfit' : door.id.slice(5).toLowerCase().includes('pizza') ? 'pizza' : 'burger';
+      const idx = ROOMS.findIndex((r) => r.id === roomId);
+      const origin = roomOrigin(idx < 0 ? 0 : idx);
+      p.inside = roomId;
+      p.x = origin.x;
+      p.z = origin.z + 3;
+      showToast(game, `Inside the ${ROOMS[idx < 0 ? 0 : idx].name}`);
+      return roomId;
+    }
+  }
+  return null;
 }
 
-// E at the counter inside a room: open that shop's menu.
+function doorFor(roomId) {
+  if (roomId === 'outfit') return { x: SPAWNS.outfitDoor.x, z: SPAWNS.outfitDoor.z };
+  const shop = FOOD_SHOPS.find((s) => s.name.toLowerCase().includes(roomId === 'pizza' ? 'pizza' : 'burger'));
+  return shop ? { x: shop.x, z: shop.z - 1 } : { x: 0, z: 0 };
+}
+
+// Try the counter inside a room (E at the counter): opens the
+// shop's menu (food or outfit).
 export function tryInteriorCounter(game) {
-  if (!game.interiors.inside) return false;
-  const p = game.state.player;
-  const cp = counterPoint();
-  if (Math.hypot(p.x - cp.x, p.z - cp.z) > 3) return false;
-  const it = game.interiors.inside;
-  if (it.kind === 'food') {
-    const shop = FOOD_SHOPS.find((s) => s.name === it.shop);
-    if (shop) {
-      openFoodMenu(game, shop);
-      return true;
-    }
-    return false;
+  const p = game.player;
+  if (!p.inside) return false;
+  const idx = ROOMS.findIndex((r) => r.id === p.inside);
+  const origin = roomOrigin(idx);
+  if (dist(p.x, p.z, origin.x, origin.z - 2) > 4) return false;
+  if (p.inside === 'outfit') {
+    // Reuse the outfit modal.
+    game.modal = {
+      kind: 'outfit',
+      title: 'Outfit Shop',
+      lines: ['1. hair', '2. shirt', '3. pants', '4. shoes'],
+      part: 0,
+    };
+  } else {
+    const shop = FOOD_SHOPS.find((s) => s.name.toLowerCase().includes(p.inside));
+    game.modal = {
+      kind: 'food',
+      title: shop ? shop.name : 'Food Shop',
+      lines: ['1. Snack — $5 (+10 HP)', '2. Meal — $10 (+25 HP)', '3. Feast — $15 (full HP, +25 armour)'],
+      shop,
+    };
   }
-  if (it.kind === 'outfit') {
-    game.outfit.menuOpen = true;
-    showToast(game.state, 'Outfit Shop — 1 hair · 2 shirt · 3 pants · 4 shoes. ' + outfitMenuText(game), 5);
-    return true;
-  }
-  return false;
+  return true;
 }
 
-// Draw the interior room (only when inside): floor, walls, counter,
-// shelves, shopkeeper, sign.
-export function interiorBoxes(game, out) {
-  if (!game.interiors.inside) return;
-  const it = game.interiors.inside;
-  const floorCol = it.kind === 'food' ? [0.85, 0.75, 0.6] : [0.6, 0.4, 0.7];
-  // Floor + ceiling + walls.
-  out.pushBox(ROOM.x, -0.3, ROOM.z, ROOM.w, 0.6, ROOM.d, floorCol);
-  out.pushBox(ROOM.x, ROOM.h + 0.3, ROOM.z, ROOM.w, 0.6, ROOM.d, [0.9, 0.9, 0.92]);
-  out.pushBox(ROOM.x, ROOM.h / 2, ROOM.z - ROOM.d / 2, ROOM.w, ROOM.h, 0.4, [0.8, 0.75, 0.7]);
-  out.pushBox(ROOM.x, ROOM.h / 2, ROOM.z + ROOM.d / 2, ROOM.w, ROOM.h, 0.4, [0.8, 0.75, 0.7]);
-  out.pushBox(ROOM.x - ROOM.w / 2, ROOM.h / 2, ROOM.z, 0.4, ROOM.h, ROOM.d, [0.8, 0.75, 0.7]);
-  out.pushBox(ROOM.x + ROOM.w / 2, ROOM.h / 2, ROOM.z, 0.4, ROOM.h, ROOM.d, [0.8, 0.75, 0.7]);
-  // Counter (north end) + shelves + shopkeeper + sign.
-  const cp = counterPoint();
-  out.pushBox(cp.x, 0.6, cp.z, 8, 1.2, 1.2, [0.5, 0.35, 0.2]);
-  out.pushBox(cp.x - 3, 1.5, cp.z, 1.6, 2, 1, [0.9, 0.3, 0.2]);
-  out.pushBox(cp.x + 3, 1.5, cp.z, 1.6, 2, 1, [0.95, 0.6, 0.1]);
-  out.pushBox(cp.x, 1.9, cp.z - 1.2, 0.7, 1.6, 0.5, [0.95, 0.8, 0.65]); // shopkeeper
-  out.pushBox(cp.x, 2.6, cp.z - 1.2, 0.6, 0.5, 0.5, [0.2, 0.2, 0.25]); // hair
-  out.pushBox(ROOM.x, 4.2, ROOM.z - ROOM.d / 2 + 0.3, 6, 1, 0.3, [0.95, 0.8, 0.15]); // sign
-  // Extra furniture: tables + chairs.
-  for (const [tx, tz] of [[-4, 2], [4, 2], [-4, -1], [4, -1]]) {
-    out.pushBox(ROOM.x + tx, 0.5, ROOM.z + tz, 1.6, 0.2, 1.6, [0.6, 0.45, 0.3]);
-    out.pushBox(ROOM.x + tx, 0.9, ROOM.z + tz + 1.2, 0.8, 0.8, 0.4, [0.5, 0.35, 0.2]);
-  }
+// Step the interior: keep the player inside the room bounds.
+export function stepInteriors(game, dt) {
+  const p = game.player;
+  if (!p.inside) return;
+  const idx = ROOMS.findIndex((r) => r.id === p.inside);
+  const origin = roomOrigin(idx < 0 ? 0 : idx);
+  p.x = Math.max(origin.x - 7, Math.min(origin.x + 7, p.x));
+  p.z = Math.max(origin.z - 5, Math.min(origin.z + 5, p.z));
 }
+
+// Draw the interior rooms (floor, walls, counter, shelves,
+// shopkeeper) into `out`. Only drawn when the player is inside
+// one — the rooms are far away, so drawing them always would
+// waste the batch.
+export function interiorBoxes(game, out) {
+  if (!game.player.inside) return out;
+  const idx = ROOMS.findIndex((r) => r.id === game.player.inside);
+  const origin = roomOrigin(idx < 0 ? 0 : idx);
+  const room = ROOMS[idx < 0 ? 0 : idx];
+  // Floor + walls (low, so the camera can see in).
+  out.push({ x: origin.x, y: -0.1, z: origin.z, w: 16, h: 0.2, d: 12, c: [0.7, 0.6, 0.5] });
+  out.push({ x: origin.x, y: 0, z: origin.z - 6, w: 16, h: 4, d: 0.5, c: room.colour });
+  out.push({ x: origin.x - 8, y: 0, z: origin.z, w: 0.5, h: 4, d: 12, c: room.colour });
+  out.push({ x: origin.x + 8, y: 0, z: origin.z, w: 0.5, h: 4, d: 12, c: room.colour });
+  // Counter + shelves + shopkeeper.
+  out.push({ x: origin.x, y: 0, z: origin.z - 2, w: 8, h: 1.2, d: 1.5, c: [0.6, 0.45, 0.3] });
+  out.push({ x: origin.x - 5, y: 1, z: origin.z - 5, w: 3, h: 2, d: 1, c: [0.5, 0.4, 0.3] });
+  out.push({ x: origin.x + 5, y: 1, z: origin.z - 5, w: 3, h: 2, d: 1, c: [0.5, 0.4, 0.3] });
+  out.push({ x: origin.x, y: 1.2, z: origin.z - 4, w: 0.8, h: 1, d: 0.5, c: [0.9, 0.9, 0.9] });
+  out.push({ x: origin.x, y: 2.2, z: origin.z - 4, w: 0.6, h: 0.55, d: 0.5, c: [0.85, 0.65, 0.5] });
+  return out;
+}
+
+export { ROOMS };

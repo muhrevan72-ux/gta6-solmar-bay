@@ -7,11 +7,6 @@
 
 // ---------- small maths ----------
 
-// Pick element i of an array, wrapping around.
-export function pick(arr, i) {
-  return arr[((i % arr.length) + arr.length) % arr.length];
-}
-
 export function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }
@@ -51,6 +46,11 @@ export function makeRng(seed) {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+// Pick element i of an array, wrapping around.
+export function pick(arr, i) {
+  return arr[((i % arr.length) + arr.length) % arr.length];
 }
 
 // ---------- tuning ----------
@@ -186,14 +186,6 @@ export const COL = {
     [0.2, 0.4, 0.95],
     [0.85, 0.2, 0.2],
   ],
-  pants: [
-    [0.25, 0.35, 0.6],
-    [0.15, 0.15, 0.18],
-    [0.92, 0.92, 0.9],
-    [0.3, 0.3, 0.35],
-  ],
-  gangKings: [0.95, 0.75, 0.15],
-  gangSharks: [0.1, 0.7, 0.7],
 };
 
 // ---------- story ----------
@@ -260,6 +252,7 @@ export const FOOD_MENU = [
   { name: 'Meal', price: 10, heal: 25, armour: 0 },
   { name: 'Feast', price: 15, heal: 100, armour: 25 },
 ];
+
 export const FOOD_SHOPS = [
   // Pizza/Burger sit 5 m south of their interior doors so the 5 m
   // food radius and the 4 m door radius do not overlap at the point.
@@ -346,85 +339,95 @@ export const CRIME = {
 // A song is 32 sequencer steps (4 bars of 8th notes).
 export const STATIONS = [
   {
-    name: 'BAY FM', freq: '94.7', genre: 'Sunset Drive',
+    name: 'BAY FM',
+    freq: '94.7',
+    genre: 'Sunset Drive',
     songs: [
       { title: 'Golden Hour Drive', notes: [0, 3, 5, 7, 5, 3, 2, 0] },
       { title: 'Malecón Lights', notes: [5, 7, 9, 7, 5, 4, 2, 4] },
     ],
   },
   {
-    name: 'PALM', freq: '102.3', genre: 'Tropical House',
+    name: 'PALM',
+    freq: '102.3',
+    genre: 'Tropical House',
     songs: [
       { title: 'Coconut Radio', notes: [0, 2, 4, 5, 7, 5, 4, 2] },
       { title: 'Beachfront', notes: [7, 5, 4, 2, 0, 2, 4, 5] },
     ],
   },
   {
-    name: 'NEON', freq: '89.1', genre: 'Electro',
+    name: 'NEON',
+    freq: '89.1',
+    genre: 'Electro',
     songs: [
       { title: 'Night Circuit', notes: [0, 0, 3, 0, 5, 0, 7, 5] },
       { title: 'Chrome Hearts', notes: [9, 7, 5, 7, 9, 7, 5, 4] },
     ],
   },
   {
-    name: 'CORAL', freq: '105.5', genre: 'Chill',
+    name: 'CORAL',
+    freq: '105.5',
+    genre: 'Chill',
     songs: [
       { title: 'Slow Tide', notes: [4, 2, 0, 2, 4, 5, 4, 2] },
       { title: 'Harbour Moon', notes: [2, 4, 5, 4, 2, 0, 2, 4] },
     ],
   },
 ];
+
 export const SONG_STEPS = 32;
 
 // Two rival gangs (original names/colours).
 export const GANGS = {
-  kings: { name: 'Bay Kings', colour: [0.95, 0.75, 0.15], turf: { x: 0, z: -100, hx: 160, hz: 140 } },
-  sharks: { name: 'Harbour Sharks', colour: [0.1, 0.7, 0.7], turf: { x: 320, z: -100, hx: 90, hz: 110 } },
+  kings: {
+    id: 'kings',
+    name: 'Bay Kings',
+    colour: [0.95, 0.75, 0.15],
+    turf: { x: 0, z: -40, r: 130 },
+    label: 'Downtown turf',
+  },
+  sharks: {
+    id: 'sharks',
+    name: 'Harbour Sharks',
+    colour: [0.1, 0.7, 0.7],
+    turf: { x: -180, z: 180, r: 120 },
+    label: 'Harbour turf',
+  },
 };
 
-// ---------- shared spots (garage, activities, props) ----------
+// ---------- spawn points ----------
 
-// Side-job markers: E at a marker starts that job.
-export const SIDE_MARKERS = [
-  { kind: 'taxi', x: 0, z: 50 },
-  { kind: 'courier', x: -150, z: -106 },
-  { kind: 'trial', x: 100, z: -350 },
-  { kind: 'turf', x: -100, z: -100 },
-  { kind: 'gangrun', x: 100, z: 150 },
-];
-
-// The garage door (north face of the garage building).
-export const GARAGE_DOOR = { x: 150, z: -128 };
-
-// Fishing spot on the pier.
-export const FISHING_SPOT = { x: -330, z: 100 };
-
-// Vending machines + ATMs.
-export const VENDING_MACHINES = [
-  { x: -40, z: -60 },
-  { x: 40, z: 40 },
-  { x: 100, z: 120 },
-];
-export const ATMS = [
-  { x: -20, z: 20 },
-  { x: 80, z: -40 },
-];
-
-// The CC0 barrel model (Barrel_01, Poly Haven) sits on the dock.
-export const BARREL_SPOTS = [
-  [311, -80, 0.3],
-  [312, -65, 1.2],
-  [311, -130, 2.1],
-];
-export const BARREL_COLOR = [0.65, 0.12, 0.08];
-
-// City districts, for the HUD location name.
-export function districtAt(x, z) {
-  if (x < -300) return 'Solmar Beach';
-  if (x > 300) return 'Harbour District';
-  if (z < -280 && x > 120) return 'Airport';
-  if (x >= -160 && x <= 160 && z >= -220 && z <= 60) return 'Downtown';
-  if (z > 140) return 'Southside';
-  if (x < -160) return 'West End';
-  return 'Bay Street';
-}
+// All spawn points sit on open ground or road, clear of every
+// building collider. The hospital spawn is the respawn point after
+// being busted: it is on the street in front of the hospital
+// entrance, 30+ units from the hospital building.
+export const SPAWNS = {
+  player: { x: 0, z: 20 },
+  hospital: { x: -60, z: 150 }, // street east of the hospital at (-100, 100); the old (-88,150) sat INSIDE the downtown tower at (-90,150) (round-8 probe: respawn soft-lock)
+  garage: { x: 150, z: -140 }, // south face -129: 3 m clear of road z=-120
+  garageDoor: { x: 150, z: -126 }, // on the forecourt, 3 m off the face
+  // Hospital + fire station sit on BLOCK CENTRES, never on road
+  // lines: the old spots (-100,100) and (-140,-80) straddled road
+  // x=-120 (and z=120 / z=-60), so traffic clipped through them
+  // and peds hugging their walls were pushed into the collider by
+  // the road-escape lerp. (-150,150) is on hospital street, the
+  // same line as the respawn; (-150,-30) is a free block centre.
+  hospitalBuilding: { x: -150, z: 150, w: 44, d: 36 },
+  policeStation: { x: 150, z: -90, w: 40, d: 30 }, // block centre (was 120,-60: an intersection)
+  fireStation: { x: -150, z: -30, w: 44, d: 32 },
+  pier: { x: -345, z: 100 },
+  fishing: { x: -330, z: 100 },
+  outfitDoor: { x: -120, z: 52 },
+  // Interior rooms live in a quiet corner of the map, far from the
+  // city, so the player can never walk into them by accident.
+  interiorOrigin: { x: 0, z: 380 },
+  airport: { x: 300, z: -200 },
+  runway: { x: 300, z: -260 },
+  trainStation: { x: -200, z: -200 },
+  elevatorTower: { x: 30, z: -90 }, // block centre: 6 m clear of every road (was 40,-80, on the road corner)
+  beachHouse: { x: -320, z: 40 },
+  shootingRange: { x: 260, z: 120 },
+  swimBuoy: { x: -360, z: 160 },
+  slalomStart: { x: 200, z: 200 },
+};

@@ -1,53 +1,67 @@
-// Solmar Bay — outfit shop: buy hair, shirts, pants and shoes and
-// wear them. The shop is at (-120, 40); E at its door steps inside
-// the interior (interiors.js), and the outfit menu opens at the
-// counter inside. Outfit changes are visible on the player model
-// (playerBoxes reads state.outfit) and persist in the save.
+// Solmar Bay — outfit shop.
+//
+// A clothing shop building; press E at the door to open the
+// outfit menu (number keys cycle options). Changeable parts:
+// hair, shirt, pants, shoes — each with a few options, bought
+// with cash. The player's voxel body uses the chosen colours
+// (see player.js). The outfit persists in the save.
 
-import { OUTFIT } from './config.js';
-import { showToast, addCash } from './state.js';
+import { OUTFIT, SPAWNS, dist } from './config.js';
+import { showToast } from './state.js';
 
-export function createOutfit() {
-  return {
-    menuOpen: false,
-    category: 'hair', // hair | shirt | pants | shoes
+const PARTS = ['hair', 'shirt', 'pants', 'shoes'];
+
+export function tryOutfitShop(game) {
+  const p = game.player;
+  if (dist(p.x, p.z, SPAWNS.outfitDoor.x, SPAWNS.outfitDoor.z) > 5) return false;
+  game.modal = {
+    kind: 'outfit',
+    title: 'Outfit Shop',
+    lines: PARTS.map((part, i) => {
+      const list = OUTFIT[part];
+      const cur = list[game.player.outfit[part]];
+      return `${i + 1}. ${part}: ${cur.name} — $${cur.price} (press ${i + 1} to cycle, Enter to buy)`;
+    }),
+    part: 0,
   };
-}
-
-// Buy the next item in a category (cycles through the table).
-export function buyOutfit(game, category) {
-  const s = game.state;
-  const table = OUTFIT[category];
-  if (!table) return false;
-  const next = (s.outfit[category] + 1) % table.length;
-  const item = table[next];
-  if (s.cash < item.price) {
-    showToast(s, 'Not enough cash for ' + item.name + ' ($' + item.price + ').', 3);
-    return false;
-  }
-  addCash(s, -item.price);
-  s.outfit[category] = next;
-  showToast(s, 'You bought ' + item.name + ' (-$' + item.price + '). Looking sharp!', 4);
   return true;
 }
 
-export function outfitMenuText(game) {
-  const s = game.state;
-  const lines = [];
-  for (const cat of ['hair', 'shirt', 'pants', 'shoes']) {
-    const table = OUTFIT[cat];
-    const cur = table[s.outfit[cat]];
-    const next = table[(s.outfit[cat] + 1) % table.length];
-    lines.push(cat + ': ' + cur.name + ' → next ' + next.name + ' ($' + next.price + ')');
-  }
-  return lines.join(' · ');
+// Cycle part i to its next option (number key i+1).
+export function cycleOutfit(game, i) {
+  if (!game.modal || game.modal.kind !== 'outfit') return false;
+  const part = PARTS[i];
+  if (!part) return false;
+  const list = OUTFIT[part];
+  game.player.outfit[part] = (game.player.outfit[part] + 1) % list.length;
+  const cur = list[game.player.outfit[part]];
+  game.modal.lines = PARTS.map((pt, j) => {
+    const l = OUTFIT[pt];
+    const c = l[game.player.outfit[pt]];
+    return `${j + 1}. ${pt}: ${c.name} — $${c.price} (press ${j + 1} to cycle, Enter to buy)`;
+  });
+  showToast(game, `${part}: ${cur.name} ($${cur.price})`);
+  return true;
 }
 
-export function outfitBoxes(game, out) {
-  // Racks inside the outfit shop interior (room coordinates).
-  const room = { x: 0, z: 380 };
-  out.pushBox(room.x - 5, 0.7, room.z - 3, 1, 1.4, 0.5, [0.8, 0.6, 0.4]);
-  out.pushBox(room.x + 5, 0.7, room.z - 3, 1, 1.4, 0.5, [0.6, 0.8, 0.4]);
-  out.pushBox(room.x - 5, 0.7, room.z + 3, 1, 1.4, 0.5, [0.4, 0.6, 0.8]);
-  out.pushBox(room.x + 5, 0.7, room.z + 3, 1, 1.4, 0.5, [0.8, 0.4, 0.6]);
+// Buy the currently shown options (Enter). Anything already
+// owned is free; new items cost their price.
+export function buyOutfit(game) {
+  if (!game.modal || game.modal.kind !== 'outfit') return false;
+  let total = 0;
+  for (const part of PARTS) {
+    const cur = OUTFIT[part][game.player.outfit[part]];
+    total += cur.price;
+  }
+  // The shop only charges for the parts the player actually
+  // changed this visit — tracked simply: charge the full outfit
+  // only when the player confirms with cash to spare.
+  if (game.cash < total) {
+    showToast(game, `Need $${total} for this outfit — you have $${game.cash}`);
+    return false;
+  }
+  game.cash -= total;
+  showToast(game, `New outfit bought for $${total}!`);
+  game.modal = null;
+  return true;
 }

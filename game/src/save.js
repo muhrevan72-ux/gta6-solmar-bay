@@ -1,36 +1,31 @@
-// Solmar Bay — localStorage save/load (save slot 1).
+// Solmar Bay — localStorage save/load.
 //
-// Saves cash, bank, health, armour, bombs, respect, weapons, ammo,
-// outfit, owned cars, flags, chapter, day, clock, stats and the
-// player position. Wanted is never saved (a fresh load starts clean).
-// All storage access is guarded: in a browser without localStorage
-// (or a blocked one) the game simply plays without saving.
+// One slot: cash, bank, chapter progress, position, outfit, owned
+// cars, unlocks, respect, stats. Guarded for Node (no
+// localStorage) so headless tests can call it safely.
 
-const SAVE_KEY = 'solmar-bay-save-v1';
+const KEY = 'solmar-bay-save-1';
 
 export function saveGame(game) {
   if (typeof localStorage === 'undefined') return false;
-  const s = game.state;
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify({
-      cash: s.cash,
-      bank: s.bank,
-      health: s.health,
-      armour: s.armour,
-      bombs: s.bombs,
-      wanted: 0,
-      respect: s.respect,
-      weapons: s.weapons,
-      ammo: { smg: s.ammo.smg, shotgun: s.ammo.shotgun },
-      outfit: s.outfit,
-      ownedCars: s.ownedCars,
-      flags: s.flags,
-      chapter: s.chapter,
-      day: s.day,
-      clock: s.clock,
-      stats: s.stats,
-      player: { x: s.player.x, z: s.player.z, heading: s.player.heading },
-    }));
+    const data = {
+      cash: game.cash,
+      bank: game.bank,
+      chapter: game.chapter,
+      chapterDone: game.chapterDone,
+      respect: game.respect,
+      x: game.player.x,
+      z: game.player.z,
+      outfit: game.player.outfit,
+      ownedCars: game.ownedCars,
+      unlocks: game.unlocks,
+      stats: game.stats,
+      day: game.day,
+      clock: game.clock,
+      saveSlot: game.saveSlot,
+    };
+    localStorage.setItem(KEY, JSON.stringify(data));
     return true;
   } catch (e) {
     return false;
@@ -38,53 +33,44 @@ export function saveGame(game) {
 }
 
 export function loadGame(game) {
-  if (typeof localStorage === 'undefined') return false;
-  let raw = null;
+  if (typeof localStorage === 'undefined') return null;
   try {
-    raw = localStorage.getItem(SAVE_KEY);
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    game.cash = data.cash ?? game.cash;
+    game.bank = data.bank ?? 0;
+    game.chapter = data.chapter ?? 1;
+    game.chapterDone = data.chapterDone ?? 0;
+    game.respect = data.respect ?? 0;
+    game.player.x = data.x ?? game.player.x;
+    game.player.z = data.z ?? game.player.z;
+    game.player.outfit = data.outfit ?? game.player.outfit;
+    game.ownedCars = data.ownedCars ?? [];
+    game.unlocks = data.unlocks ?? game.unlocks;
+    game.stats = data.stats ?? game.stats;
+    game.day = data.day ?? 1;
+    game.clock = data.clock ?? 8;
+    return data;
   } catch (e) {
-    return false;
+    return null;
   }
-  if (!raw) return false;
-  let data;
-  try {
-    data = JSON.parse(raw);
-  } catch (e) {
-    return false;
-  }
-  const s = game.state;
-  s.cash = data.cash ?? 150;
-  s.bank = data.bank ?? 0;
-  s.health = data.health ?? 100;
-  s.armour = data.armour ?? 0;
-  s.bombs = data.bombs ?? 3;
-  s.wanted = 0;
-  s.respect = data.respect ?? 0;
-  if (data.weapons) s.weapons = data.weapons;
-  if (data.ammo) {
-    s.ammo.smg = data.ammo.smg ?? 0;
-    s.ammo.shotgun = data.ammo.shotgun ?? 0;
-  }
-  if (data.outfit) s.outfit = data.outfit;
-  s.ownedCars = data.ownedCars || [];
-  s.flags = data.flags || {};
-  s.chapter = data.chapter ?? 1;
-  s.day = data.day ?? 1;
-  s.clock = data.clock ?? 6 * 3600;
-  if (data.stats) s.stats = data.stats;
-  if (data.player) {
-    s.player.x = data.player.x;
-    s.player.z = data.player.z;
-    s.player.heading = data.player.heading || 0;
-  }
-  return true;
 }
 
 export function hasSave() {
   if (typeof localStorage === 'undefined') return false;
   try {
-    return !!localStorage.getItem(SAVE_KEY);
+    return !!localStorage.getItem(KEY);
   } catch (e) {
     return false;
+  }
+}
+
+export function clearSave() {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    localStorage.removeItem(KEY);
+  } catch (e) {
+    // ignore
   }
 }

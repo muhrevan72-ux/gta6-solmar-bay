@@ -1,573 +1,518 @@
-// Solmar Bay — the voxel city generator.
+// Solmar Bay — the voxel city.
 //
-// Pure data: generateCity(seed) returns the whole city as plain
-// objects (buildings, roads, props, colliders, spawns, neon signs).
-// The renderer turns it into boxes; the systems read its colliders.
-// Deterministic: the same seed builds the same city every run.
-//
-// Layout (800 x 800, roads on a 100-unit grid):
-//   downtown towers around the origin, beach + water on the west
-//   (sand -340..-300, water x < -340), harbour + container yard on
-//   the east, airport north-east, suburbs south-west, highway loop
-//   at +-350, train loop at +-320 with the station on the west side.
-//
-// REQUIRED (round-4 play-test): spawns.hospital is on the STREET
-// outside the hospital building, at least 30 units from every
-// building collider — never inside a building.
+// A deterministic city (~800x800) built from a fixed seed, so the
+// map never changes between sessions: downtown grid in the middle,
+// beach + ocean on the west, harbour docks in the south, suburbs
+// around the edges, an airport in the east, a highway loop around
+// it all. Colliders are plain AABBs; the renderer gets its static
+// geometry from buildStaticBoxes().
 
-import { makeRng, COL, FOOD_SHOPS } from './config.js';
-import { BoxBatch } from './render.js';
-import { INTERIOR_DOORS } from './interiors.js';
+import { makeRng, clamp, COL, FOOD_SHOPS, SPAWNS } from './config.js';
 
-const ROAD_LINES = [-300, -200, -100, 0, 100, 200, 300];
-const ROAD_HALF = 7; // road half-width
-const CITY_HALF = 400;
+export const CITY_HALF = 400;
 
-export function isOnRoad(x, z) {
-  for (const l of ROAD_LINES) {
-    if (Math.abs(x - l) < ROAD_HALF + 1) return true;
-    if (Math.abs(z - l) < ROAD_HALF + 1) return true;
-  }
-  // Highway ring.
-  if (Math.abs(Math.abs(x) - 350) < 9 || Math.abs(Math.abs(z) - 350) < 9) return true;
-  return false;
-}
+// Road centrelines. Vertical roads run along z at these x values;
+// horizontal roads run along x at these z values.
+export const ROAD_X = [-240, -180, -120, -60, 0, 60, 120, 180, 240];
+export const ROAD_Z = [-240, -180, -120, -60, 0, 60, 120, 180, 240];
+export const ROAD_W = 12;
 
-// Is (x, z) on a road? (city argument kept for a uniform signature.)
-export function isRoadAt(city, x, z) {
-  return isOnRoad(x, z);
-}
-
-// Is (x, z) in the water (the harbour basin or the ocean west of
-// the beach)?
-export function isWaterAt(city, x, z) {
-  const b = city.harbourBasin;
-  if (x >= b.x0 && x <= b.x1 && z >= b.z0 && z <= b.z1) return true;
-  return x < -340;
-}
-
-// Fractional position inside a 100-unit block, 0..100.
-function blockFrac(v) {
-  return ((v % 100) + 100) % 100;
-}
-
-export function generateCity(seed) {
-  const rng = makeRng(seed === undefined ? 1337 : seed);
+export function buildCity(seed = 1337) {
+  const rng = makeRng(seed);
   const city = {
-    buildings: [], // {x, z, sx, sz, h, c, kind, roof}
-    trees: [], // {x, z, kind: 'tree'|'palm', s}
-    lamps: [], // {x, z}
-    benches: [], // {x, z, rot}
-    cans: [], // trash cans {x, z}
-    lights: [], // traffic lights {x, z, state}
-    neon: [], // neon sign boxes (drawn dynamically, they glow)
-    flowers: [], // {x, z, c}
-    pots: [], // {x, z}
-    clouds: [], // {x, y, z, s}
-    waves: [], // ocean wave crests {x, z, phase}
-    spawns: {},
-    anchors: {},
-    tallestTower: null,
-    elevator: null, // {x, z, towerH}
-    pier: { x: -345, z: 100 },
-    station: { x: -320, z: 0 },
-    airport: { runway: { x: 200, z: -320, len: 160 }, hangars: [] },
-    harbourBasin: { x0: 340, x1: 400, z0: -160, z1: -40 },
+    buildings: [], // {x, z, w, d, h, colour, kind, district, yaw}
+    colliders: [], // {x, z, hw, hd}
+    roads: [], // road strips for the renderer
+    neon: [], // {x, y, z, c, w} dynamic neon signs
+    clouds: [], // {x, z, y, s}
+    waves: [], // {x, z, phase}
+    trees: [], // {x, z, palm}
+    lamps: [],
+    benches: [],
+    lights: [], // traffic lights {x, z, t}
+    containers: [],
+    props: [], // {x, z, kind, colour}
+    shops: [], // food shops + outfit shop (with door positions)
+    doors: [], // interior/garage doors {x, z, id, label}
+    districts: [],
+    fishSpots: [],
   };
 
-  // ---- fixed landmark buildings (colliders the game depends on) ----
-  function addBuilding(x, z, sx, sz, h, c, kind) {
-    const b = { x, z, sx, sz, h, c, kind: kind || 'block' };
+  const addCollider = (x, z, w, d) => {
+    city.colliders.push({ x, z, hw: w / 2, hd: d / 2 });
+  };
+  const addBuilding = (b) => {
     city.buildings.push(b);
+    addCollider(b.x, b.z, b.w, b.d);
     return b;
-  }
-  // Hospital at (-150, 150), 56 x 40.
-  addBuilding(-150, 150, 56, 40, 16, [0.92, 0.92, 0.94], 'hospital');
-  // Garage (150, -150), 40 x 30.
-  addBuilding(150, -150, 40, 30, 10, [0.6, 0.6, 0.65], 'garage');
-  // Police station — street in front is the police spawn.
-  addBuilding(-150, -130, 44, 30, 14, [0.25, 0.35, 0.6], 'police');
-  // Fire station.
-  addBuilding(150, 132, 44, 30, 12, [0.85, 0.2, 0.2], 'fire');
-  // Food-shop buildings (fronts face south; food points sit just
-  // outside the south face, on standable ground).
-  addBuilding(-60, -44, 24, 20, 9, [0.9, 0.3, 0.2], 'shop-pizza');
-  addBuilding(60, -40, 24, 20, 9, [0.95, 0.6, 0.1], 'shop-burger');
-  addBuilding(-40, 58, 20, 20, 8, [0.95, 0.8, 0.2], 'shop-chicken');
-  addBuilding(40, 120, 20, 20, 8, [0.95, 0.5, 0.7], 'shop-donut');
-  addBuilding(120, 56, 20, 20, 8, [0.4, 0.8, 0.3], 'shop-taco');
-  // Outfit shop (has an interior too).
-  addBuilding(-120, 40, 24, 20, 9, [0.6, 0.3, 0.8], 'shop-outfit');
-  // Safehouse (suburbs) and hideout (north).
-  addBuilding(-250, 250, 18, 16, 7, [0.7, 0.6, 0.5], 'safehouse');
-  addBuilding(250, -250, 18, 16, 7, [0.6, 0.55, 0.5], 'hideout');
-  // Airport hangars.
-  addBuilding(160, -330, 30, 22, 10, [0.7, 0.7, 0.72], 'hangar');
-  addBuilding(240, -330, 30, 22, 10, [0.7, 0.7, 0.72], 'hangar');
-  // Harbour vault container (kept clear of the x = 300 and z = -100
-  // roads — the old spot (310, -100) sat on their intersection).
-  addBuilding(320, -120, 24, 14, 8, [0.9, 0.75, 0.2], 'vault');
-
-  // ---- downtown towers (blocks near the origin) ----
-  // Towers sit at BLOCK CENTRES (bx + 50, bz + 50). The old code
-  // centred them on the grid lines (bx, bz) — i.e. ON the roads —
-  // so a tower straddled the x = 0 road and cars could not drive
-  // south out of the taxi stand.
-  let tallest = null;
-  for (let bx = -100; bx <= 100; bx += 100) {
-    for (let bz = -300; bz <= 100; bz += 100) {
-      // Skip blocks that hold fixed landmarks.
-      if (bx === -200 && bz === -200) continue; // police station block
-      if (bx === 100 && bz === -200) continue; // garage block
-      if (bx === -100 && bz === -100) continue; // pizza shop block
-      if (bx === 0 && bz === -100) continue; // burger shop block
-      if (bx === -100 && bz === 0) continue; // chicken shop block
-      if (bx === 100 && bz === 0) continue; // taco shop block
-      if (bx === -100 && bz === 100) continue; // hospital spawn block
-      if (bx === 0 && bz === 100) continue; // donut shop block
-      const h = 28 + Math.floor(rng() * 42);
-      const w = 34 + Math.floor(rng() * 10);
-      const d = 34 + Math.floor(rng() * 10);
-      const cx = bx + 50 + (rng() - 0.5) * 8;
-      const cz = bz + 50 + (rng() - 0.5) * 8;
-      const pastel = [
-        [0.85, 0.75, 0.7], [0.7, 0.8, 0.85], [0.9, 0.85, 0.75],
-        [0.75, 0.7, 0.8], [0.85, 0.8, 0.7], [0.65, 0.75, 0.8],
-      ];
-      const b = addBuilding(cx, cz, w, d, h, pastel[Math.floor(rng() * pastel.length)], 'tower');
-      b.roof = { ac: true, tank: h > 45 };
-      if (!tallest || h > tallest.h) tallest = b;
-      // Neon sign on most downtown towers.
-      if (rng() < 0.8) {
-        const nc = COL.neon[Math.floor(rng() * COL.neon.length)];
-        city.neon.push({ x: cx - w / 2, y: h - 2, z: cz + d / 2 + 0.5, sx: 0.6, sy: 1.6, sz: 10, c: [...nc] });
-      }
-    }
-  }
-  city.tallestTower = tallest;
-  // Glass elevator on the tallest tower (exterior platform).
-  if (tallest) {
-    city.elevator = { x: tallest.x + tallest.sx / 2 + 3, z: tallest.z, towerH: tallest.h, y: 0 };
-  }
-
-  // ---- mid-rise blocks + suburban houses ----
-  // Same block-centre rule as the downtown towers: buildings sit
-  // inside their 100 x 100 block, never on a road line.
-  for (let bx = -300; bx <= 300; bx += 100) {
-    for (let bz = -300; bz <= 300; bz += 100) {
-      if (bx >= -100 && bx <= 100 && bz >= -300 && bz <= 100) continue; // downtown
-      if (bx === -200 && bz === 100) continue; // hospital block
-      if (bx === -100 && bz === 100) continue; // hospital spawn block (keep the respawn street clear)
-      if (bx === 100 && bz === 100) continue; // fire block
-      if (bx === -200 && bz === 0) continue; // outfit shop block
-      if (bx === -300 && bz === 200) continue; // safehouse block
-      if (bx >= 100 && bz <= -300) continue; // airport
-      if (bx >= 300) continue; // harbour
-      if (bx <= -300) continue; // beach
-      if (rng() < 0.15) continue; // park / empty lot
-      const isHouse = bz > 100 || bx < -100;
-      const h = isHouse ? 6 + Math.floor(rng() * 4) : 12 + Math.floor(rng() * 14);
-      const w = isHouse ? 12 + Math.floor(rng() * 8) : 26 + Math.floor(rng() * 10);
-      const d = isHouse ? 12 + Math.floor(rng() * 8) : 26 + Math.floor(rng() * 10);
-      const cx = bx + 50 + (rng() - 0.5) * 20;
-      const cz = bz + 50 + (rng() - 0.5) * 20;
-      const c = isHouse
-        ? [[0.85, 0.7, 0.55], [0.7, 0.75, 0.65], [0.9, 0.8, 0.65]][Math.floor(rng() * 3)]
-        : [[0.78, 0.74, 0.7], [0.7, 0.72, 0.78], [0.82, 0.78, 0.72]][Math.floor(rng() * 3)];
-      addBuilding(cx, cz, w, d, h, c, isHouse ? 'house' : 'block');
-      // A second, smaller building in the same block (blocks are 100
-      // wide, two buildings fit with room to spare) — only if it
-      // clears the first building and stays clear of the roads.
-      if (rng() < 0.6) {
-        const h2 = isHouse ? 5 + Math.floor(rng() * 3) : 10 + Math.floor(rng() * 10);
-        const w2 = isHouse ? 10 + Math.floor(rng() * 6) : 20;
-        const d2 = isHouse ? 10 + Math.floor(rng() * 6) : 20;
-        const x2 = bx + 80, z2 = bz + 80;
-        const overlapsFirst = (x2 - w2 / 2 < cx + w / 2 + 2) && (x2 + w2 / 2 > cx - w / 2 - 2)
-          && (z2 - d2 / 2 < cz + d / 2 + 2) && (z2 + d2 / 2 > cz - d / 2 - 2);
-        const roadClear = (x2 + w2 / 2 < bx + 93) && (z2 + d2 / 2 < bz + 93);
-        if (!overlapsFirst && roadClear) addBuilding(x2, z2, w2, d2, h2, c, isHouse ? 'house' : 'block');
-      }
-    }
-  }
-
-  // ---- spawns (all on streets, clear of every collider) ----
-  // Hospital spawn: on the road east of the hospital, 34 units from
-  // its east face (x = -122) — clear of every collider.
-  city.spawns = {
-    player: { x: -50, z: 0 },
-    hospital: { x: -88, z: 150 },
-    police: { x: -150, z: -106 },
-    fire: { x: -150, z: -106 },
-    garage: { x: 150, z: -106 },
-    safehouse: { x: -250, z: 210 },
-    airport: { x: 200, z: -320 },
-    beach: { x: -310, z: 100 },
-    harbour: { x: 330, z: -100 },
-    station: { x: -320, z: 0 },
-    range: { x: 0, z: -350 },
-    trial: { x: 100, z: -350 },
-    pier: { x: -330, z: 100 },
-  };
-  city.anchors = {
-    garage: { x: 150, z: -150, label: 'Garage' },
-    harbour: { x: 330, z: -100, label: 'Harbour docks' },
-    hideout: { x: 250, z: -250, label: 'Hideout' },
-    safehouse: { x: -250, z: 250, label: 'Safehouse' },
   };
 
-  // ---- trees, palms, lamps, benches, cans, flowers, pots ----
-  for (let i = 0; i < 90; i++) {
-    const x = -380 + rng() * 760;
-    const z = -380 + rng() * 760;
-    if (isOnRoad(x, z)) continue;
-    if (x < -300) continue; // beach
-    if (x > 300) continue; // harbour
-    if (collideCircle(city, x, z, 3)) continue;
-    city.trees.push({ x, z, kind: rng() < 0.3 ? 'palm' : 'tree', s: 0.8 + rng() * 0.6 });
-  }
-  // Palm row along the beach road.
-  for (let z = -200; z <= 260; z += 40) {
-    city.trees.push({ x: -292, z, kind: 'palm', s: 1.1 });
-  }
-  // Lamps along roads.
-  for (const l of ROAD_LINES) {
-    for (let t = -300; t <= 300; t += 100) {
-      city.lamps.push({ x: l + 9, z: t });
-      city.lamps.push({ x: t, z: l + 9 });
+  // ---- downtown towers (central grid blocks) ----
+  const towerColours = [
+    [0.72, 0.68, 0.62], [0.6, 0.62, 0.68], [0.78, 0.7, 0.58],
+    [0.65, 0.6, 0.66], [0.7, 0.72, 0.6], [0.58, 0.66, 0.7],
+  ];
+  // Downtown towers stand on BLOCK CENTRES (+/-30, +/-90, ...),
+  // never on road lines. Roads run at multiples of 60; a tower
+  // centred on a road line would block the road, make traffic
+  // clip through it, and kill line-of-sight along the road
+  // (round-8 probe: a tower at (0,60) sat in the middle of road
+  // x=0). The four blocks around the central plaza stay open.
+  for (let gx = -2; gx <= 2; gx++) {
+    for (let gz = -2; gz <= 2; gz++) {
+      const bx = gx * 60 + 30;
+      const bz = gz * 60 + 30;
+      if (Math.abs(bx) < 45 && Math.abs(bz) < 45) continue; // central plaza
+      // The elevator tower stands at (40,-80); skip its block.
+      if (Math.abs(bx - 40) < 40 && Math.abs(bz + 80) < 40) continue;
+      const h = 18 + Math.floor(rng() * 38);
+      const w = 24 + Math.floor(rng() * 14);
+      const d = 24 + Math.floor(rng() * 14);
+      addBuilding({
+        x: bx, z: bz, w, d, h,
+        colour: towerColours[Math.floor(rng() * towerColours.length)],
+        kind: 'tower', district: 'Downtown',
+        yaw: rng() < 0.25 ? 0.12 : 0,
+      });
     }
   }
-  // Benches (8, downtown) + trash cans (9, downtown intersections).
-  const benchSpots = [[-40, 20], [40, 20], [-40, -60], [40, -60], [12, 40], [-80, 12], [80, 12], [12, -140]];
-  for (const [x, z] of benchSpots) city.benches.push({ x, z, rot: rng() * Math.PI });
-  const canSpots = [[-92, -92], [92, -92], [-92, 92], [92, 92], [-8, -8], [8, 8], [-92, 8], [8, -92], [0, 108]];
-  for (const [x, z] of canSpots) city.cans.push({ x, z });
-  // Flower beds along sidewalks + parks.
-  for (let i = 0; i < 40; i++) {
-    const x = -380 + rng() * 760;
-    const z = -380 + rng() * 760;
-    if (isOnRoad(x, z) || collideCircle(city, x, z, 2)) continue;
-    city.flowers.push({ x, z, c: COL.neon[Math.floor(rng() * COL.neon.length)] });
+  // The tallest tower, with the glass elevator on its side.
+  // On the block centre (30,-90) (was 40,-80): the old spot's
+  // faces intruded 4 m into roads x=60 and z=-60, so traffic on
+  // lanes x=57 and z=-63 clipped its corner. The block centre
+  // clears every road by 6 m; the tower loop already skips it.
+  addBuilding({
+    x: SPAWNS.elevatorTower.x, z: SPAWNS.elevatorTower.z,
+    w: 36, d: 36, h: 70, colour: [0.62, 0.64, 0.72],
+    kind: 'elevatorTower', district: 'Downtown', yaw: 0,
+  });
+
+  // ---- central plaza (open, benches + lamps + flowers) ----
+  // Benches and lamps stay off the road bands: road x=0 runs
+  // through the plaza, so a bench at x=-4 would sit ON the road
+  // (round-8 probe: a sitter at (-4,-8) on road x=0).
+  const benchXs = [-28, -18, -10, 10, 18, 28];
+  for (let i = 0; i < 6; i++) {
+    city.benches.push({ x: benchXs[i], z: -8, facing: 0 });
+    city.benches.push({ x: benchXs[i], z: 8, facing: Math.PI });
   }
-  // Plant pots near building entrances.
-  for (const b of city.buildings.slice(0, 24)) {
-    city.pots.push({ x: b.x - b.sx / 2 - 2, z: b.z + b.sz / 2 + 2 });
-    city.pots.push({ x: b.x + b.sx / 2 + 2, z: b.z + b.sz / 2 + 2 });
+  const lampXs = [-32, -24, -16, 16, 24, 32, -40, 40];
+  for (let i = 0; i < 8; i++) {
+    city.lamps.push({ x: lampXs[i], z: i % 2 ? -16 : 16 });
   }
-  // Traffic lights at 24 intersections.
-  for (const lx of [-200, -100, 0, 100, 200]) {
-    for (const lz of [-200, -100, 0, 100, 200]) {
-      if (lx === 0 && lz === 0) continue;
-      city.lights.push({ x: lx + 9, z: lz + 9, state: 'green', t: rng() * 8 });
-    }
+
+  // ---- suburb houses (ring around downtown) ----
+  const houseColours = [
+    [0.9, 0.75, 0.6], [0.75, 0.85, 0.9], [0.9, 0.85, 0.75],
+    [0.85, 0.7, 0.7], [0.7, 0.85, 0.7], [0.95, 0.9, 0.8],
+  ];
+  for (let i = 0; i < 42; i++) {
+    const ang = rng() * Math.PI * 2;
+    const r = 220 + rng() * 110;
+    const x = Math.round(Math.cos(ang) * r);
+    const z = Math.round(Math.sin(ang) * r);
+    if (x < -290) continue; // beach side stays open
+    if (z > 250) continue; // harbour stays open
+    if (x > 250 && z < -130) continue; // airport stays open
+    if (Math.abs(x) < 200 && Math.abs(z) < 200) continue; // downtown
+    const onRoad = ROAD_X.some((rx) => Math.abs(x - rx) < 14) || ROAD_Z.some((rz) => Math.abs(z - rz) < 14);
+    if (onRoad) continue;
+    addBuilding({
+      x, z, w: 14 + Math.floor(rng() * 8), d: 12 + Math.floor(rng() * 8),
+      h: 5 + Math.floor(rng() * 4),
+      colour: houseColours[Math.floor(rng() * houseColours.length)],
+      kind: 'house', district: 'Suburbs', yaw: 0,
+    });
   }
-  // Clouds + ocean wave crests.
+
+  // ---- special buildings (fixed positions, from the design docs) ----
+  addBuilding({
+    x: SPAWNS.hospitalBuilding.x, z: SPAWNS.hospitalBuilding.z,
+    w: SPAWNS.hospitalBuilding.w, d: SPAWNS.hospitalBuilding.d, h: 14,
+    colour: [0.92, 0.92, 0.9], kind: 'hospital', district: 'Downtown', yaw: 0,
+  });
+  addBuilding({
+    x: SPAWNS.policeStation.x, z: SPAWNS.policeStation.z,
+    w: SPAWNS.policeStation.w, d: SPAWNS.policeStation.d, h: 12,
+    colour: [0.2, 0.3, 0.65], kind: 'police', district: 'Downtown', yaw: 0,
+  });
+  addBuilding({
+    x: SPAWNS.fireStation.x, z: SPAWNS.fireStation.z,
+    w: SPAWNS.fireStation.w, d: SPAWNS.fireStation.d, h: 12,
+    colour: [0.85, 0.2, 0.15], kind: 'fire', district: 'Downtown', yaw: 0,
+  });
+  addBuilding({
+    x: SPAWNS.garage.x, z: SPAWNS.garage.z,
+    w: 34, d: 22, h: 9, colour: [0.5, 0.55, 0.6],
+    kind: 'garage', district: 'Downtown', yaw: 0,
+  });
+  city.doors.push({ x: SPAWNS.garageDoor.x, z: SPAWNS.garageDoor.z, id: 'garage', label: 'Garage' });
+
+  // Food shops + outfit shop (doors on the shop fronts).
+  // The shop BUILDING is set back off the road its front faces:
+  // a building centred on a road line blocks the road (round-8
+  // probe: all five shop buildings sat on road lines). The front
+  // point and door stay where the player interacts; only the
+  // building moves, to the nearest block interior.
+  const SHOP_OFFSETS = {
+    'Pizza Palace': { dx: 17, dz: -8 },
+    'Burger Barn': { dx: -17, dz: -8 },
+    "Clucky's Chicken": { dx: 0, dz: 9 },
+    'Donut Dock': { dx: 0, dz: 9 },
+    'Taco Tide': { dx: -17, dz: 9 },
+  };
+  for (const s of FOOD_SHOPS) {
+    const off = SHOP_OFFSETS[s.name] || { dx: 0, dz: -8 };
+    const bx = s.x + off.dx;
+    const bz = s.z + off.dz;
+    addBuilding({
+      x: bx, z: bz, w: 18, d: 14, h: 8,
+      colour: s.colour, kind: 'shop', district: 'Downtown', yaw: 0,
+    });
+    city.shops.push({ ...s, doorX: s.x, doorZ: s.z - 1 });
+    city.doors.push({ x: s.x, z: s.z - 1, id: 'shop-' + s.name, label: s.name });
+  }
+  // Outfit shop: building set back east off road x=-120; the
+  // door stays at the front point (-120, 52).
+  addBuilding({
+    x: -103, z: 44, w: 18, d: 14, h: 9,
+    colour: [0.85, 0.6, 0.9], kind: 'outfit', district: 'Downtown', yaw: 0,
+  });
+  city.doors.push({ x: SPAWNS.outfitDoor.x, z: SPAWNS.outfitDoor.z, id: 'outfit', label: 'Outfit Shop' });
+
+  // Interior rooms live far away at (0, 380); the room shells are
+  // built by interiors.js, not here.
+
+  // ---- harbour (south): docks, containers, crane ----
   for (let i = 0; i < 10; i++) {
-    city.clouds.push({ x: -400 + rng() * 800, y: 90 + rng() * 40, z: -400 + rng() * 800, s: 8 + rng() * 14 });
+    const cx = -160 + i * 36;
+    const cz = 300 + (i % 2) * 22;
+    const h = 6 + (i % 3) * 6;
+    city.containers.push({ x: cx, z: cz, w: 12, d: 8, h, colour: [[0.9, 0.3, 0.2], [0.2, 0.6, 0.9], [0.95, 0.75, 0.15], [0.3, 0.8, 0.4]][i % 4] });
+    addCollider(cx, cz, 12, 8);
+  }
+  city.props.push({ x: 60, z: 320, kind: 'crane', colour: [0.95, 0.75, 0.15] });
+  addCollider(60, 320, 10, 10);
+  // Docks: wooden strips over the harbour water.
+  city.props.push({ x: -60, z: 330, kind: 'dock', colour: [0.6, 0.45, 0.3] });
+  city.props.push({ x: 120, z: 330, kind: 'dock', colour: [0.6, 0.45, 0.3] });
+
+  // ---- airport (east): runway, hangars, control tower ----
+  city.props.push({ x: SPAWNS.runway.x, z: SPAWNS.runway.z, kind: 'runway', colour: [0.14, 0.14, 0.16] });
+  // Hangars at z=-150 (was -170): the old row straddled road
+  // z=-180 and the first hangar straddled road x=240, so traffic
+  // clipped through them. The new row clears both roads, and the
+  // control tower clears the hangars.
+  for (let i = 0; i < 3; i++) {
+    addBuilding({
+      x: 276 + i * 44, z: -150, w: 30, d: 24, h: 10,
+      colour: [0.7, 0.72, 0.75], kind: 'hangar', district: 'Airport', yaw: 0,
+    });
+  }
+  addBuilding({
+    x: 340, z: -105, w: 10, d: 10, h: 26,
+    colour: [0.8, 0.82, 0.85], kind: 'tower', district: 'Airport', yaw: 0,
+  });
+
+  // ---- beach (west): sand, palms, umbrellas, pier ----
+  for (let i = 0; i < 14; i++) {
+    city.trees.push({ x: -308, z: -280 + i * 44, palm: true });
+  }
+  for (let i = 0; i < 8; i++) {
+    const ux = -360 + (i % 4) * 18;
+    const uz = -140 + Math.floor(i / 4) * 120;
+    city.props.push({ x: ux, z: uz, kind: 'umbrella', colour: [[0.95, 0.3, 0.3], [0.3, 0.6, 0.95], [0.95, 0.8, 0.2], [0.4, 0.85, 0.4]][i % 4] });
+  }
+  city.props.push({ x: SPAWNS.pier.x, z: SPAWNS.pier.z, kind: 'pier', colour: [0.6, 0.45, 0.3] });
+  city.fishSpots.push({ x: -360, z: 120 }, { x: -350, z: -60 }, { x: -100, z: 340 });
+
+  // ---- parks: trees, flowers, pots, benches ----
+  const parks = [{ x: -90, z: 90 }, { x: 150, z: 150 }, { x: -150, z: -150 }];
+  for (const p of parks) {
+    for (let i = 0; i < 5; i++) {
+      city.trees.push({ x: p.x - 16 + rng() * 32, z: p.z - 16 + rng() * 32, palm: false });
+    }
+    for (let i = 0; i < 10; i++) {
+      city.props.push({
+        x: p.x - 18 + rng() * 36, z: p.z - 18 + rng() * 36, kind: 'flower',
+        colour: [[0.95, 0.3, 0.5], [0.95, 0.8, 0.2], [0.6, 0.4, 0.95], [0.95, 0.95, 0.95]][Math.floor(rng() * 4)],
+      });
+    }
+    for (let i = 0; i < 4; i++) {
+      city.props.push({ x: p.x - 14 + i * 9, z: p.z + 20, kind: 'pot', colour: [0.6, 0.35, 0.2] });
+    }
+    city.benches.push({ x: p.x, z: p.z - 20, facing: Math.PI });
+  }
+
+  // ---- street props: lamps along main roads, hydrants, bus stops ----
+  for (const rx of [-120, 0, 120]) {
+    for (let z = -220; z <= 220; z += 44) city.lamps.push({ x: rx + 8, z });
+  }
+  for (let i = 0; i < 9; i++) {
+    city.props.push({ x: -60 + (i % 3) * 60, z: -180 + Math.floor(i / 3) * 120, kind: 'hydrant', colour: [0.9, 0.15, 0.15] });
+  }
+  for (const bx of [-60, 60]) {
+    city.props.push({ x: bx, z: 132, kind: 'busstop', colour: [0.2, 0.5, 0.9] });
   }
   for (let i = 0; i < 12; i++) {
-    city.waves.push({ x: -360 - rng() * 30, z: -300 + rng() * 600, phase: rng() * Math.PI * 2 });
+    city.props.push({ x: -200 + (i % 4) * 130, z: -200 + Math.floor(i / 4) * 140, kind: 'trash', colour: [0.3, 0.3, 0.33] });
   }
 
-  // ---- derived lists the systems read ----
-  // Roads as {vertical, coord} (the grid lines).
-  city.roads = [];
-  for (const l of ROAD_LINES) {
-    city.roads.push({ vertical: true, coord: l });
-    city.roads.push({ vertical: false, coord: l });
+  // ---- neon signs on downtown towers (~42) ----
+  for (const b of city.buildings) {
+    if (b.kind !== 'tower' && b.kind !== 'elevatorTower') continue;
+    const n = b.kind === 'elevatorTower' ? 4 : 2;
+    for (let i = 0; i < n; i++) {
+      city.neon.push({
+        x: b.x + (rng() < 0.5 ? -1 : 1) * (b.w / 2 + 0.3),
+        y: 4 + rng() * (b.h - 8),
+        z: b.z + (rng() - 0.5) * b.d * 0.7,
+        c: COL.neon[Math.floor(rng() * COL.neon.length)],
+        w: 3 + rng() * 3,
+      });
+    }
   }
-  // Traffic lights (alias of city.lights, the name the systems use).
-  city.trafficLights = city.lights;
-  // Chat spots: downtown sidewalk points where peds gather in pairs.
-  city.chatSpots = [
-    { x: -40, z: 30 }, { x: 40, z: -30 }, { x: 20, z: 60 }, { x: -20, z: -60 },
-    { x: 60, z: 30 }, { x: -60, z: -30 }, { x: 0, z: 80 }, { x: 80, z: 0 },
-  ];
-  // Food shops (same points as the food system).
-  city.foodShops = FOOD_SHOPS.map((s) => ({ ...s }));
-  // Circle-vs-building test, as a method the systems call.
-  city.collidesCircle = (x, z, r) => collideCircle(city, x, z, r) !== null;
 
-  // ---- static geometry batch (built once, drawn every frame) ----
-  city.staticBatch = buildStaticBatch(city, rng);
+  // ---- clouds (10) + ocean wave crests (12) ----
+  for (let i = 0; i < 10; i++) {
+    city.clouds.push({ x: -350 + rng() * 700, z: -350 + rng() * 700, y: 85 + rng() * 35, s: 10 + rng() * 14 });
+  }
+  for (let i = 0; i < 12; i++) {
+    city.waves.push({ x: -390 + rng() * 60, z: -360 + rng() * 720, phase: rng() * Math.PI * 2 });
+  }
+
+  // ---- traffic lights at 24 intersections ----
+  for (const rx of [-120, 0, 120]) {
+    for (const rz of [-180, -60, 60, 180]) {
+      city.lights.push({ x: rx + 7, z: rz + 7, t: Math.floor(rng() * 18) });
+      city.lights.push({ x: rx - 7, z: rz - 7, t: Math.floor(rng() * 18) });
+    }
+  }
+
+  // ---- train loop (rectangle around the city) + station ----
+  city.trainTrack = { x0: -300, z0: -300, x1: 300, z1: 300 };
+  city.props.push({ x: SPAWNS.trainStation.x, z: SPAWNS.trainStation.z, kind: 'station', colour: [0.7, 0.7, 0.75] });
+
   return city;
 }
 
-function buildStaticBatch(city, rng) {
-  const b = new BoxBatch();
-  const G = COL;
-  // Ground base (grass texture).
-  b.pushBox(0, -0.6, 0, 800, 1, 800, [0.45, 0.5, 0.38], undefined, 'grass');
-  // Roads (dark strips) + sidewalks (lighter strips) on the grid.
-  for (const l of ROAD_LINES) {
-    b.pushBox(l, -0.05, 0, 14, 0.2, 800, G.road, undefined, 'asphalt');
-    b.pushBox(0, -0.05, l, 800, 0.2, 14, G.road, undefined, 'asphalt');
-    b.pushBox(l + 10.5, -0.02, 0, 7, 0.2, 800, G.sidewalk, undefined, 'sidewalk');
-    b.pushBox(l - 10.5, -0.02, 0, 7, 0.2, 800, G.sidewalk, undefined, 'sidewalk');
-    b.pushBox(0, -0.02, l + 10.5, 800, 0.2, 7, G.sidewalk, undefined, 'sidewalk');
-    b.pushBox(0, -0.02, l - 10.5, 800, 0.2, 7, G.sidewalk, undefined, 'sidewalk');
+// ---------- collision + placement ----------
+
+export function isBlocked(city, x, z, r) {
+  for (const c of city.colliders) {
+    if (Math.abs(x - c.x) < c.hw + r && Math.abs(z - c.z) < c.hd + r) return true;
   }
-  // Highway ring.
-  b.pushBox(0, -0.05, -350, 800, 0.2, 16, G.road, undefined, 'asphalt');
-  b.pushBox(0, -0.05, 350, 800, 0.2, 16, G.road, undefined, 'asphalt');
-  b.pushBox(-350, -0.05, 0, 16, 0.2, 800, G.road, undefined, 'asphalt');
-  b.pushBox(350, -0.05, 0, 16, 0.2, 800, G.road, undefined, 'asphalt');
-  // Lane dashes down the centre of every grid road (flat yellow
-  // quads, skipped near intersections so crossings stay clear).
-  for (const l of ROAD_LINES) {
-    for (let t = -392; t <= 392; t += 16) {
-      let nearCross = false;
-      for (const c of ROAD_LINES) if (Math.abs(t - c) < 12) { nearCross = true; break; }
-      if (nearCross) continue;
-      b.pushFlat(l, 0.12, t, 0.7, 4, [0.95, 0.8, 0.2]);
-      b.pushFlat(t, 0.12, l, 4, 0.7, [0.95, 0.8, 0.2]);
-    }
-  }
-  // Beach sand + water.
-  b.pushBox(-320, -0.02, 0, 40, 0.2, 800, G.sand, undefined, 'sand');
-  b.pushBox(-380, -0.3, 0, 80, 0.2, 800, G.water, undefined, 'water');
-  // Harbour basin.
-  b.pushBox(370, -0.3, -100, 60, 0.2, 120, G.water, undefined, 'water');
-  // Airport runway.
-  b.pushBox(200, -0.02, -320, 30, 0.2, 180, G.road, undefined, 'asphalt');
-  // Wooden pier.
-  for (let x = -300; x >= -345; x -= 5) {
-    b.pushBox(x, 0.4, 100, 5, 0.8, 6, [0.55, 0.4, 0.25]);
-  }
-  // Buildings with window bands, roofs, AC units, awnings.
-  for (const bd of city.buildings) {
-    b.pushBox(bd.x, bd.h / 2, bd.z, bd.sx, bd.h, bd.sz, bd.c, undefined, 'brick');
-    // Roof slab.
-    b.pushBox(bd.x, bd.h + 0.3, bd.z, bd.sx + 1, 0.6, bd.sz + 1, [0.5, 0.5, 0.52]);
-    // Window bands on the tall faces.
-    const floors = Math.max(1, Math.floor(bd.h / 5));
-    for (let f = 0; f < floors; f++) {
-      const wy = 3 + f * 5;
-      const lit = rng() < 0.5;
-      const wc = lit ? [1.0, 0.85, 0.5] : [0.4, 0.65, 0.85];
-      const n = Math.max(1, Math.floor(bd.sx / 6));
-      for (let i = 0; i < n; i++) {
-        const wx = bd.x - bd.sx / 2 + 3 + i * 6;
-        b.pushPanel(wx, wy, bd.z + bd.sz / 2 + 0.15, 3, 2.4, wc, 'z');
-      }
-    }
-    if (bd.roof && bd.roof.ac) {
-      b.pushBox(bd.x - bd.sx / 4, bd.h + 1.2, bd.z, 4, 1.6, 4, [0.6, 0.6, 0.62]);
-    }
-    if (bd.roof && bd.roof.tank) {
-      b.pushBox(bd.x + bd.sx / 4, bd.h + 2, bd.z, 3, 3.4, 3, [0.45, 0.45, 0.48]);
-    }
-    // Ground-floor awning on shops.
-    if (bd.kind.startsWith('shop')) {
-      b.pushBox(bd.x, 3.4, bd.z + bd.sz / 2 + 1.5, bd.sx * 0.8, 0.4, 3, bd.c);
-    }
-    // Towers: corner pillars (proud of the wall so no face is
-    // coplanar), a setback top, and ground-floor shopfront glass.
-    if (bd.kind === 'tower') {
-      for (const [px, pz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-        b.pushBox(bd.x + px * (bd.sx / 2 - 0.5), bd.h / 2, bd.z + pz * (bd.sz / 2 - 0.5), 1.4, bd.h, 1.4, [0.6, 0.6, 0.62]);
-      }
-      b.pushBox(bd.x, bd.h + 1.8, bd.z, bd.sx * 0.65, 3, bd.sz * 0.65, bd.c, undefined, 'brick');
-      b.pushBox(bd.x, bd.h + 3.5, bd.z, bd.sx * 0.65 + 1, 0.5, bd.sz * 0.65 + 1, [0.5, 0.5, 0.52]);
-      b.pushPanel(bd.x, 2, bd.z + bd.sz / 2 + 0.15, bd.sx * 0.7, 3, [0.5, 0.75, 0.9], 'z');
-    }
-    // Mid-rise blocks: a balcony slab + rail on the south face.
-    if (bd.kind === 'block' && bd.h >= 12) {
-      const by = Math.min(6, bd.h - 4);
-      b.pushBox(bd.x, by, bd.z + bd.sz / 2 + 1, bd.sx * 0.5, 0.4, 2, [0.55, 0.55, 0.58]);
-      b.pushBox(bd.x, by + 0.9, bd.z + bd.sz / 2 + 1.8, bd.sx * 0.5, 0.5, 0.3, [0.4, 0.4, 0.42]);
-    }
-  }
-  // Trees + palms.
-  for (const t of city.trees) {
-    const s = t.s;
-    if (t.kind === 'palm') {
-      b.pushBox(t.x, 3 * s, t.z, 0.8, 6 * s, 0.8, G.trunk);
-      b.pushBox(t.x, 6.4 * s, t.z, 5 * s, 0.7, 1.2, G.palmLeaf);
-      b.pushBox(t.x, 6.4 * s, t.z, 1.2, 0.7, 5 * s, G.palmLeaf);
-      // Diagonal fronds + a coconut cluster under the canopy.
-      b.pushBoxRot(t.x, 6.4 * s, t.z, 4.4 * s, 0.7, 1.2, G.palmLeaf, Math.PI / 4);
-      b.pushBoxRot(t.x, 6.4 * s, t.z, 1.2, 0.7, 4.4 * s, G.palmLeaf, Math.PI / 4);
-      b.pushBox(t.x, 5.9 * s, t.z, 0.9, 0.7, 0.9, [0.45, 0.3, 0.15]);
-    } else {
-      b.pushBox(t.x, 1.5 * s, t.z, 1, 3 * s, 1, G.trunk);
-      b.pushBox(t.x, 3.6 * s, t.z, 3.4 * s, 2.4 * s, 3.4 * s, G.leaf);
-      // Second canopy layer on top.
-      b.pushBox(t.x, 5.2 * s, t.z, 2.2 * s, 1.6 * s, 2.2 * s, G.leaf);
-    }
-  }
-  // Lamps, benches, trash cans, pots, flowers.
-  for (const l of city.lamps) {
-    b.pushBox(l.x, 2.5, l.z, 0.4, 5, 0.4, [0.25, 0.25, 0.28]);
-    b.pushBox(l.x, 5.1, l.z, 1.2, 0.5, 0.5, [1.0, 0.9, 0.6]);
-  }
-  for (const bn of city.benches) {
-    b.pushBox(bn.x, 0.5, bn.z, 3, 0.4, 1, [0.5, 0.35, 0.2]);
-    b.pushBox(bn.x, 1.0, bn.z - 0.4, 3, 0.8, 0.3, [0.5, 0.35, 0.2]);
-  }
-  for (const cn of city.cans) {
-    b.pushBox(cn.x, 0.7, cn.z, 0.9, 1.4, 0.9, [0.2, 0.35, 0.2]);
-  }
-  for (const p of city.pots) {
-    b.pushBox(p.x, 0.4, p.z, 1, 0.8, 1, [0.7, 0.4, 0.25]);
-    b.pushBox(p.x, 1.0, p.z, 0.8, 0.8, 0.8, G.leaf);
-  }
-  for (const f of city.flowers) {
-    b.pushBox(f.x, 0.25, f.z, 0.6, 0.5, 0.6, f.c);
-  }
-  // Traffic light poles.
-  for (const tl of city.lights) {
-    b.pushBox(tl.x, 2.5, tl.z, 0.4, 5, 0.4, [0.2, 0.2, 0.22]);
-    b.pushBox(tl.x, 5.2, tl.z, 0.8, 1.6, 0.8, [0.15, 0.15, 0.15]);
-  }
-  // Beach umbrellas + towels (skipped where a road crosses the sand).
-  const umbrellaCols = [[0.95, 0.3, 0.3], [0.3, 0.6, 0.95], [0.95, 0.8, 0.2], [0.4, 0.8, 0.4]];
-  for (let i = 0; i < 8; i++) {
-    const ux = -318 + (i % 2) * 8;
-    const uz = -220 + i * 55;
-    if (isOnRoad(ux, uz)) continue;
-    const uc = umbrellaCols[i % umbrellaCols.length];
-    b.pushBox(ux, 1.2, uz, 0.3, 2.4, 0.3, [0.9, 0.9, 0.85]); // pole
-    b.pushBox(ux, 2.6, uz, 4, 0.4, 4, uc); // canopy
-    if (!isOnRoad(ux + 3, uz + 2)) {
-      b.pushFlat(ux + 3, 0.15, uz + 2, 2.5, 1.2, umbrellaCols[(i + 1) % umbrellaCols.length]); // towel
-    }
-  }
-  // Harbour containers on the dock (clear of the road, the basin and
-  // the vault) + a dock crane at the basin edge.
-  const contCols = [[0.9, 0.3, 0.2], [0.2, 0.5, 0.9], [0.95, 0.75, 0.15], [0.3, 0.7, 0.3]];
-  for (let i = 0; i < 6; i++) {
-    const cx = 314 + (i % 3) * 8;
-    const cz = -90 + Math.floor(i / 3) * 24;
-    const cc = contCols[i % contCols.length];
-    b.pushBox(cx, 1.4, cz, 10, 2.8, 4, cc);
-    if (i % 2 === 0) b.pushBox(cx, 4.2, cz, 10, 2.8, 4, contCols[(i + 1) % contCols.length]);
-  }
-  b.pushBox(335, 12, -60, 2, 24, 2, [0.9, 0.75, 0.15]); // crane leg
-  b.pushBox(335, 12, -80, 2, 24, 2, [0.9, 0.75, 0.15]); // crane leg
-  b.pushBox(335, 24, -70, 3, 2, 24, [0.9, 0.75, 0.15]); // crane beam
-  b.pushBox(335, 22, -70, 4, 3, 4, [0.3, 0.3, 0.32]); // crane cab
-  // Fire hydrants at downtown intersections + bus stops (all on
-  // sidewalks, never on a road line).
-  for (const [hx, hz] of [[-92, -92], [92, -92], [-92, 92], [92, 92], [-8, -8], [8, 8], [-92, 8], [8, -92], [8, 108], [-108, 8], [108, 8], [8, -108]]) {
-    b.pushBox(hx, 0.5, hz, 0.7, 1, 0.7, [0.85, 0.15, 0.15]);
-  }
-  for (const [sx, sz] of [[-108, 20], [108, -20]]) {
-    b.pushBox(sx, 0.5, sz, 3, 0.4, 1, [0.5, 0.35, 0.2]); // bench
-    b.pushBox(sx, 2.5, sz - 0.5, 0.3, 5, 0.3, [0.25, 0.25, 0.28]); // sign pole
-    b.pushBox(sx, 5, sz - 0.5, 2, 1, 0.3, [0.2, 0.5, 0.9]); // sign
-  }
-  // Train track rectangle (rails as thin strips).
-  for (const [cx, cz, sx, sz] of [[0, -320, 640, 1.2], [0, 320, 640, 1.2], [-320, 0, 1.2, 640], [320, 0, 1.2, 640]]) {
-    b.pushBox(cx, 0.1, cz, sx, 0.2, sz, [0.3, 0.3, 0.32]);
-  }
-  // Station platform.
-  b.pushBox(-318, 0.6, 0, 6, 1.2, 40, G.sidewalk);
-  // ---- entrances: every enterable door gets a door panel + sign +
-  // light, so it reads as an entrance from the street. Play-test #4:
-  // the buildings read as "flat plates with window lines, no clear
-  // entrances". Interior doors sit 2 m south of their shop's south
-  // face, so the panel goes at door.z - 2.
-  for (const d of INTERIOR_DOORS) {
-    b.pushBox(d.x, 1.6, d.z - 2, 2.4, 3.2, 0.3, [0.25, 0.2, 0.15]); // door panel
-    b.pushBox(d.x, 4.6, d.z - 2, 5, 1, 0.3, [0.95, 0.8, 0.15]); // sign
-    b.pushBox(d.x, 3.8, d.z - 1.6, 1, 0.4, 0.4, [1.0, 0.9, 0.6]); // light
-  }
-  // Garage door (north face of the garage building, z = -135).
-  b.pushBox(150, 3, -134.8, 10, 6, 0.4, [0.5, 0.5, 0.55]);
-  b.pushBox(150, 7, -134.8, 12, 1.2, 0.4, [0.95, 0.8, 0.15]);
-  b.pushBox(150, 5.5, -134, 1.5, 0.5, 0.5, [1.0, 0.9, 0.6]);
-  // Food-shop doors: one panel + light on each shop's south face.
-  for (const bd of city.buildings) {
-    if (!bd.kind.startsWith('shop-')) continue;
-    const fz = bd.z + bd.sz / 2;
-    b.pushBox(bd.x, 1.6, fz + 0.15, 2.4, 3.2, 0.3, [0.25, 0.2, 0.15]);
-    b.pushBox(bd.x, 3.8, fz + 0.3, 1, 0.4, 0.4, [1.0, 0.9, 0.6]);
-  }
-  return b;
+  return false;
 }
 
-// ---- collision + placement helpers ----
-
-// Circle vs building colliders. Returns the corrected {x, z} if the
-// circle overlaps a building, else null. Pushes out along the axis
-// of least penetration so the player slides along walls.
-export function collideCircle(city, x, z, r) {
-  let nx = x;
-  let nz = z;
-  let hit = false;
-  for (const bd of city.buildings) {
-    const hx = bd.sx / 2 + r;
-    const hz = bd.sz / 2 + r;
-    const dx = nx - bd.x;
-    const dz = nz - bd.z;
-    if (Math.abs(dx) < hx && Math.abs(dz) < hz) {
-      hit = true;
-      const px = hx - Math.abs(dx);
-      const pz = hz - Math.abs(dz);
-      if (px < pz) nx = bd.x + (dx > 0 ? hx : -hx);
-      else nz = bd.z + (dz > 0 ? hz : -hz);
-    }
+// True when the point is on a road strip (not sidewalk/building).
+export function pointOnRoad(x, z) {
+  for (const rx of ROAD_X) {
+    if (Math.abs(x - rx) < ROAD_W / 2 && Math.abs(z) <= CITY_HALF) return true;
   }
-  return hit ? { x: nx, z: nz } : null;
+  for (const rz of ROAD_Z) {
+    if (Math.abs(z - rz) < ROAD_W / 2 && Math.abs(x) <= CITY_HALF) return true;
+  }
+  return false;
 }
 
-// True when a circle of radius r at (x, z) stands on walkable ground:
-// not inside a building, not in the water, inside the city.
-export function clearSpot(city, x, z, r) {
-  if (x < -340 || x > CITY_HALF || z < -CITY_HALF || z > CITY_HALF) return false;
-  if (x > city.harbourBasin.x0 && x < city.harbourBasin.x1 && z > city.harbourBasin.z0 && z < city.harbourBasin.z1) return false;
-  if (collideCircle(city, x, z, r)) return false;
-  return true;
-}
-
-// Distance from a point to the nearest building collider (0 inside).
-export function distToCollider(city, x, z) {
-  let best = Infinity;
-  for (const bd of city.buildings) {
-    const dx = Math.max(Math.abs(x - bd.x) - bd.sx / 2, 0);
-    const dz = Math.max(Math.abs(z - bd.z) - bd.sz / 2, 0);
-    const d = Math.sqrt(dx * dx + dz * dz);
-    if (d < best) best = d;
-  }
-  return best;
-}
-
-// Find a standable point on the south face of a building: probe
-// southward from the face until clearSpot passes. Used for shop
-// fronts and interior doors.
-export function shopFront(city, bx, bz, sx, sz) {
-  for (let d = 2; d <= 12; d += 1) {
-    const z = bz + sz / 2 + d;
-    if (clearSpot(city, bx, z, 1.2) && !isOnRoad(bx, z)) return { x: bx, z };
-  }
-  for (let d = 2; d <= 12; d += 1) {
-    const z = bz + sz / 2 + d;
-    if (clearSpot(city, bx, z, 1.2)) return { x: bx, z };
-  }
-  return { x: bx, z: bz + sz / 2 + 4 };
-}
-
-// A random sidewalk point. FIX (graphics pass): the old generator
-// only excluded the low side of road lines, so ~1 in 7 peds spawned
-// ON a road and stepPed refused every step while on a road — the ped
-// froze forever. This version rejects any point whose block fraction
-// is within 12 units of a road line on EITHER side, and requires
-// clearSpot, so sampled points are never on a road.
+// A random point on a sidewalk: near a road, not on the road
+// itself, not inside a building, not in the water, not on the
+// highway ring. Peds spawn here.
 export function randomSidewalkPoint(city, rng) {
   for (let tries = 0; tries < 40; tries++) {
-    const x = -380 + rng() * 760;
-    const z = -380 + rng() * 760;
-    const fx = blockFrac(x);
-    const fz = blockFrac(z);
-    if (fx < 12 || fx > 88) continue;
-    if (fz < 12 || fz > 88) continue;
-    if (x < -300 || x > 300) continue;
-    if (isOnRoad(x, z)) continue; // also excludes the highway ring
-    if (!clearSpot(city, x, z, 1)) continue;
+    const horizontal = rng() < 0.5;
+    const road = (horizontal ? ROAD_Z : ROAD_X)[Math.floor(rng() * ROAD_Z.length)];
+    const along = (rng() * 2 - 1) * (CITY_HALF - 20);
+    const side = rng() < 0.5 ? -1 : 1;
+    const off = ROAD_W / 2 + 1.5 + rng() * 3;
+    const x = horizontal ? along : road + side * off;
+    const z = horizontal ? road + side * off : along;
+    if (x < -300) continue; // beach water edge
+    if (z > 280) continue; // harbour water edge
+    if (Math.abs(x) > 300 || Math.abs(z) > 300) continue; // highway ring
+    // The point must be off EVERY road, not just the one it runs
+    // alongside: the `along` coordinate can land on a crossing
+    // road (round-5 flaky test: ~1 in 7 peds spawned ON a road).
+    if (pointOnRoad(x, z)) continue;
+    if (isBlocked(city, x, z, 1)) continue;
     return { x, z };
   }
-  return { x: -50, z: 0 };
+  return { x: 10, z: 10 };
 }
 
-export { ROAD_LINES, CITY_HALF };
+// District name for a position (HUD location line).
+export function districtAt(x, z) {
+  if (x < -300) return 'Beach';
+  if (z > 260) return 'Harbour';
+  if (x > 250 && z < -130) return 'Airport';
+  if (Math.abs(x) < 180 && Math.abs(z) < 180) return 'Downtown';
+  if (Math.abs(x) > 300 || Math.abs(z) > 300) return 'Highway';
+  return 'Suburbs';
+}
+
+// ---------- static geometry ----------
+
+// Emit every static box into a batch. Ground first (so the depth
+// buffer has something under everything), then roads, buildings,
+// props. The batch is built once at boot and drawn every frame.
+export function buildStaticBoxes(city, batch) {
+  // Ground: one big grass slab, top at y=0.
+  batch.pushBox(0, -1, 0, CITY_HALF * 2, 1, CITY_HALF * 2, [0.42, 0.62, 0.35], 'grass');
+  // Beach sand (west strip).
+  batch.pushBox(-360, 0, 0, 80, 0.3, CITY_HALF * 2, COL.sand, 'sand');
+  // Ocean (west of the beach) + harbour basin (south).
+  batch.pushBox(-420, -0.8, 0, 80, 0.6, CITY_HALF * 2 + 200, COL.water, 'water');
+  batch.pushBox(0, -0.8, 360, 500, 0.6, 80, COL.water, 'water');
+  // Roads: asphalt strips + lane dashes + sidewalks.
+  for (const rx of ROAD_X) {
+    batch.pushBox(rx, 0.02, 0, ROAD_W, 0.08, CITY_HALF * 2, COL.road, 'asphalt');
+    batch.pushBox(rx - ROAD_W / 2 - 2, 0.02, 0, 4, 0.08, CITY_HALF * 2, COL.sidewalk, 'sidewalk');
+    batch.pushBox(rx + ROAD_W / 2 + 2, 0.02, 0, 4, 0.08, CITY_HALF * 2, COL.sidewalk, 'sidewalk');
+    for (let z = -380; z < 380; z += 24) {
+      batch.pushBox(rx, 0.08, z, 0.6, 0.05, 8, COL.roadLine, 'plain');
+    }
+  }
+  for (const rz of ROAD_Z) {
+    batch.pushBox(0, 0.02, rz, CITY_HALF * 2, 0.08, ROAD_W, COL.road, 'asphalt');
+    batch.pushBox(0, 0.02, rz - ROAD_W / 2 - 2, CITY_HALF * 2, 0.08, 4, COL.sidewalk, 'sidewalk');
+    batch.pushBox(0, 0.02, rz + ROAD_W / 2 + 2, CITY_HALF * 2, 0.08, 4, COL.sidewalk, 'sidewalk');
+    for (let x = -380; x < 380; x += 24) {
+      batch.pushBox(x, 0.08, rz, 8, 0.05, 0.6, COL.roadLine, 'plain');
+    }
+  }
+  // Highway loop (outer rectangle).
+  batch.pushBox(0, 0.02, -330, 680, 0.08, 10, COL.road, 'asphalt');
+  batch.pushBox(0, 0.02, 330, 680, 0.08, 10, COL.road, 'asphalt');
+  batch.pushBox(-330, 0.02, 0, 10, 0.08, 680, COL.road, 'asphalt');
+  batch.pushBox(330, 0.02, 0, 10, 0.08, 680, COL.road, 'asphalt');
+
+  // Buildings: brick body, glass window bands, roof details.
+  for (const b of city.buildings) {
+    if (b.yaw) batch.pushBoxRot(b.x, 0, b.z, b.w, b.h, b.d, b.yaw, b.colour, 'brick');
+    else batch.pushBox(b.x, 0, b.z, b.w, b.h, b.d, b.colour, 'brick');
+    // Window bands on the two long faces.
+    const floors = Math.max(1, Math.floor(b.h / 4));
+    for (let f = 1; f <= floors; f++) {
+      const wy = f * 4 - 1.5;
+      if (wy > b.h - 1) break;
+      batch.pushBox(b.x, wy, b.z + b.d / 2 + 0.15, b.w * 0.8, 1.6, 0.3, COL.glass, 'plain');
+      batch.pushBox(b.x, wy, b.z - b.d / 2 - 0.15, b.w * 0.8, 1.6, 0.3, COL.glass, 'plain');
+    }
+    // Roof: AC unit + antenna on towers.
+    if (b.kind === 'tower' || b.kind === 'elevatorTower') {
+      batch.pushBox(b.x - b.w / 4, b.h, b.z, 4, 2, 4, [0.6, 0.6, 0.62], 'plain');
+      batch.pushBox(b.x + b.w / 4, b.h, b.z, 0.4, 8, 0.4, [0.4, 0.4, 0.42], 'plain');
+      // Balconies on the south face.
+      for (let f = 2; f * 5 < b.h; f++) {
+        batch.pushBox(b.x, f * 5, b.z + b.d / 2 + 0.8, b.w * 0.5, 0.4, 1.6, [0.55, 0.5, 0.45], 'plain');
+      }
+    }
+    // Ground-floor shop awnings + sign boards.
+    if (b.kind === 'shop' || b.kind === 'outfit') {
+      batch.pushBox(b.x, 3.4, b.z + b.d / 2 + 1, b.w * 0.9, 0.3, 2.4, b.colour, 'plain');
+      batch.pushBox(b.x, 5.2, b.z + b.d / 2 + 0.4, b.w * 0.7, 1.4, 0.5, [1.2, 1.2, 1.2], 'plain');
+    }
+    // Hospital cross, police + fire signs.
+    if (b.kind === 'hospital') {
+      batch.pushBox(b.x, b.h + 0.5, b.z, 6, 1.2, 0.5, [1.2, 0.2, 0.2], 'plain');
+    }
+    if (b.kind === 'elevatorTower') {
+      // Glass elevator shaft on the south face.
+      batch.pushBox(b.x + b.w / 2 + 1, 0, b.z, 3, b.h, 4, [0.5, 0.8, 1.0], 'plain');
+    }
+  }
+
+  // Trees (trunk + canopy, palms get fronds).
+  for (const t of city.trees) {
+    batch.pushBox(t.x, 0, t.z, 0.8, 4, 0.8, COL.trunk, 'plain');
+    if (t.palm) {
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2;
+        batch.pushBoxRot(t.x + Math.cos(a) * 1.6, 4.2, t.z + Math.sin(a) * 1.6, 3.2, 0.3, 0.8, a, COL.palmLeaf, 'plain');
+      }
+      batch.pushBox(t.x, 4.6, t.z, 1.2, 1, 1.2, [0.5, 0.3, 0.15], 'plain'); // coconuts
+    } else {
+      batch.pushBox(t.x, 4, t.z, 4, 3.5, 4, COL.leaf, 'plain');
+      batch.pushBox(t.x, 6.5, t.z, 2.6, 2, 2.6, [0.25, 0.62, 0.3], 'plain');
+    }
+  }
+
+  // Lamps, benches, traffic lights.
+  for (const l of city.lamps) {
+    batch.pushBox(l.x, 0, l.z, 0.4, 5, 0.4, [0.25, 0.25, 0.28], 'plain');
+    batch.pushBox(l.x, 5, l.z, 1.4, 0.5, 1.4, [1.3, 1.25, 0.9], 'plain');
+  }
+  for (const b of city.benches) {
+    batch.pushBox(b.x, 0.4, b.z, 3, 0.4, 1.2, [0.55, 0.4, 0.25], 'plain');
+    batch.pushBox(b.x, 0.4, b.z - 0.6, 3, 1.4, 0.3, [0.55, 0.4, 0.25], 'plain');
+  }
+  for (const l of city.lights) {
+    batch.pushBox(l.x, 0, l.z, 0.5, 6, 0.5, [0.2, 0.2, 0.22], 'plain');
+    batch.pushBox(l.x, 6, l.z, 1, 2.4, 1, [0.15, 0.15, 0.15], 'plain');
+  }
+
+  // Harbour: containers, crane, docks.
+  for (const c of city.containers) {
+    batch.pushBox(c.x, 0, c.z, c.w, c.h, c.d, c.colour, 'plain');
+  }
+  for (const p of city.props) {
+    if (p.kind === 'crane') {
+      batch.pushBox(p.x - 4, 0, p.z, 2, 26, 2, p.colour, 'plain');
+      batch.pushBox(p.x + 4, 0, p.z, 2, 26, 2, p.colour, 'plain');
+      batch.pushBox(p.x, 24, p.z, 22, 2, 2, p.colour, 'plain');
+      batch.pushBox(p.x + 10, 22, p.z, 1, 6, 1, [0.3, 0.3, 0.3], 'plain');
+    } else if (p.kind === 'dock') {
+      batch.pushBox(p.x, 0, p.z, 30, 0.8, 8, p.colour, 'plain');
+    } else if (p.kind === 'pier') {
+      batch.pushBox(p.x, 0, p.z, 10, 0.8, 60, p.colour, 'plain');
+      for (let i = 0; i < 4; i++) {
+        batch.pushBox(p.x - 4, 0.8, p.z - 24 + i * 16, 0.8, 2.4, 0.8, [0.4, 0.3, 0.2], 'plain');
+      }
+    } else if (p.kind === 'umbrella') {
+      batch.pushBox(p.x, 0, p.z, 0.4, 2.6, 0.4, [0.5, 0.4, 0.3], 'plain');
+      batch.pushBox(p.x, 2.6, p.z, 4, 0.3, 4, p.colour, 'plain');
+    } else if (p.kind === 'flower') {
+      batch.pushBox(p.x, 0, p.z, 0.5, 0.7, 0.5, p.colour, 'plain');
+    } else if (p.kind === 'pot') {
+      batch.pushBox(p.x, 0, p.z, 1.2, 1, 1.2, p.colour, 'plain');
+    } else if (p.kind === 'hydrant') {
+      batch.pushBox(p.x, 0, p.z, 0.9, 1.4, 0.9, p.colour, 'plain');
+    } else if (p.kind === 'busstop') {
+      batch.pushBox(p.x, 0, p.z, 4, 0.4, 1.6, p.colour, 'plain');
+      batch.pushBox(p.x - 1.8, 0.4, p.z, 0.4, 3, 0.4, p.colour, 'plain');
+      batch.pushBox(p.x + 1.8, 0.4, p.z, 0.4, 3, 0.4, p.colour, 'plain');
+      batch.pushBox(p.x, 3.4, p.z, 4.4, 0.4, 2, p.colour, 'plain');
+    } else if (p.kind === 'trash') {
+      batch.pushBox(p.x, 0, p.z, 1.2, 1.6, 1.2, p.colour, 'plain');
+    } else if (p.kind === 'runway') {
+      batch.pushBox(p.x, 0.02, p.z, 40, 0.08, 220, p.colour, 'asphalt');
+      for (let z = -360; z < -160; z += 20) {
+        batch.pushBox(p.x, 0.08, z, 2, 0.05, 8, [0.95, 0.95, 0.95], 'plain');
+      }
+    } else if (p.kind === 'station') {
+      batch.pushBox(p.x, 0, p.z, 30, 1, 10, [0.6, 0.6, 0.62], 'plain');
+      batch.pushBox(p.x, 5, p.z, 30, 0.5, 12, [0.4, 0.45, 0.55], 'plain');
+    }
+  }
+
+  // Train loop track: dark strips + sleepers on the rectangle.
+  const t = city.trainTrack;
+  const track = (x, z, w, d) => batch.pushBox(x, 0.05, z, w, 0.1, d, [0.2, 0.2, 0.22], 'plain');
+  track(0, t.z0, t.x1 - t.x0, 2);
+  track(0, t.z1, t.x1 - t.x0, 2);
+  track(t.x0, 0, 2, t.z1 - t.z0);
+  track(t.x1, 0, 2, t.z1 - t.z0);
+
+  return batch;
+}
+
+// Traffic-light state: 18 s cycle — green 8, yellow 2, red 8.
+export function lightState(light, time) {
+  const c = (time + light.t) % 18;
+  if (c < 8) return 'green';
+  if (c < 10) return 'yellow';
+  return 'red';
+}
+
+export { COL };

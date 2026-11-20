@@ -1,103 +1,157 @@
-// Solmar Bay — training: shooting range, swimming and the driving
-// trial. Each is a small timed skill test with a cash reward and
-// +10 respect. The range is at (0, -350), the swim is in the harbour
-// basin, the slalom trial is at (100, -350).
+// Solmar Bay — training places.
+//
+// (a) Shooting range: targets to shoot, score points, cash
+// reward, small permanent damage bonus. (b) Swimming: the
+// player swims in the water (slower movement, no drowning), plus
+// a swim challenge — swim to the buoy and back for cash.
+// (c) Driving training: a slalom/time-trial course with
+// checkpoints, cash on completion.
 
-import { TUNE } from './config.js';
-import { showToast, addCash, addRespect } from './state.js';
+import { TUNE, SPAWNS, dist } from './config.js';
+import { addCash, showToast } from './state.js';
 
-export function createTraining() {
-  return {
-    range: null, // {active, hits, need, timer}
-    swim: null, // {active, laps, need}
-    trial: null, // {active, checkpoints, need, next}
+export function spawnTraining(game) {
+  game.range = {
+    x: SPAWNS.shootingRange.x, z: SPAWNS.shootingRange.z,
+    targets: [],
+    active: false,
+    score: 0,
+    timeLeft: 0,
+  };
+  for (let i = 0; i < 5; i++) {
+    game.range.targets.push({
+      x: SPAWNS.shootingRange.x - 8 + i * 4,
+      z: SPAWNS.shootingRange.z - 30,
+      hit: false,
+    });
+  }
+  game.swim = { active: false, stage: 0 };
+  game.slalom = {
+    checkpoints: [
+      { x: 200, z: 200 }, { x: 220, z: 240 }, { x: 200, z: 280 },
+      { x: 160, z: 280 }, { x: 160, z: 240 }, { x: 180, z: 200 },
+    ],
+    active: false,
+    stage: 0,
+    timeLeft: 0,
   };
 }
 
-export function startRange(game) {
-  game.training.range = { active: true, hits: 0, need: 5, timer: 30 };
-  showToast(game.state, 'Shooting range: hit 5 targets in 30 s. +$' + TUNE.rangeReward, 5);
-}
-
-export function startSwim(game) {
-  game.training.swim = { active: true, laps: 0, need: 2, side: 1 };
-  showToast(game.state, 'Swim trial: swim across the harbour and back, twice. +$' + TUNE.swimReward, 5);
-}
-
-export function startTrial(game) {
-  game.training.trial = { active: true, checkpoints: 0, need: 5, next: 0 };
-  showToast(game.state, 'Driving trial: hit 5 checkpoints in order. +$' + TUNE.slalomReward, 5);
-}
-
-const TRIAL_POINTS = [
-  { x: 100, z: -300 }, { x: 150, z: -250 }, { x: 200, z: -300 },
-  { x: 250, z: -250 }, { x: 300, z: -300 },
-];
-
-export function stepTraining(game, dt) {
-  const s = game.state;
-  const p = s.player;
-  const tr = game.training;
-  if (tr.range && tr.range.active) {
-    tr.range.timer -= dt;
-    if (tr.range.timer <= 0) {
-      tr.range = null;
-      showToast(s, 'Range time up. Come back and try again.', 3);
-    }
-  }
-  if (tr.swim && tr.swim.active) {
-    // Cross the harbour basin (x 340-400) and back.
-    if (tr.swim.side === 1 && p.x > 395) { tr.swim.side = -1; tr.swim.laps += 0.5; }
-    if (tr.swim.side === -1 && p.x < 345) { tr.swim.side = 1; tr.swim.laps += 0.5; }
-    if (tr.swim.laps >= tr.swim.need) {
-      tr.swim = null;
-      addCash(s, TUNE.swimReward);
-      addRespect(s, 10);
-      showToast(s, 'Swim trial done! +$' + TUNE.swimReward + ', +10 REP', 5);
-    }
-  }
-  if (tr.trial && tr.trial.active) {
-    const pt = TRIAL_POINTS[tr.trial.next];
-    if (pt && p.inCar && Math.hypot(p.x - pt.x, p.z - pt.z) < 10) {
-      tr.trial.checkpoints++;
-      tr.trial.next++;
-      showToast(s, 'Checkpoint ' + tr.trial.checkpoints + '/' + tr.trial.need, 3);
-      if (tr.trial.checkpoints >= tr.trial.need) {
-        tr.trial = null;
-        addCash(s, TUNE.slalomReward);
-        addRespect(s, 10);
-        showToast(s, 'Driving trial done! +$' + TUNE.slalomReward + ', +10 REP', 5);
-      }
-    }
-  }
-}
-
-// A range target hit (called from combat when a shot lands near a
-// target — the range targets are at (0, -350), 5 of them in a row).
-export function rangeTargetHit(game) {
-  const tr = game.training;
-  if (!tr.range || !tr.range.active) return false;
-  tr.range.hits++;
-  if (tr.range.hits >= tr.range.need) {
-    tr.range = null;
-    addCash(game.state, TUNE.rangeReward);
-    addRespect(game.state, 10);
-    showToast(game.state, 'Range complete! +$' + TUNE.rangeReward + ', +10 REP', 5);
-  }
+// Start the shooting range (E near the range).
+export function tryRange(game) {
+  const p = game.player;
+  if (dist(p.x, p.z, game.range.x, game.range.z) > 8) return false;
+  game.range.active = true;
+  game.range.score = 0;
+  game.range.timeLeft = 30;
+  for (const t of game.range.targets) t.hit = false;
+  showToast(game, 'Shooting range: hit all 5 targets in 30 s!');
   return true;
 }
 
+// A shot hit a range target. Returns true when it was a target.
+export function rangeHit(game, x, z) {
+  if (!game.range.active) return false;
+  for (const t of game.range.targets) {
+    if (!t.hit && dist(x, z, t.x, t.z) < 3) {
+      t.hit = true;
+      game.range.score += 20;
+      game.training.rangeScore = game.range.score;
+      showToast(game, `Target hit! Score ${game.range.score}`);
+      return true;
+    }
+  }
+  return false;
+}
+
+export function stepTraining(game, dt) {
+  // Range timer.
+  if (game.range.active) {
+    game.range.timeLeft -= dt;
+    const allHit = game.range.targets.every((t) => t.hit);
+    if (allHit || game.range.timeLeft <= 0) {
+      game.range.active = false;
+      const score = game.range.score;
+      game.training.rangeBest = Math.max(game.training.rangeBest, score);
+      if (allHit) {
+        addCash(game, TUNE.rangeReward, 'range complete');
+        game.respect += 10;
+        showToast(game, `Range complete! Score ${score} — +$${TUNE.rangeReward}`);
+      } else {
+        showToast(game, `Range over — score ${score}`);
+      }
+    }
+  }
+  // Swim challenge: reach the buoy and come back.
+  const p = game.player;
+  if (game.swim.active) {
+    if (game.swim.stage === 0 && dist(p.x, p.z, SPAWNS.swimBuoy.x, SPAWNS.swimBuoy.z) < 6) {
+      game.swim.stage = 1;
+      showToast(game, 'Buoy reached — swim back to the pier!');
+    } else if (game.swim.stage === 1 && dist(p.x, p.z, SPAWNS.pier.x, SPAWNS.pier.z) < 8) {
+      game.swim.active = false;
+      addCash(game, TUNE.swimReward, 'swim challenge');
+      game.respect += 10;
+      showToast(game, `Swim challenge done! +$${TUNE.swimReward}`);
+    }
+  }
+  // Slalom: drive through the checkpoints in order.
+  if (game.slalom.active) {
+    game.slalom.timeLeft -= dt;
+    const cp = game.slalom.checkpoints[game.slalom.stage];
+    if (cp && p.inCar && dist(p.x, p.z, cp.x, cp.z) < 6) {
+      game.slalom.stage += 1;
+      if (game.slalom.stage >= game.slalom.checkpoints.length) {
+        game.slalom.active = false;
+        addCash(game, TUNE.slalomReward, 'slalom complete');
+        game.respect += 10;
+        showToast(game, `Slalom complete! +$${TUNE.slalomReward}`);
+      } else {
+        showToast(game, `Checkpoint ${game.slalom.stage + 1}/${game.slalom.checkpoints.length}`);
+      }
+    }
+    if (game.slalom.timeLeft <= 0) {
+      game.slalom.active = false;
+      showToast(game, 'Slalom failed — out of time');
+    }
+  }
+}
+
+// Start the swim challenge (E at the pier).
+export function trySwim(game) {
+  const p = game.player;
+  if (dist(p.x, p.z, SPAWNS.pier.x, SPAWNS.pier.z) > 8) return false;
+  game.swim.active = true;
+  game.swim.stage = 0;
+  showToast(game, 'Swim challenge: reach the buoy and come back!');
+  return true;
+}
+
+// Start the slalom (E at the slalom start, in a car).
+export function trySlalom(game) {
+  const p = game.player;
+  if (!p.inCar) return false;
+  if (dist(p.x, p.z, SPAWNS.slalomStart.x, SPAWNS.slalomStart.z) > 10) return false;
+  game.slalom.active = true;
+  game.slalom.stage = 0;
+  game.slalom.timeLeft = 90;
+  showToast(game, 'Slalom: hit all 6 checkpoints in 90 s!');
+  return true;
+}
+
+// Draw the range targets + slalom checkpoints.
 export function trainingBoxes(game, out) {
-  // Shooting range: 5 targets in a row at (0, -350).
-  for (let i = 0; i < 5; i++) {
-    const x = -8 + i * 4;
-    out.pushBox(x, 1.2, -352, 1.5, 1.5, 0.2, [0.9, 0.2, 0.2]);
-    out.pushBox(x, 1.2, -352, 0.8, 0.8, 0.22, [1, 1, 1]);
+  for (const t of game.range.targets) {
+    out.push({ x: t.x, y: 1, z: t.z, w: 1.6, h: 1.6, d: 0.3, c: t.hit ? [0.3, 0.8, 0.3] : [1.2, 0.2, 0.2] });
+    out.push({ x: t.x, y: 0, z: t.z, w: 0.3, h: 1, d: 0.3, c: [0.4, 0.35, 0.3] });
   }
-  // Trial checkpoints as floating rings (drawn as flat markers).
-  const tr = game.training;
-  if (tr.trial && tr.trial.active) {
-    const pt = TRIAL_POINTS[tr.trial.next];
-    if (pt) out.pushFlat(pt.x, 0.2, pt.z, 6, 6, [1, 0.8, 0.1], 0);
+  if (game.slalom.active) {
+    const cp = game.slalom.checkpoints[game.slalom.stage];
+    if (cp) {
+      out.push({ x: cp.x, y: 0, z: cp.z, w: 3, h: 4, d: 3, c: [1.3, 1.1, 0.2] });
+    }
   }
+  // The swim buoy.
+  out.push({ x: SPAWNS.swimBuoy.x, y: 0, z: SPAWNS.swimBuoy.z, w: 1.5, h: 1, d: 1.5, c: [1.3, 0.5, 0.1] });
+  return out;
 }
