@@ -3,195 +3,72 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Solmar Bay — 3D voxel open-world crime game</title>
+<title>Solmar Bay — GTA 6-style open world</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { width: 100%; height: 100%; overflow: hidden; background: #101018; font-family: 'Segoe UI', system-ui, sans-serif; color: #fff; }
+  html, body { width: 100vw; height: 100vh; overflow: hidden; background: #0a0e14; font-family: system-ui, sans-serif; }
   #game-canvas { display: block; width: 100vw; height: 100vh; }
-  /* Title menu: STATIC HTML. The JS only flips display; it never
-     writes innerHTML here (play-test #5: overwriting the menu
-     destroyed SOLMAR BAY + the buttons from the DOM). */
-  #hud-menu {
-    position: fixed; inset: 0; z-index: 20; display: flex;
-    flex-direction: column; align-items: center; justify-content: center;
-    gap: 14px; background: linear-gradient(180deg, rgba(20,10,40,0.55), rgba(255,120,40,0.25));
-    text-align: center; padding: 20px;
-  }
-  #hud-menu h1 { font-size: 72px; letter-spacing: 8px; color: #ffd23c; text-shadow: 0 4px 0 #c22, 0 8px 24px rgba(0,0,0,0.6); }
-  #hud-menu p { max-width: 560px; font-size: 16px; line-height: 1.5; color: #ffe9c9; }
-  #hud-menu .controls { font-size: 13px; color: #cfe8ff; background: rgba(0,0,0,0.35); padding: 10px 16px; border-radius: 8px; line-height: 1.7; }
-  #hud-menu button {
-    font-size: 20px; padding: 12px 34px; border: none; border-radius: 8px;
-    background: #ffd23c; color: #222; font-weight: 700; cursor: pointer;
-  }
+  .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; }
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; text-shadow: 0 1px 3px #000; display: none; }
+  #hud-menu { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; background: linear-gradient(180deg, #0a1626, #1a2b45); color: #fff; }
+  #hud-menu h1 { font-size: 64px; letter-spacing: 4px; color: #ffd23f; }
+  #hud-menu p { opacity: 0.85; }
+  #hud-menu button { pointer-events: auto; padding: 12px 28px; font-size: 18px; border: none; border-radius: 8px; background: #ffd23f; color: #111; cursor: pointer; }
   #hud-menu button:hover { background: #ffe066; }
-  #hud-menu button.secondary { background: #2e6fd8; color: #fff; }
-  #hud-menu button.small { font-size: 14px; padding: 8px 18px; background: #444; color: #fff; }
-  /* Chapter card: a third, centred flex panel. */
-  #hud-card {
-    position: fixed; inset: 0; z-index: 18; display: none;
-    align-items: center; justify-content: center; pointer-events: none;
-  }
-  #hud-card .inner {
-    background: rgba(10,10,24,0.88); border: 2px solid #ffd23c; border-radius: 12px;
-    padding: 28px 36px; max-width: 560px; text-align: center;
-  }
-  #hud-card-title { font-size: 30px; color: #ffd23c; margin-bottom: 10px; }
-  #hud-card-text { font-size: 16px; line-height: 1.5; color: #fff; }
-  #hud-card .hint { margin-top: 14px; font-size: 13px; color: #9fc3ff; }
-  /* Pause overlay (round-9 fix): Escape used to pause the game
-     with NO visible change, so play-test #7 reported "Escape does
-     not open pause". The overlay is a dedicated panel with a
-     clickable Resume button. */
-  #hud-pause {
-    position: fixed; inset: 0; z-index: 19; display: none;
-    flex-direction: column; align-items: center; justify-content: center;
-    gap: 14px; background: rgba(8,8,20,0.7); text-align: center;
-  }
-  #hud-pause h2 { font-size: 48px; letter-spacing: 6px; color: #ffd23c; text-shadow: 0 4px 16px rgba(0,0,0,0.7); }
-  #hud-pause p { font-size: 15px; color: #cfe8ff; }
-  #hud-pause button {
-    font-size: 20px; padding: 12px 34px; border: none; border-radius: 8px;
-    background: #ffd23c; color: #222; font-weight: 700; cursor: pointer;
-  }
-  #hud-pause button:hover { background: #ffe066; }
-  /* Modal (food / outfit / garage / busted / wasted). */
-  #hud-modal {
-    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
-    z-index: 22; display: none; background: rgba(12,12,26,0.95);
-    border: 2px solid #2e6fd8; border-radius: 12px; padding: 22px 28px;
-    min-width: 380px; max-width: 520px;
-  }
-  #hud-modal-title { font-size: 22px; color: #ffd23c; margin-bottom: 10px; }
-  #hud-modal-body { font-size: 15px; line-height: 1.8; white-space: pre-line; }
-  /* In-game HUD. */
-  #hud { position: fixed; inset: 0; z-index: 10; pointer-events: none; font-size: 14px; }
-  #hud-top { position: absolute; top: 10px; left: 12px; display: flex; flex-direction: column; gap: 4px; text-shadow: 0 1px 3px #000; }
-  #hud-wanted { font-size: 20px; color: #ffd23c; letter-spacing: 2px; }
-  #hud-clock { color: #cfe8ff; }
-  #hud-mission {
-    position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
-    background: rgba(0,0,0,0.55); padding: 8px 16px; border-radius: 8px;
-    max-width: 520px; text-align: center; font-size: 14px;
-  }
-  #hud-police {
-    position: absolute; top: 52px; left: 50%; transform: translateX(-50%);
-    color: #ffb3b3; font-size: 12px; text-shadow: 0 1px 3px #000;
-  }
-  #hud-right { position: absolute; top: 10px; right: 12px; text-align: right; text-shadow: 0 1px 3px #000; display: flex; flex-direction: column; gap: 4px; }
-  #hud-minimap { border: 2px solid rgba(255,255,255,0.5); border-radius: 50%; background: #1d2b1d; }
-  #hud-bottom { position: absolute; bottom: 12px; left: 12px; display: flex; flex-direction: column; gap: 4px; text-shadow: 0 1px 3px #000; }
-  #hud-weapon { color: #ffe9a8; }
-  #hud-car { color: #bfe3ff; }
-  #hud-radio { color: #ffb3e6; }
-  #btn-pause {
-    position: absolute; bottom: 12px; right: 12px; z-index: 11;
-    pointer-events: auto; font-size: 14px; padding: 8px 16px;
-    border: 1px solid rgba(255,255,255,0.4); border-radius: 8px;
-    background: rgba(0,0,0,0.55); color: #fff; cursor: pointer;
-  }
-  #btn-pause:hover { background: rgba(0,0,0,0.8); }
-  #hud-dialogue {
-    position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
-    background: rgba(0,0,0,0.65); padding: 10px 18px; border-radius: 8px;
-    max-width: 560px; display: none; font-size: 14px;
-  }
-  #hud-toast {
-    position: absolute; bottom: 150px; left: 50%; transform: translateX(-50%);
-    background: rgba(0,0,0,0.6); padding: 6px 14px; border-radius: 6px;
-    font-size: 14px; color: #ffe9a8;
-  }
-  #hud-toast:empty { display: none; }
-  #hud-err {
-    position: fixed; left: 10px; bottom: 10px; z-index: 30; display: none;
-    background: #600; color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 13px;
-  }
-  /* Phone overlay. */
-  #hud-phone {
-    position: fixed; right: 24px; top: 50%; transform: translateY(-50%);
-    z-index: 21; display: none; width: 300px; background: #141428;
-    border: 2px solid #555; border-radius: 18px; padding: 14px; font-size: 14px;
-  }
-  #hud-phone h2 { font-size: 18px; margin-bottom: 8px; color: #ffd23c; }
-  #hud-phone .tab { color: #9fc3ff; cursor: pointer; margin-right: 10px; }
-  #hud-phone .msg { background: #22223a; border-radius: 8px; padding: 6px 10px; margin: 6px 0; line-height: 1.4; }
+  #hud-card { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); color: #fff; }
+  #hud-card-inner { background: #111827; padding: 28px 36px; border-radius: 12px; text-align: center; }
+  #hud-card-title { font-size: 28px; color: #ffd23f; margin-bottom: 8px; }
+  #hud-modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); color: #fff; }
+  #hud-modal-inner { background: #111827; padding: 24px 32px; border-radius: 12px; min-width: 320px; }
+  #hud-modal-title { font-size: 22px; color: #ffd23f; margin-bottom: 10px; }
+  #hud-modal-lines { white-space: pre-line; line-height: 1.7; }
+  #hud-pause { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: rgba(0,0,0,0.65); color: #fff; }
+  #hud-pause h2 { font-size: 48px; letter-spacing: 6px; }
+  #hud-pause button { padding: 12px 28px; font-size: 18px; border: none; border-radius: 8px; background: #ffd23f; color: #111; cursor: pointer; }
+  #hud-top { position: fixed; top: 12px; left: 12px; display: flex; gap: 16px; font-size: 18px; font-weight: 700; }
+  #hud-clock { position: fixed; top: 12px; right: 12px; font-size: 16px; }
+  #hud-mission { position: fixed; top: 44px; left: 12px; font-size: 14px; opacity: 0.9; max-width: 320px; }
+  #hud-police { position: fixed; top: 76px; left: 12px; font-size: 14px; color: #ff6b6b; }
+  #hud-bottom { position: fixed; bottom: 12px; left: 12px; display: flex; gap: 16px; font-size: 15px; }
+  #hud-right { position: fixed; bottom: 12px; right: 12px; text-align: right; font-size: 14px; line-height: 1.6; }
+  #hud-toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); font-size: 20px; color: #7dff9a; }
+  #hud-dialogue { position: fixed; bottom: 120px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.75); padding: 12px 20px; border-radius: 8px; font-size: 16px; display: none; max-width: 560px; }
+  #hud-minimap { position: fixed; bottom: 12px; right: 12px; width: 200px; height: 200px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.6); background: #0d1b2a; }
+  #hud-controls { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); font-size: 12px; opacity: 0.7; text-align: center; }
+  #btn-pause { position: fixed; top: 44px; right: 12px; pointer-events: auto; padding: 6px 12px; border: none; border-radius: 6px; background: rgba(255,255,255,0.2); color: #fff; cursor: pointer; }
 </style>
 </head>
 <body>
 <canvas id="game-canvas" width="1280" height="720"></canvas>
 
-<!-- Title screen (static HTML — JS never rewrites this). -->
-<div id="hud-menu">
-  <h1>SOLMAR BAY</h1>
-  <p>Sun, sand, and no money in your pocket. Steal cars, run five story chapters, dodge the police — and live in a city that never sits still.</p>
-  <button id="btn-new">New Game</button>
-  <button id="btn-continue" class="secondary">Continue</button>
-  <div class="controls">
-    WASD move &nbsp;·&nbsp; Shift run &nbsp;·&nbsp; E interact / enter car &nbsp;·&nbsp; F punch &nbsp;·&nbsp; G bomb<br>
-    Click shoot &nbsp;·&nbsp; 1/2/3 weapons &nbsp;·&nbsp; Space handbrake / parachute &nbsp;·&nbsp; Esc pause<br>
-    Tab phone &nbsp;·&nbsp; R radio &nbsp;·&nbsp; M mute &nbsp;·&nbsp; Mouse drag orbits, wheel zooms
-  </div>
-  <button id="btn-mute" class="small">Mute: off (M)</button>
-</div>
-
-<!-- Chapter intro / mission-passed card (centred panel). -->
-<div id="hud-card">
-  <div class="inner">
-    <div id="hud-card-title"></div>
-    <div id="hud-card-text"></div>
-    <div class="hint">Press Enter to continue</div>
-  </div>
-</div>
-
-<!-- Pause overlay (round-9 fix). -->
-<div id="hud-pause">
-  <h2>PAUSED</h2>
-  <p>Press Enter or Esc to resume — or click Resume.</p>
-  <button id="btn-resume">Resume</button>
-</div>
-
-<!-- Modal: food / outfit / garage / busted / wasted. -->
-<div id="hud-modal">
-  <div id="hud-modal-title"></div>
-  <div id="hud-modal-body"></div>
-</div>
-
-<!-- In-game HUD. -->
 <div id="hud">
-  <div id="hud-top">
-    <div id="hud-cash">$150 (bank $0)</div>
-    <div id="hud-health">HP 100</div>
-    <div id="hud-armour"></div>
-    <div id="hud-wanted">☆☆☆☆☆</div>
-    <div id="hud-clock">Day 1 · 08:00 · day · clear</div>
-    <div id="hud-respect">Respect 0 — Nobody</div>
-    <div id="hud-completion">Save slot 1 · 0% complete</div>
-  </div>
+  <div id="hud-top"><span id="hud-cash">$150</span><span id="hud-health">100</span><span id="hud-wanted">☆☆☆☆☆</span><span id="hud-armour"></span></div>
+  <div id="hud-clock">Day 1 · 08:00 · day · clear</div>
+  <button id="btn-pause">II Pause</button>
   <div id="hud-mission"></div>
   <div id="hud-police"></div>
-  <div id="hud-right">
-    <canvas id="hud-minimap" width="200" height="200"></canvas>
-    <div id="hud-district">Downtown</div>
-    <div id="hud-speed">0 km/h</div>
-  </div>
-  <div id="hud-bottom">
-    <div id="hud-weapon">1 Pistol ∞ 2 SMG 0 3 Shotgun 0 — [Pistol ∞]</div>
-    <div id="hud-car">On foot</div>
-    <div id="hud-radio">BAY FM 94.7 — Golden Hour Drive</div>
-  </div>
-  <button id="btn-pause">II Pause (Esc)</button>
-  <div id="hud-dialogue"></div>
+  <div id="hud-bottom"><span id="hud-speed">0 km/h</span><span id="hud-weapon">[Pistol ∞]</span><span id="hud-car">On foot</span></div>
+  <div id="hud-right"><div id="hud-respect"></div><div id="hud-completion">0%</div><div id="hud-district">Downtown</div><div id="hud-radio"></div></div>
   <div id="hud-toast"></div>
+  <div id="hud-dialogue"></div>
+  <canvas id="hud-minimap" width="200" height="200"></canvas>
+  <div id="hud-controls">WASD move · Shift run · E interact · F punch · G bomb · Click shoot · Esc pause · Tab phone · R radio · M mute</div>
 </div>
 
-<!-- Phone overlay. -->
-<div id="hud-phone">
-  <h2>Phone</h2>
-  <div><span class="tab" id="phone-tab-contacts">Contacts</span><span class="tab" id="phone-tab-messages">Messages</span><span class="tab" id="phone-tab-map">Map</span></div>
-  <div id="hud-phone-body"></div>
+<div id="hud-menu">
+  <h1>SOLMAR BAY</h1>
+  <p>An open-world 3D city. Steal cars, lose the cops, build respect — and pull off the Big One.</p>
+  <button id="btn-new">New Game</button>
+  <button id="btn-continue">Continue</button>
+  <p>WASD move · Shift run · E interact · F punch · G bomb · Click shoot · Esc pause · Tab phone · R radio · M mute</p>
 </div>
 
-<div id="hud-err"></div>
+<div id="hud-card"><div id="hud-card-inner"><div id="hud-card-title"></div><div id="hud-card-text"></div><p>Press Enter to continue</p></div></div>
+
+<div id="hud-modal"><div id="hud-modal-inner"><div id="hud-modal-title"></div><div id="hud-modal-lines"></div></div></div>
+
+<div id="hud-pause"><h2>PAUSED</h2><button id="btn-resume">Resume</button></div>
+
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
