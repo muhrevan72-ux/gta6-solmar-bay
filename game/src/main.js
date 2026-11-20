@@ -489,3 +489,14 @@ export function collectDynamicBoxes(game, batch, cam) {
   if (game.player.inside) interiorBoxes(game, batch, cam);
   return batchTris(batch);
 }
+
+// ---------- self-boot (real browser only) ----------
+// The page loads this module and nothing else calls boot(): without
+// this, the title screen renders but no listener is ever wired, so
+// New Game / Continue do nothing (the round-12 play-test failure).
+// Guarded so Node and the headless test harness (no document) do
+// NOT auto-boot — the tests call boot() directly. The script tag
+// sits after the canvas in index.html, so the element exists.
+if (typeof document !== 'undefined' && document.getElementById('game-canvas')) {
+  boot(document.getElementById('game-canvas'), document);
+}
