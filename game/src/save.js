@@ -1,4 +1,4 @@
-// Solmar Bay — save / load (rebuild #14).
+// Solmar Bay — save / load (rebuild #15).
 // Slot 1 under the key 'solmar-bay-save-1'. Progress only
 // (chapter, cash, respect, completion, owned cars) — never the
 // player position. Safe no-ops when localStorage is absent (Node).

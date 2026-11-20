@@ -1,4 +1,4 @@
-// Solmar Bay — the taxi (rebuild #14).
+// Solmar Bay — the taxi (rebuild #15).
 // Digit 4 calls a cab. It drives to the player, waits, and leaves
 // after 30 s. Get in and a fare starts: drive to the marker for
 // $120 + 10 respect.

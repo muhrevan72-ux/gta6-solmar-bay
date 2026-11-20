@@ -1,4 +1,4 @@
-// Solmar Bay — the phone (Tab) (rebuild #14).
+// Solmar Bay — the phone (Tab) (rebuild #15).
 // Contacts: Rico (tips), Maya (dating), Taxi, Mechanic.
 // Tabs: messages / map / contacts. Tab toggles it open and closed;
 // it does nothing on the title screen. Calls land in g.messages
@@ -27,6 +27,30 @@ export function phoneTab(g, tab) {
   g.phoneTab = tab;
   if (tab === 'messages') g.unread = 0;
   return g.phoneTab;
+}
+
+// The phone screen text, rendered by hud.js into #hud-phone.
+// (Fix round 2, bug (a): togglePhone only flipped the mode flag
+// and nothing ever drew the phone, so Tab opened an invisible
+// modal that trapped the game. This text IS the visible UI.)
+export function phoneText(g) {
+  const lines = [];
+  lines.push('PHONE  —  Tab / Esc to close');
+  const unread = g.unread || 0;
+  lines.push(unread > 0 ? `Messages (${unread} unread)` : 'Messages');
+  const msgs = (g.messages || []).slice(-2);
+  if (msgs.length === 0) {
+    lines.push('No messages yet.');
+  } else {
+    for (const m of msgs) {
+      const t = String(m.text || '').slice(0, 70);
+      lines.push(`${m.from}: ${t}`);
+    }
+  }
+  lines.push('— Contacts —');
+  lines.push(CONTACTS.map((c) => `${c.name} (${c.role})`).join(' · '));
+  lines.push(`Tab: ${g.phoneTab || 'messages'} · Cash $${Math.floor(g.cash || 0)}`);
+  return lines.join('\n');
 }
 
 function addMessage(g, from, text) {
