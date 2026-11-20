@@ -75,7 +75,9 @@ for (const f of jsFiles) {
   totalLines += lines;
 }
 const missing = REQUIRED.filter((f) => !existsSync(join(root, f)));
-const badPrim = 'QUA' + 'DS'; // built by concatenation so this file itself does not contain the literal
+// The bad primitive's name is built by concatenation so this
+// file itself does not contain the literal string.
+const badPrim = 'QUA' + 'DS';
 const hasBadPrim = jsFiles.some((f) => readFileSync(join(root, f), 'utf8').includes(badPrim));
 const screenshots = existsSync(join(root, 'screenshots'))
   ? readdirSync(join(root, 'screenshots')).filter((f) => /\.(png|jpg|jpeg)$/i.test(f))
@@ -107,6 +109,7 @@ const dossier = {
     'static .glb loader (CC0 Barrel_01, Poly Haven)',
     'gangs (Bay Kings vs Harbour Sharks)',
     'fire, taxi, dating, outfit, training, events, cats, train, elevator',
+    'boot-order fix: canvas sized before createRenderer, resize re-creates the renderer',
   ],
   controls: 'WASD move, Shift run, E interact/enter car, F punch, G bomb, click shoot, 1/2/3 weapons, Space handbrake/parachute, Esc pause, M mute, Tab phone, R radio',
 };

@@ -20,38 +20,8 @@ A 3D voxel open-world crime game (GTA-style), built for the make.fun "Make GTA 6
 
 ## Controls
 
-| Key | Action |
-| --- | --- |
-| WASD | Move (camera-relative) |
-| Shift | Run |
-| E | Interact / enter car / store car in garage |
-| F | Punch |
-| G | Throw a bomb |
-| Click | Shoot |
-| 1 / 2 / 3 | Pistol / SMG / Shotgun |
-| Space | Handbrake (car) / parachute (plane) |
-| Esc / P | Pause |
-| M | Mute |
-| Tab | Phone (4 taxi, 5 Maya, 6 Rico) |
-| R | Next radio station |
-| Mouse drag | Orbit camera · Wheel: zoom |
+WASD move · Shift run · E interact / enter car · F punch · G bomb · Click shoot · 1/2/3 weapons · Space handbrake / parachute · Esc pause · Tab phone · R radio · M mute · Mouse drag orbits, wheel zooms.
 
-## Run it locally
+## Build notes
 
-```sh
-# any static server, e.g.
-npx serve .
-# then open http://localhost:3000/game/
-```
-
-Or just open `game/index.html` — the game needs no build step. `node main.ts` prints the build dossier (file inventory, line counts, checks).
-
-## Tech
-
-- Vanilla JS (ES modules) + WebGL1. No libraries, no build, no network.
-- `game/src/` holds 33 modules: config, texture, render, shots, world, interiors, state, input, audio, save, weather, gltf, player, vehicles, pedestrians, gangs, police, combat, missions, taxi, fire, food, dating, outfit, training, events, cats, living, phone, garage, activities, hud, main.
-- `game/assets/barrel.glb` — Barrel_01, Poly Haven, CC0.
-
-## License
-
-MIT. All art is procedural code and one CC0 model; no Rockstar assets, no copyrighted music.
+Rebuilt from scratch in a recorded session (round 8). The round-7 build failed its browser play-test with a flat-sky render: the boot sequence created the WebGL renderer *before* sizing the canvas, and assigning `canvas.width`/`height` resets the WebGL context, destroying the shader program before the first frame. This build sizes the canvas first, creates the renderer second, and re-creates the renderer on every resize — with a headless regression test that fails on the old order and passes on the new one.
