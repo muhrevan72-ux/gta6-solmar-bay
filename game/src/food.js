@@ -1,50 +1,54 @@
-// Solmar Bay — food shops.
-//
-// Five storefronts. Standing at a front opens the menu; buying
-// charges the FOOD_MENU price and applies its effect. The shop
-// signs are drawn as five boxes in the dynamic batch.
+// Solmar Bay — food shops: menus, buying, and the shop signs.
 
 import { FOOD_SHOPS, FOOD_MENU } from './config.js';
 import { pushBox } from './render.js';
 
 export function nearestFoodShop(g) {
   let best = null;
-  let bestD = 5;
-  for (const shop of FOOD_SHOPS) {
-    const d = Math.hypot(g.player.x - shop.x, g.player.z - shop.z);
-    if (d < bestD) { bestD = d; best = shop; }
+  let bestD = 8;
+  for (const s of FOOD_SHOPS) {
+    const d = Math.hypot(s.x - g.player.x, s.z - g.player.z);
+    if (d < bestD) {
+      bestD = d;
+      best = s;
+    }
   }
   return best;
 }
 
+// Open the food menu at a nearby shop.
 export function tryFoodShop(g) {
   const shop = nearestFoodShop(g);
   if (!shop) return false;
   g.modal = {
     kind: 'food',
     title: shop.name,
-    lines: FOOD_MENU.map((m, i) => `${i + 1}. ${m.name} — $${m.price} (+${m.hp} HP)`),
+    lines: FOOD_MENU.map(m => `${m.name} — $${m.price}`),
+    shop,
   };
   return true;
 }
 
-export function buyFood(g, idx) {
-  const item = FOOD_MENU[idx];
+// Buy a menu item. Snack $5 heals 10 HP; Feast $15 heals to 100
+// and adds 25 armour. Reads item.heal / item.armour (the round-10
+// bug read item.hp, which does not exist, and produced NaN HP).
+export function buyFood(g, index) {
+  const item = FOOD_MENU[index];
   if (!item) return false;
-  if ((g.cash || 0) < item.price) return false;
+  if (g.cash < item.price) return false;
   g.cash -= item.price;
-  g.health = Math.min(100, (g.health || 0) + (item.heal || 0));
+  if (item.heal) g.health = Math.min(100, g.health + item.heal);
   if (item.armour) g.armour = (g.armour || 0) + item.armour;
-  if (g.player) g.player.health = g.health;
-  g.modal = null;
+  g.toast = `${item.name} — ${item.heal ? `+${item.heal} HP` : ''}${item.armour ? ` +${item.armour} armour` : ''}`;
+  g.toastTimer = 3;
   return true;
 }
 
-// One sign box per shop.
-export function foodSignBoxes(g, b, camera) {
+// One sign box per food shop.
+export function foodSignBoxes(g, batch, cam) {
   let n = 0;
-  for (const shop of FOOD_SHOPS) {
-    pushBox(b, shop.x, 3, shop.z + 2, 4, 1.2, 0.3, [0.95, 0.8, 0.2]);
+  for (const s of FOOD_SHOPS) {
+    pushBox(batch, s.x, 3.5, s.z - 1, 6, 1.2, 0.3, s.colour || [0.9, 0.6, 0.2]);
     n++;
   }
   return n;

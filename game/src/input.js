@@ -1,32 +1,34 @@
 // Solmar Bay — keyboard + mouse input.
 //
-// Two sets: `down` is every key currently held, `pressed` is the keys
-// tapped since the last frame. A tap lands in both; endFrame clears
-// only `pressed`, so a held key keeps moving the player while a tap is
-// consumed exactly once. A repeat keydown (holding a key) never counts
-// as a second tap.
+// Two sets, because a quick tap can happen between two frames:
+// `down` tracks held keys, `pressed` tracks taps. A tap is added on a
+// non-repeat keydown and cleared by endFrame(). Every tap action in
+// the game (E, F, G, Escape, Enter, digits, M, R, Tab) reads
+// pressedKey, never a poll of held keys. Repeat keydown events never
+// re-add to `pressed`. Cooldowns are always gated with `<= 0`, never
+// with `!cooldown` (a decaying cooldown goes slightly negative and
+// `!(-0.0167)` is false forever).
 
 export function createInput() {
   const input = {
-    pressed: new Set(),
     down: new Set(),
-    mouse: { clicked: false, down: false, x: 0, y: 0 },
+    pressed: new Set(),
+    mouse: { x: 0, y: 0, clicked: false, down: false },
     wheel: 0,
     attached: false,
     _handlers: null,
-
+    injectTap(code) {
+      this.down.add(code);
+      this.pressed.add(code);
+    },
+    injectRelease(code) {
+      this.down.delete(code);
+    },
     pressedKey(code) {
       return this.pressed.has(code);
     },
     downKey(code) {
       return this.down.has(code);
-    },
-    injectTap(code) {
-      this.pressed.add(code);
-      this.down.add(code);
-    },
-    injectRelease(code) {
-      this.down.delete(code);
     },
     endFrame() {
       this.pressed.clear();
@@ -34,66 +36,78 @@ export function createInput() {
       this.wheel = 0;
     },
     attach(target) {
-      // Handlers are built whether or not a window exists, so the
-      // logic suites can drive them headlessly through _handlers.
-      const self = this;
-      this._handlers = {
-        onDown(e) {
-          if (e.repeat) {
-            self.down.add(e.code);
-            return;
-          }
-          self.pressed.add(e.code);
-          self.down.add(e.code);
-          if (e.code === 'Tab' || e.code === 'Space' || e.code.startsWith('Arrow')) {
+      // In Node there is no window: stay detached, never throw.
+      if (typeof window === 'undefined' || !target || typeof target.addEventListener !== 'function') {
+        this.attached = false;
+        this._handlers = {
+          onDown: (e) => {
+            if (e.repeat) return;
+            this.down.add(e.code);
+            this.pressed.add(e.code);
             if (e.preventDefault) e.preventDefault();
+          },
+          onUp: (e) => { this.down.delete(e.code); },
+          onMouseDown: (e) => {
+            if (e.button === 0) { this.mouse.clicked = true; this.mouse.down = true; }
+          },
+          onMouseUp: (e) => {
+            if (e.button === 0) this.mouse.down = false;
+          },
+          onMove: (e) => {
+            this.mouse.x = e.clientX;
+            this.mouse.y = e.clientY;
+          },
+          onWheel: (e) => { this.wheel += e.deltaY || 0; },
+        };
+        return;
+      }
+      const h = {
+        onDown: (e) => {
+          if (e.repeat) return;
+          this.down.add(e.code);
+          this.pressed.add(e.code);
+          if (['Tab', 'Space'].includes(e.code)) e.preventDefault();
+        },
+        onUp: (e) => { this.down.delete(e.code); },
+        onMouseDown: (e) => {
+          if (e.button === 0) { this.mouse.clicked = true; this.mouse.down = true; }
+        },
+        onMouseUp: (e) => {
+          if (e.button === 0) this.mouse.down = false;
+        },
+        onMove: (e) => {
+          this.mouse.x = e.clientX;
+          this.mouse.y = e.clientY;
+          if (this.mouse.down && typeof e.movementX === 'number') {
+            this._dragX = (this._dragX || 0) + e.movementX;
+            this._dragY = (this._dragY || 0) + e.movementY;
           }
         },
-        onUp(e) {
-          self.down.delete(e.code);
-        },
-        onMouseDown() {
-          self.mouse.clicked = true;
-          self.mouse.down = true;
-        },
-        onMouseUp() {
-          self.mouse.down = false;
-        },
-        onMove(e) {
-          self.mouse.x = e.clientX;
-          self.mouse.y = e.clientY;
-        },
-        onWheel(e) {
-          self.wheel += e.deltaY || 0;
-        },
+        onWheel: (e) => { this.wheel += e.deltaY || 0; },
       };
-      // Only the real window gets listeners. In Node (or when handed
-      // a stand-in object) attach is a safe no-op.
-      if (typeof window === 'undefined') {
-        this.attached = false;
-        return;
-      }
-      const w = target || window;
-      if (w !== window) {
-        this.attached = false;
-        return;
-      }
-      w.addEventListener('keydown', this._handlers.onDown);
-      w.addEventListener('keyup', this._handlers.onUp);
-      w.addEventListener('mousedown', this._handlers.onMouseDown);
-      w.addEventListener('mouseup', this._handlers.onMouseUp);
-      w.addEventListener('mousemove', this._handlers.onMove);
-      w.addEventListener('wheel', this._handlers.onWheel);
+      this._handlers = h;
+      target.addEventListener('keydown', h.onDown);
+      target.addEventListener('keyup', h.onUp);
+      target.addEventListener('mousedown', h.onMouseDown);
+      target.addEventListener('mouseup', h.onMouseUp);
+      target.addEventListener('mousemove', h.onMove);
+      target.addEventListener('wheel', h.onWheel);
       this.attached = true;
+    },
+    consumeDrag() {
+      const dx = this._dragX || 0;
+      const dy = this._dragY || 0;
+      this._dragX = 0;
+      this._dragY = 0;
+      return { dx, dy };
     },
   };
   return input;
 }
 
-// Signed axis: -1 while the first key is held, +1 while the second
-// is, 0 when neither (or both). W/S is the forward axis, A/D strafe.
-export function axis(input, keyA, keyB) {
-  const a = input.downKey(keyA) ? -1 : 0;
-  const b = input.downKey(keyB) ? 1 : 0;
-  return a + b;
+export function axis(input, negCode, posCode) {
+  let v = 0;
+  if (input.downKey(negCode)) v -= 1;
+  if (input.downKey(posCode)) v += 1;
+  return v;
 }

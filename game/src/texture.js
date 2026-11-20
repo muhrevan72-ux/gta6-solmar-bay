@@ -1,19 +1,12 @@
-// Solmar Bay — texture atlas.
-//
-// One 512x512 canvas holds eight 128x128 tiles on a 4x2 grid. Every
-// box and quad in the game samples a tile through tileUV, so the whole
-// city is textured from a single upload. In Node there is no document,
-// so the atlas builder returns null and the renderer falls back to a
-// 1x1 white texture (colours then come through untextured).
+// Solmar Bay — runtime texture atlas (procedural, no files).
+// A 512x512 canvas with 8 tiles in a 4x2 grid, each 128x128.
+// TILES order is fixed: brick 0, asphalt 1, sidewalk 2, sand 3,
+// grass 4, water 5, plain 6, window 7.
 
 export const ATLAS_SIZE = 512;
 export const TILE = 128;
-
-// Grid order, index 0..7: brick 0, asphalt 1, sidewalk 2, sand 3,
-// grass 4, water 5, plain 6, window 7. Plain is col 2, row 1.
 export const TILES = ['brick', 'asphalt', 'sidewalk', 'sand', 'grass', 'water', 'plain', 'window'];
 
-// [u0, v0, u1, v1] for a tile. Unknown names fall back to plain.
 export function tileUV(name) {
   let i = TILES.indexOf(name);
   if (i < 0) i = TILES.indexOf('plain');
@@ -24,123 +17,95 @@ export function tileUV(name) {
   return [u0, v0, u0 + 0.25, v0 + 0.25];
 }
 
-// Paint the atlas. Returns null where there is no document.
+// Draw the atlas into a canvas (browser only). In Node there is no
+// document, so this returns null and the renderer falls back to a
+// 1x1 white texture.
 export function buildAtlasCanvas() {
   if (typeof document === 'undefined') return null;
   const c = document.createElement('canvas');
   c.width = ATLAS_SIZE;
   c.height = ATLAS_SIZE;
   const ctx = c.getContext('2d');
-  if (!ctx) return null;
   const paint = (name, fn) => {
-    const i = TILES.indexOf(name);
-    const x = (i % 4) * TILE;
-    const y = Math.floor(i / 4) * TILE;
+    const [u0, v0] = tileUV(name);
+    const x = u0 * ATLAS_SIZE;
+    const y = v0 * ATLAS_SIZE;
     ctx.save();
     ctx.translate(x, y);
     fn(ctx);
     ctx.restore();
   };
-  // Brick courses.
+  // brick: warm red with darker mortar lines.
   paint('brick', (ctx) => {
-    ctx.fillStyle = '#8a4a3a';
+    ctx.fillStyle = '#96604a';
     ctx.fillRect(0, 0, TILE, TILE);
-    ctx.fillStyle = '#a85f4a';
-    for (let r = 0; r < 4; r++) {
-      for (let col = 0; col < 2; col++) {
-        ctx.fillRect(col * 64 + (r % 2 ? 32 : 0) - 32, r * 32 + 3, 58, 26);
-      }
+    ctx.fillStyle = '#7a4a38';
+    for (let y = 0; y < TILE; y += 16) ctx.fillRect(0, y, TILE, 2);
+    for (let y = 0; y < TILE; y += 32) {
+      for (let x = (y % 64 === 0 ? 0 : 32); x < TILE; x += 64) ctx.fillRect(x, y, 2, 16);
     }
   });
-  // Asphalt speckle.
+  // asphalt: dark grey with speckle.
   paint('asphalt', (ctx) => {
-    ctx.fillStyle = '#2a2a2e';
+    ctx.fillStyle = '#2e2e33';
     ctx.fillRect(0, 0, TILE, TILE);
-    for (let i = 0; i < 220; i++) {
-      const g = 30 + Math.floor(Math.random() * 40);
-      ctx.fillStyle = `rgb(${g},${g},${g + 6})`;
-      ctx.fillRect(Math.random() * TILE, Math.random() * TILE, 2, 2);
+    ctx.fillStyle = '#3a3a40';
+    for (let i = 0; i < 200; i++) {
+      ctx.fillRect((i * 37) % TILE, (i * 53) % TILE, 2, 2);
     }
   });
-  // Sidewalk slabs.
+  // sidewalk: light grey slabs.
   paint('sidewalk', (ctx) => {
-    ctx.fillStyle = '#8d8d90';
+    ctx.fillStyle = '#8a8a8a';
     ctx.fillRect(0, 0, TILE, TILE);
-    ctx.strokeStyle = '#6f6f72';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(2, 2, TILE - 4, TILE - 4);
-    ctx.beginPath();
-    ctx.moveTo(TILE / 2, 0);
-    ctx.lineTo(TILE / 2, TILE);
-    ctx.moveTo(0, TILE / 2);
-    ctx.lineTo(TILE, TILE / 2);
-    ctx.stroke();
+    ctx.fillStyle = '#6f6f6f';
+    ctx.fillRect(0, 0, TILE, 3);
+    ctx.fillRect(0, 64, TILE, 3);
+    ctx.fillRect(64, 0, 3, TILE);
   });
-  // Sand dots.
+  // sand: warm pale with dots.
   paint('sand', (ctx) => {
     ctx.fillStyle = '#d9bf8a';
     ctx.fillRect(0, 0, TILE, TILE);
-    for (let i = 0; i < 160; i++) {
-      ctx.fillStyle = Math.random() < 0.5 ? '#c9ad72' : '#e8d09a';
-      ctx.fillRect(Math.random() * TILE, Math.random() * TILE, 3, 2);
+    ctx.fillStyle = '#c4a878';
+    for (let i = 0; i < 120; i++) {
+      ctx.fillRect((i * 29) % TILE, (i * 41) % TILE, 3, 2);
     }
   });
-  // Grass blades.
+  // grass: green with blades.
   paint('grass', (ctx) => {
-    ctx.fillStyle = '#6a9e61';
+    ctx.fillStyle = '#6b9e61';
     ctx.fillRect(0, 0, TILE, TILE);
-    for (let i = 0; i < 200; i++) {
-      ctx.strokeStyle = Math.random() < 0.5 ? '#557f4d' : '#7fb473';
-      ctx.beginPath();
-      const x = Math.random() * TILE;
-      const y = Math.random() * TILE;
-      ctx.moveTo(x, y);
-      ctx.lineTo(x + 2, y - 6);
-      ctx.stroke();
+    ctx.fillStyle = '#5a8a52';
+    for (let i = 0; i < 160; i++) {
+      ctx.fillRect((i * 23) % TILE, (i * 31) % TILE, 2, 4);
     }
   });
-  // Water waves.
+  // water: blue with wave streaks.
   paint('water', (ctx) => {
-    ctx.fillStyle = '#33a5e6';
+    ctx.fillStyle = '#33a6e6';
     ctx.fillRect(0, 0, TILE, TILE);
-    ctx.strokeStyle = '#7cc8f0';
-    ctx.lineWidth = 3;
-    for (let r = 0; r < 4; r++) {
-      ctx.beginPath();
-      for (let x = 0; x <= TILE; x += 8) {
-        const y = r * 32 + 16 + Math.sin(x / 16 + r) * 5;
-        if (x === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-    }
+    ctx.fillStyle = '#7cc8f0';
+    for (let y = 8; y < TILE; y += 24) ctx.fillRect(0, y, TILE, 3);
   });
-  // Plain white (the fallback tile).
+  // plain: flat white (vertex colour shows through).
   paint('plain', (ctx) => {
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, TILE, TILE);
   });
-  // Window: dark glass with a bright frame and a lit pane.
+  // window: dark glass with a bright frame.
   paint('window', (ctx) => {
-    ctx.fillStyle = '#20344a';
+    ctx.fillStyle = '#22384a';
     ctx.fillRect(0, 0, TILE, TILE);
     ctx.fillStyle = '#66a6cc';
     ctx.fillRect(10, 10, TILE - 20, TILE - 20);
-    ctx.fillStyle = '#ffe9a8';
-    ctx.fillRect(18, 18, 34, 26);
-    ctx.strokeStyle = '#20344a';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(10, 10, TILE - 20, TILE - 20);
-    ctx.beginPath();
-    ctx.moveTo(TILE / 2, 10);
-    ctx.lineTo(TILE / 2, TILE - 10);
-    ctx.stroke();
+    ctx.fillStyle = '#22384a';
+    ctx.fillRect(10, TILE / 2 - 4, TILE - 20, 8);
+    ctx.fillRect(TILE / 2 - 4, 10, 8, TILE - 20);
   });
   return c;
 }
 
-// Upload the atlas as a GL texture. Null when there is no GL context
-// or no atlas canvas (Node): the renderer then uses its white fallback.
 export function createAtlasTexture(gl) {
   if (!gl) return null;
   const canvas = buildAtlasCanvas();
@@ -149,7 +114,7 @@ export function createAtlasTexture(gl) {
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   return tex;

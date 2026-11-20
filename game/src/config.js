@@ -1,104 +1,119 @@
-// Solmar Bay — tuning, tables and constants.
-//
-// Everything the systems agree on lives here so a balance tweak is a
-// one-line change: speeds, crime stars, chapter rewards, radio, spawn
-// points, respect ladder, food, outfits and the colour palette.
+// Solmar Bay — tuning, palette, crimes, chapters, stations, spawns.
+// Pure data + tiny helpers. No imports, no side effects.
 
-// ---------- tuning ----------
 export const TUNE = {
-  walkSpeed: 4, // m/s on foot
-  runSpeed: 8, // m/s while holding Shift
-  dayLengthSec: 720, // one full game day = 24 game hours at 120x
-  carMaxSpeed: 32, // m/s, ordinary cars
-  bikeMaxSpeed: 40, // m/s, the bike outruns every car
-  carAccel: 14, // m/s^2
-  carBrake: 26, // m/s^2
-  batchCap: 1600, // max boxes in one dynamic batch
-  heliAltitude: 80, // metres, police helicopter orbit height
-  copShootRange: 30, // metres, a foot cop opens fire inside this
-  copBustRange: 2, // metres, a foot cop that close busts the player
-  wantedDecaySec: 14, // seconds out of sight to lose one star
-  sightRange: 60, // metres, a cop inside this blocks wanted decay
+  walkSpeed: 4,
+  runSpeed: 8,
+  carMaxSpeed: 28,
+  carAccel: 12,
+  carTurn: 1.8,
+  bikeMaxSpeed: 36,
+  boatMaxSpeed: 20,
+  planeMaxSpeed: 45,
+  dayLengthSec: 720,
+  batchCap: 1600,
+  heliAltitude: 80,
 };
 
-// ---------- crime ----------
-// A crime's stars are the wanted LEVEL it sets, not points to add:
-// stealing a car (1) then killing a ped (2) leaves the player at 2
-// stars, the worst crime, exactly like the genre this game imitates.
+// Colour palette (RGB 0..1). Every colour used by the world, the
+// peds, the vehicles and the HUD lives here so the look stays coherent.
+export const COL = {
+  water: [0.2, 0.65, 0.9],
+  grass: [0.42, 0.62, 0.38],
+  road: [0.16, 0.16, 0.18],
+  sidewalk: [0.55, 0.55, 0.55],
+  sand: [0.85, 0.75, 0.55],
+  asphalt: [0.16, 0.16, 0.18],
+  brick: [0.6, 0.35, 0.3],
+  glass: [0.4, 0.65, 0.8],
+  palmLeaf: [0.25, 0.65, 0.3],
+  coconut: [0.5, 0.35, 0.2],
+  barrelRed: [0.85, 0.2, 0.15],
+  rustRed: [0.75, 0.3, 0.15],
+  taxiYellow: [1, 0.85, 0.1],
+  copNavy: [0.1, 0.15, 0.5],
+  kingsGold: [0.95, 0.75, 0.1],
+  sharksTeal: [0.1, 0.7, 0.7],
+  roadLine: [0.95, 0.8, 0.2],
+  neon: [
+    [1, 0.2, 0.5],
+    [0.2, 0.8, 1],
+    [1, 0.6, 0.1],
+    [0.5, 1, 0.3],
+    [0.9, 0.3, 1],
+    [1, 0.9, 0.2],
+  ],
+  cars: [
+    [0.8, 0.1, 0.1],
+    [0.1, 0.3, 0.8],
+    [0.9, 0.9, 0.9],
+    [0.1, 0.1, 0.1],
+    [0.2, 0.7, 0.3],
+    [0.95, 0.75, 0.1],
+    [0.1, 0.7, 0.7],
+  ],
+  shirts: [
+    [0.9, 0.9, 0.9],
+    [0.2, 0.4, 0.8],
+    [0.8, 0.2, 0.2],
+    [0.2, 0.6, 0.3],
+    [0.9, 0.6, 0.2],
+    [0.5, 0.3, 0.7],
+  ],
+  pants: [
+    [0.2, 0.25, 0.5],
+    [0.1, 0.1, 0.1],
+    [0.7, 0.6, 0.4],
+    [0.4, 0.4, 0.4],
+  ],
+  hair: [
+    [0.1, 0.1, 0.1],
+    [0.4, 0.25, 0.1],
+    [0.7, 0.55, 0.3],
+    [0.9, 0.1, 0.1],
+    [0.8, 0.8, 0.8],
+    [0.15, 0.1, 0.05],
+  ],
+};
+
+// Crime table — wanted stars per crime, GTA style. commitCrime takes
+// the max of the current wanted level and the crime's stars.
 export const CRIME = {
   stealCar: { stars: 1, label: 'Grand theft auto' },
   assault: { stars: 1, label: 'Assault' },
-  killPed: { stars: 2, label: 'Killing a pedestrian' },
-  killGang: { stars: 2, label: 'Killing a gang member' },
-  carjacking: { stars: 2, label: 'Carjacking' },
-  killCop: { stars: 3, label: 'Killing a cop' },
-  bombKill: { stars: 3, label: 'Killing with a bomb' },
-  massRampage: { stars: 4, label: 'Mass rampage' },
+  killPed: { stars: 2, label: 'Murder' },
+  killGang: { stars: 2, label: 'Gang murder' },
+  carjacking: { stars: 2, label: 'Armed carjacking' },
+  killCop: { stars: 3, label: 'Killing an officer' },
+  explosion: { stars: 3, label: 'Explosion' },
   copMassacre: { stars: 5, label: 'Cop massacre' },
+  rampage: { stars: 5, label: 'Rampage' },
 };
 
-// ---------- chapters ----------
+// The two rival gangs and their turf (axis-aligned rectangles).
+export const GANGS = {
+  kings: {
+    name: 'Bay Kings',
+    colour: [0.95, 0.75, 0.1],
+    turf: { x0: -120, x1: 120, z0: -120, z1: 60 },
+  },
+  sharks: {
+    name: 'Harbour Sharks',
+    colour: [0.1, 0.7, 0.7],
+    turf: { x0: -300, x1: -120, z0: 120, z1: 280 },
+  },
+};
+
+// The five story chapters.
 export const CHAPTERS = [
-  { title: 'Chapter 1 — First Wheels', reward: 200, objective: 'Steal a car and drive to the garage' },
-  { title: 'Chapter 2 — The Package', reward: 400, objective: 'Pick up the package at the harbour and deliver it to the hideout' },
-  { title: 'Chapter 3 — Hot Pursuit', reward: 500, objective: 'Lose the cops — get your wanted level down to zero' },
-  { title: 'Chapter 4 — Taxi Nights', reward: 600, objective: 'Pick up three passengers around the city' },
-  { title: 'Chapter 5 — The Big One', reward: 1500, objective: 'Grab the vault cash, then reach the safehouse with no stars' },
+  { title: 'First Wheels', reward: 200, objective: 'Steal a car and drive to the garage' },
+  { title: 'The Package', reward: 400, objective: 'Pick up the package at the harbour, deliver it to the hideout' },
+  { title: 'Getaway', reward: 500, objective: 'Escape a 3-star wanted level' },
+  { title: 'Night Run', reward: 600, objective: 'Pick up 3 passengers across the city' },
+  { title: 'The Big One', reward: 1500, objective: 'Grab the vault cash, lose the heat, reach the safehouse' },
 ];
 
-// ---------- radio ----------
-// Four stations, two songs each. A song is a name plus 8 note
-// frequencies; the sequencer steps through them 32 steps per loop.
-export const SONG_STEPS = 32;
-export const STATIONS = [
-  {
-    name: 'BAY FM', freq: '94.7',
-    songs: [
-      { name: 'Golden Hour Drive', notes: [262, 330, 392, 523, 392, 330, 262, 196] },
-      { name: 'Sunset Cruise', notes: [196, 262, 330, 392, 330, 262, 196, 147] },
-    ],
-  },
-  {
-    name: 'PALM', freq: '102.3',
-    songs: [
-      { name: 'Coconut Radio', notes: [330, 392, 440, 523, 440, 392, 330, 262] },
-      { name: 'Island Breeze', notes: [262, 294, 330, 392, 330, 294, 262, 220] },
-    ],
-  },
-  {
-    name: 'NEON', freq: '89.1',
-    songs: [
-      { name: 'Night Circuit', notes: [220, 262, 330, 440, 330, 262, 220, 165] },
-      { name: 'Chrome Lights', notes: [247, 294, 370, 440, 370, 294, 247, 196] },
-    ],
-  },
-  {
-    name: 'CORAL', freq: '105.5',
-    songs: [
-      { name: 'Slow Tide', notes: [196, 220, 262, 330, 262, 220, 196, 165] },
-      { name: 'Deep Blue', notes: [165, 196, 247, 294, 247, 196, 165, 131] },
-    ],
-  },
-];
-
-// ---------- spawn points ----------
-// Every interactable is addressed through SPAWNS so the tests and the
-// world builder can never drift apart about where things are.
-export const SPAWNS = {
-  hospital: { x: -110, z: 150 }, // respawn point, clear of the hospital walls
-  garageDoor: { x: 150, z: -128 }, // player garage, east side
-  elevatorTower: { x: 30, z: -78 }, // Solmar Tower door, south face
-  trainStation: { x: -200, z: -200 }, // south-west platform
-  fishing: { x: -340, z: 100 }, // pier on the beach
-  outfitDoor: { x: -120, z: 65 }, // Vice Threads
-  beachHouse: { x: -300, z: 60 }, // Maya's place, and the cat shelter
-  shootingRange: { x: 250, z: 250 }, // south-east range
-  swimBuoy: { x: -360, z: 100 }, // out in the sea
-  slalomStart: { x: 180, z: 200 }, // start line, east side
-  fireStation: { x: -150, z: -90 }, // fire truck parks 10 m east of this
-};
-
-// ---------- respect ----------
+// Respect ladder + unlocks.
 export const RESPECT = {
   levels: [
     { min: 0, name: 'Nobody' },
@@ -108,113 +123,112 @@ export const RESPECT = {
     { min: 1000, name: 'Legend' },
   ],
   unlocks: [
-    { min: 100, flag: 'smgUnlocked' },
-    { min: 250, flag: 'shotgunUnlocked' },
-    { min: 500, flag: 'sportsCarSpawned' },
+    { min: 100, flag: 'smgUnlocked', label: 'SMG' },
+    { min: 250, flag: 'shotgunUnlocked', label: 'Shotgun' },
+    { min: 500, flag: 'sportsCarSpawned', label: 'Solmar Comet' },
   ],
 };
 
-// The level a respect total sits at, plus the next level's name.
 export function respectLevel(rep) {
   let cur = RESPECT.levels[0];
   let next = null;
   for (let i = 0; i < RESPECT.levels.length; i++) {
     if (rep >= RESPECT.levels[i].min) {
       cur = RESPECT.levels[i];
-      next = RESPECT.levels[i + 1] ? RESPECT.levels[i + 1].name : null;
+      next = RESPECT.levels[i + 1] || null;
     }
   }
-  return { name: cur.name, min: cur.min, next };
+  return { name: cur.name, next: next ? next.name : cur.name, min: cur.min };
 }
 
-// ---------- palette ----------
-// COL is the shared palette: the world, the peds and the player all
-// draw from the same colours so the city reads as one place.
-export const COL = {
-  water: [0.2, 0.65, 0.9], // bright Solmar Bay water
-  grass: [0.42, 0.62, 0.38],
-  road: [0.16, 0.16, 0.18],
-  sidewalk: [0.55, 0.55, 0.58],
-  sand: [0.85, 0.75, 0.55],
-  dash: [0.95, 0.8, 0.15],
-  glass: [0.4, 0.65, 0.8],
-  palmLeaf: [0.25, 0.65, 0.3],
-  coconut: [0.5, 0.35, 0.2],
-  barrelRed: [0.85, 0.2, 0.15],
-  barrelRust: [0.75, 0.3, 0.15],
-  taxiYellow: [1, 0.85, 0.1],
-  copNavy: [0.1, 0.15, 0.5],
-  kingsGold: [0.95, 0.75, 0.2],
-  sharksTeal: [0.15, 0.6, 0.75],
-  skin: [
-    [0.85, 0.65, 0.5],
-    [0.7, 0.5, 0.35],
-    [0.55, 0.4, 0.3],
-    [0.9, 0.75, 0.6],
-  ],
-  hair: [
-    [0.1, 0.08, 0.06],
-    [0.5, 0.3, 0.15],
-    [0.85, 0.7, 0.3],
-    [0.9, 0.1, 0.1],
-    [0.8, 0.8, 0.8],
-    [0.2, 0.2, 0.25],
-  ],
-  shirt: [
-    [0.8, 0.2, 0.2],
-    [0.2, 0.4, 0.8],
-    [0.2, 0.7, 0.3],
-    [0.9, 0.8, 0.2],
-    [0.8, 0.4, 0.7],
-    [0.9, 0.9, 0.9],
-  ],
-  pants: [
-    [0.2, 0.25, 0.5],
-    [0.3, 0.3, 0.3],
-    [0.5, 0.4, 0.3],
-    [0.7, 0.7, 0.65],
-  ],
+// Radio: 4 original synth stations, 2 songs each, 8 notes per song.
+export const SONG_STEPS = 32;
+export const STATIONS = [
+  {
+    name: 'BAY FM', freq: '94.7',
+    songs: [
+      { name: 'Golden Hour Drive', notes: [262, 294, 330, 392, 440, 392, 330, 294] },
+      { name: 'Sunset Strip', notes: [220, 262, 294, 330, 392, 440, 392, 330] },
+    ],
+  },
+  {
+    name: 'PALM', freq: '102.3',
+    songs: [
+      { name: 'Coconut Radio', notes: [330, 392, 440, 523, 440, 392, 330, 262] },
+      { name: 'Island Breeze', notes: [294, 330, 392, 440, 523, 587, 523, 440] },
+    ],
+  },
+  {
+    name: 'NEON', freq: '89.1',
+    songs: [
+      { name: 'Night Circuit', notes: [196, 220, 262, 294, 330, 294, 262, 220] },
+      { name: 'Midnight Drive', notes: [175, 196, 220, 262, 294, 330, 294, 262] },
+    ],
+  },
+  {
+    name: 'CORAL', freq: '105.5',
+    songs: [
+      { name: 'Slow Tide', notes: [247, 262, 294, 330, 294, 262, 247, 220] },
+      { name: 'Low Tide', notes: [220, 247, 262, 294, 330, 294, 262, 247] },
+    ],
+  },
+];
+
+// Fixed spawn / interaction points. Every one of these is on open
+// ground: not inside a building collider and (where it matters) not
+// on a road line.
+export const SPAWNS = {
+  hospital: { x: -110, z: 150 },
+  garageDoor: { x: 150, z: -128 },
+  elevatorTower: { x: 30, z: -68 },
+  trainStation: { x: 0, z: 300 },
+  fishing: { x: -330, z: 100 },
+  swimBuoy: { x: -390, z: 100 },
+  slalomStart: { x: 180, z: 200 },
+  outfitDoor: { x: 150, z: 8 },
+  fireStation: { x: -90, z: -128 },
+  beachHouse: { x: -300, z: 60 },
+  shootingRange: { x: -270, z: -270 },
 };
 
-// ---------- food ----------
+// Food shops: name + the walk-up point in front of the shop.
+export const FOOD_SHOPS = [
+  { name: 'Pizza Palace', x: 30, z: 68 },
+  { name: 'Burger Barn', x: -150, z: 68 },
+  { name: "Clucky's Chicken", x: -40, z: 70 },
+  { name: 'Donut Hole', x: 150, z: 68 },
+  { name: 'Taco Truck', x: 90, z: -68 },
+];
+
 export const FOOD_MENU = [
   { name: 'Snack', price: 5, heal: 10, armour: 0 },
   { name: 'Meal', price: 10, heal: 25, armour: 0 },
   { name: 'Feast', price: 15, heal: 100, armour: 25 },
 ];
 
-export const FOOD_SHOPS = [
-  { name: 'Pizza Palace', x: 40, z: 40 },
-  { name: 'Burger Barn', x: -90, z: -30 },
-  { name: "Clucky's Chicken", x: -40, z: 70 },
-  { name: 'Donut Dock', x: 130, z: 90 },
-  { name: 'Taco Tide', x: -130, z: -90 },
-];
-
-// ---------- outfits ----------
-// Each catalogue entry is a name, a price and the colour it renders
-// as. The outfit the player buys is the outfit the renderer draws.
+// Outfit catalogue. Prices are chosen so hair 2 + shirt 1 + pants 1
+// + shoes 1 totals $155 (40 + 50 + 30 + 35).
 export const OUTFIT = {
   hair: [
-    { name: 'Buzz cut', price: 0, colour: [0.15, 0.12, 0.1] },
-    { name: 'Long hair', price: 25, colour: [0.55, 0.35, 0.2] },
-    { name: 'Red mohawk', price: 40, colour: [0.9, 0.12, 0.1] },
-    { name: 'Blonde spikes', price: 30, colour: [0.85, 0.75, 0.2] },
+    { name: 'Buzz', price: 0, color: [0.1, 0.1, 0.1] },
+    { name: 'Fade', price: 20, color: [0.4, 0.25, 0.1] },
+    { name: 'Red mohawk', price: 40, color: [0.9, 0.1, 0.1] },
+    { name: 'Blonde', price: 30, color: [0.85, 0.7, 0.3] },
   ],
   shirt: [
-    { name: 'White tee', price: 0, colour: [0.85, 0.85, 0.85] },
-    { name: 'Blue hoodie', price: 50, colour: [0.2, 0.3, 0.8] },
-    { name: 'Black jacket', price: 70, colour: [0.15, 0.15, 0.15] },
-    { name: 'Orange tank', price: 20, colour: [0.9, 0.5, 0.2] },
+    { name: 'White tee', price: 0, color: [0.9, 0.9, 0.9] },
+    { name: 'Blue shirt', price: 50, color: [0.2, 0.4, 0.8] },
+    { name: 'Red shirt', price: 45, color: [0.8, 0.2, 0.2] },
+    { name: 'Green shirt', price: 35, color: [0.2, 0.6, 0.3] },
   ],
   pants: [
-    { name: 'Blue jeans', price: 0, colour: [0.2, 0.25, 0.5] },
-    { name: 'Khaki shorts', price: 30, colour: [0.7, 0.7, 0.65] },
-    { name: 'Cargo pants', price: 45, colour: [0.3, 0.35, 0.25] },
+    { name: 'Jeans', price: 0, color: [0.2, 0.25, 0.5] },
+    { name: 'Black pants', price: 30, color: [0.1, 0.1, 0.1] },
+    { name: 'Khaki', price: 25, color: [0.7, 0.6, 0.4] },
   ],
   shoes: [
-    { name: 'White sneakers', price: 0, colour: [0.9, 0.9, 0.9] },
-    { name: 'Gold kicks', price: 35, colour: [0.95, 0.75, 0.1] },
-    { name: 'Brown boots', price: 50, colour: [0.3, 0.2, 0.15] },
+    { name: 'Sneakers', price: 0, color: [0.9, 0.9, 0.9] },
+    { name: 'Gold kicks', price: 35, color: [0.95, 0.75, 0.1] },
+    { name: 'Boots', price: 40, color: [0.4, 0.25, 0.15] },
   ],
 };

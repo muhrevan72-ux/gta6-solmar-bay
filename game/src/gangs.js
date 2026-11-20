@@ -1,28 +1,13 @@
-// Solmar Bay — the two gangs.
-//
-// Bay Kings hold downtown (centre 0,-40, radius 130); Harbour Sharks
-// hold the harbour (centre -180,180, radius 120). Inside their turf
-// and close to the player they chase and attack; outside it they
-// patrol. The bandana — the last box drawn — is the gang colour.
+// Solmar Bay — two rival gangs: the Bay Kings (gold, downtown) and
+// the Harbour Sharks (teal, harbour). Members attack the player on
+// sight inside their turf.
 
-import { COL } from './config.js';
-import { damagePlayer } from './combat.js';
+import { GANGS } from './config.js';
 import { pushBox } from './render.js';
 
-const TURF = {
-  kings: { x: 0, z: -40, r: 130 },
-  sharks: { x: -180, z: 180, r: 120 },
-};
-
-export function gangInTurf(gang, x, z) {
-  const t = TURF[gang];
-  if (!t) return false;
-  return Math.hypot(x - t.x, z - t.z) < t.r;
-}
-
 function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
+  let a = seed;
+  return function () {
     a |= 0;
     a = (a + 0x6d2b79f5) | 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
@@ -31,78 +16,82 @@ function mulberry32(seed) {
   };
 }
 
-export function spawnGangs(g) {
-  const rng = mulberry32(4242);
-  const members = [];
-  for (let i = 0; i < 13; i++) {
-    const a = rng() * Math.PI * 2;
-    const r = rng() * 100;
-    members.push({
-      gang: 'kings',
-      x: TURF.kings.x + Math.cos(a) * r,
-      z: TURF.kings.z + Math.sin(a) * r,
-      heading: rng() * Math.PI * 2,
-      hp: 100, dead: false, attackCd: 0,
-      wanderA: rng() * Math.PI * 2,
-    });
-  }
-  for (let i = 0; i < 12; i++) {
-    const a = rng() * Math.PI * 2;
-    const r = rng() * 90;
-    members.push({
-      gang: 'sharks',
-      x: TURF.sharks.x + Math.cos(a) * r,
-      z: TURF.sharks.z + Math.sin(a) * r,
-      heading: rng() * Math.PI * 2,
-      hp: 100, dead: false, attackCd: 0,
-      wanderA: rng() * Math.PI * 2,
-    });
-  }
-  g.gangMembers = members;
+export function gangInTurf(gang, x, z) {
+  const def = GANGS[gang];
+  if (!def) return false;
+  return x >= def.turf.x0 && x <= def.turf.x1 && z >= def.turf.z0 && z <= def.turf.z1;
 }
 
-export function stepGangs(g, dt) {
-  for (const m of g.gangMembers) {
-    if (m.dead) continue;
-    m.attackCd = Math.max(0, (m.attackCd || 0) - dt);
-    const d = Math.hypot(g.player.x - m.x, g.player.z - m.z);
-    const inTurf = gangInTurf(m.gang, g.player.x, g.player.z);
-    if (inTurf && d < 30) {
-      // Chase and attack.
-      if (d > 2.5) {
-        const step = Math.min(d - 2, 3.5 * dt);
-        m.x += ((g.player.x - m.x) / d) * step;
-        m.z += ((g.player.z - m.z) / d) * step;
-        m.heading = Math.atan2((g.player.x - m.x) / d, (g.player.z - m.z) / d);
-      } else if (m.attackCd <= 0) {
-        damagePlayer(g, 5);
-        m.attackCd = 1;
-      }
-    } else {
-      // Patrol: wander slowly, turning now and then.
-      if (Math.random() < 0.02) m.wanderA = Math.random() * Math.PI * 2;
-      m.x += Math.sin(m.wanderA) * 1.2 * dt;
-      m.z += Math.cos(m.wanderA) * 1.2 * dt;
-      m.heading = m.wanderA;
+export function spawnGangs(g) {
+  const rng = mulberry32(777);
+  g.gangMembers = [];
+  for (const [key, def] of Object.entries(GANGS)) {
+    const count = key === 'kings' ? 13 : 12;
+    for (let i = 0; i < count; i++) {
+      const x = def.turf.x0 + rng() * (def.turf.x1 - def.turf.x0);
+      const z = def.turf.z0 + rng() * (def.turf.z1 - def.turf.z0);
+      g.gangMembers.push({
+        gang: key, x, z, heading: rng() * Math.PI * 2,
+        hp: 100, dead: false, colour: def.colour, bandana: def.colour,
+        speed: 2 + rng(),
+        home: { x, z },
+      });
     }
   }
 }
 
-// The gang model: head, torso, 2 arms, 2 legs — 6 boxes — plus the
-// bandana last, in the gang colour.
-export function gangBoxes(g, m, b, camera) {
-  if (m.dead) return 0;
-  const col = m.gang === 'kings' ? COL.kingsGold : COL.sharksTeal;
-  const shirt = m.gang === 'kings' ? [0.9, 0.75, 0.2] : [0.15, 0.6, 0.75];
-  const skin = [0.85, 0.65, 0.5];
+// Gang members patrol their turf; inside their turf they attack the
+// player on sight. Outside turf they drift back toward home.
+export function stepGangs(g, dt) {
+  for (const m of g.gangMembers) {
+    if (m.dead) continue;
+    const dx = g.player.x - m.x;
+    const dz = g.player.z - m.z;
+    const d = Math.hypot(dx, dz) || 1;
+    if (gangInTurf(m.gang, g.player.x, g.player.z) && d < 25) {
+      // Attack: close in and hit the player (5 HP/s at close range).
+      m.x += (dx / d) * m.speed * 1.5 * dt;
+      m.z += (dz / d) * m.speed * 1.5 * dt;
+      m.heading = Math.atan2(dx, dz);
+      if (d < 1.5) {
+        g.health -= 5 * dt;
+        if (g.health <= 0) {
+          g.health = 0;
+          g.mode = 'wasted';
+        }
+      }
+    } else {
+      // Patrol: drift toward home, then wander.
+      const hx = m.home.x - m.x;
+      const hz = m.home.z - m.z;
+      const hd = Math.hypot(hx, hz);
+      if (hd > 5) {
+        m.x += (hx / hd) * m.speed * 0.5 * dt;
+        m.z += (hz / hd) * m.speed * 0.5 * dt;
+        m.heading = Math.atan2(hx, hz);
+      } else {
+        m.x += Math.sin(m.heading) * m.speed * 0.3 * dt;
+        m.z += Math.cos(m.heading) * m.speed * 0.3 * dt;
+        if (Math.random() < 0.01) m.heading += (Math.random() - 0.5) * 2;
+      }
+    }
+  }
+}
+
+// A gang member is 7 boxes; the last one (the bandana) is drawn in
+// the gang colour.
+export function gangBoxes(g, member, batch, cam) {
+  if (member.dead) return 0;
+  const h = 1.85;
   let n = 0;
-  const put = (x, y, z, w, h, d, c) => { pushBox(b, x, y, z, w, h, d, c); n++; };
-  put(m.x, 1.5, m.z, 0.42, 0.42, 0.42, skin); // head
-  put(m.x, 0.9, m.z, 0.62, 0.62, 0.36, shirt); // torso
-  put(m.x - 0.38, 0.9, m.z, 0.2, 0.6, 0.2, shirt); // left arm
-  put(m.x + 0.38, 0.9, m.z, 0.2, 0.6, 0.2, shirt); // right arm
-  put(m.x - 0.15, 0.3, m.z, 0.24, 0.6, 0.24, [0.2, 0.2, 0.25]); // left leg
-  put(m.x + 0.15, 0.3, m.z, 0.24, 0.6, 0.24, [0.2, 0.2, 0.25]); // right leg
-  put(m.x, 1.85, m.z, 0.44, 0.12, 0.44, col); // bandana (last)
+  const box = (x, y, z, w, hh, d, col) => { pushBox(batch, x, y, z, w, hh, d, col); n++; };
+  const m = member;
+  box(m.x - 0.18, 0, m.z, 0.32, 0.8, 0.32, [0.15, 0.15, 0.2]);
+  box(m.x + 0.18, 0, m.z, 0.32, 0.8, 0.32, [0.15, 0.15, 0.2]);
+  box(m.x, 0.8, m.z, 0.7, 0.6, 0.4, m.colour);
+  box(m.x - 0.5, 0.85, m.z, 0.22, 0.55, 0.22, m.colour);
+  box(m.x + 0.5, 0.85, m.z, 0.22, 0.55, 0.22, m.colour);
+  box(m.x, 1.4, m.z, 0.45, 0.4, 0.4, [0.9, 0.75, 0.6]);
+  box(m.x, 1.72, m.z, 0.48, 0.14, 0.44, m.bandana);
   return n;
 }

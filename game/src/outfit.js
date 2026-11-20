@@ -1,45 +1,44 @@
-// Solmar Bay — the outfit shop (Vice Threads).
-//
-// Cycle the four slots (hair, shirt, pants, shoes) and buy the
-// whole outfit for the catalogue total. The set in the suite
-// (hair 2, shirt 1, pants 1, shoes 1) costs $155.
+// Solmar Bay — the outfit shop (Vice Threads): cycle options, buy
+// the whole outfit. Total for hair 2 + shirt 1 + pants 1 + shoes 1
+// is $155.
 
 import { OUTFIT, SPAWNS } from './config.js';
 
-const SLOTS = ['hair', 'shirt', 'pants', 'shoes'];
-
 export function tryOutfitShop(g) {
-  if (Math.hypot(g.player.x - SPAWNS.outfitDoor.x, g.player.z - SPAWNS.outfitDoor.z) > 4) return false;
-  g.modal = {
-    kind: 'outfit',
-    title: 'Vice Threads',
-    lines: SLOTS.map((slot) => {
-      const list = OUTFIT[slot];
-      const cur = list[g.player.outfit[slot]] || list[0];
-      return `${slot}: ${cur.name} — $${cur.price}`;
-    }),
-  };
+  const d = Math.hypot(g.player.x - SPAWNS.outfitDoor.x, g.player.z - SPAWNS.outfitDoor.z);
+  if (d > 6) return false;
+  g.modal = { kind: 'outfit', title: 'Vice Threads', lines: ['Pick an outfit'] };
   return true;
 }
 
+// Cycle one slot: 0 hair, 1 shirt, 2 pants, 3 shoes. Wraps around.
 export function cycleOutfit(g, slot) {
-  if (slot < 0 || slot >= SLOTS.length) return false;
-  const key = SLOTS[slot];
-  const list = OUTFIT[key];
+  const lists = [OUTFIT.hair, OUTFIT.shirt, OUTFIT.pants, OUTFIT.shoes];
+  const keys = ['hair', 'shirt', 'pants', 'shoes'];
+  if (slot < 0 || slot >= lists.length) return false;
+  const list = lists[slot];
+  const key = keys[slot];
   g.player.outfit[key] = ((g.player.outfit[key] || 0) + 1) % list.length;
   return true;
 }
 
-// Buy the whole outfit: the catalogue total for the selected set.
+// The price of the currently selected outfit.
+export function outfitTotal(g) {
+  const o = g.player.outfit;
+  const hair = OUTFIT.hair[o.hair] || OUTFIT.hair[0];
+  const shirt = OUTFIT.shirt[o.shirt] || OUTFIT.shirt[0];
+  const pants = OUTFIT.pants[o.pants] || OUTFIT.pants[0];
+  const shoes = OUTFIT.shoes[o.shoes] || OUTFIT.shoes[0];
+  return hair.price + shirt.price + pants.price + shoes.price;
+}
+
+// Buy the selected outfit (charges the total, closes the modal).
 export function buyOutfit(g) {
-  const o = g.player.outfit || { hair: 0, shirt: 0, pants: 0, shoes: 0 };
-  let total = 0;
-  for (const slot of SLOTS) {
-    const item = OUTFIT[slot][o[slot]] || OUTFIT[slot][0];
-    total += item.price;
-  }
-  if ((g.cash || 0) < total) return false;
+  const total = outfitTotal(g);
+  if (g.cash < total) return false;
   g.cash -= total;
   g.modal = null;
+  g.toast = `New outfit — $${total}`;
+  g.toastTimer = 3;
   return true;
 }

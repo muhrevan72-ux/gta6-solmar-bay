@@ -1,74 +1,72 @@
-// Solmar Bay — save / load.
-//
-// One slot per key ('solmar-bay-save-1'). Only progress is saved —
-// chapter, cash, respect, completion and the owned cars. The player
-// position is deliberately NOT saved: loading always restarts the
-// player at the spawn. In Node (no localStorage) every call is a
-// safe no-op returning false / null.
+// Solmar Bay — save/load via localStorage (slot 1). The player's
+// position is NOT saved; chapter, cash, respect, owned cars and
+// completion are. Without localStorage every call is a safe no-op.
 
-const KEY = 'solmar-bay-save-1';
+const KEY = (slot) => `solmar-bay-save-${slot || 1}`;
 
-function storage() {
-  try {
-    return typeof globalThis !== 'undefined' && globalThis.localStorage ? globalThis.localStorage : null;
-  } catch {
-    return null;
-  }
-}
-
-export function saveGame(g, slot = 1) {
-  const store = storage();
-  if (!store) return false;
+export function saveGame(g, slot) {
+  if (typeof localStorage === 'undefined') return false;
   try {
     const data = {
-      chapter: g.chapter || 1,
-      cash: g.cash || 0,
+      chapter: g.chapter,
+      chapterDone: g.chapterDone || 0,
+      cash: g.cash,
       respect: g.respect || 0,
+      // The garage cars, as full car objects (name/colour/condition/kind).
+      ownedCars: (g.ownedCars || []).map(c => ({ name: c.name, colour: c.colour, condition: c.condition, kind: c.kind })),
       completion: g.completion || 0,
-      ownedCars: g.ownedCars || [],
+      bank: g.bank || 0,
+      day: g.day,
+      clock: g.clock,
     };
-    store.setItem(KEY, JSON.stringify(data));
+    localStorage.setItem(KEY(slot), JSON.stringify(data));
     return true;
-  } catch {
+  } catch (e) {
     return false;
   }
 }
 
-export function loadGame(g, slot = 1) {
-  const store = storage();
-  if (!store) return null;
+export function loadGame(g, slot) {
+  if (typeof localStorage === 'undefined') return null;
   try {
-    const raw = store.getItem(KEY);
+    const raw = localStorage.getItem(KEY(slot));
     if (!raw) return null;
     const data = JSON.parse(raw);
-    if (data.chapter !== undefined) g.chapter = data.chapter;
-    if (data.cash !== undefined) g.cash = data.cash;
-    if (data.respect !== undefined) g.respect = data.respect;
-    if (data.completion !== undefined) g.completion = data.completion;
-    if (data.ownedCars !== undefined) g.ownedCars = data.ownedCars;
+    g.chapter = data.chapter || 1;
+    g.chapterDone = data.chapterDone || 0;
+    g.cash = data.cash ?? 150;
+    g.respect = data.respect || 0;
+    g.completion = data.completion || 0;
+    g.bank = data.bank || 0;
+    g.day = data.day || 1;
+    g.clock = data.clock ?? 8;
+    if (data.ownedCars) {
+      g.ownedCars = data.ownedCars.map(c => ({ name: c.name, colour: c.colour, condition: c.condition, kind: c.kind }));
+      for (const v of g.vehicles || []) {
+        if (data.ownedCars.some(c => c.name === v.name)) v.owned = true;
+      }
+    }
     return data;
-  } catch {
+  } catch (e) {
     return null;
   }
 }
 
-export function hasSave(slot = 1) {
-  const store = storage();
-  if (!store) return false;
+export function hasSave(slot) {
+  if (typeof localStorage === 'undefined') return false;
   try {
-    return store.getItem(KEY) !== null;
-  } catch {
+    return localStorage.getItem(KEY(slot)) !== null;
+  } catch (e) {
     return false;
   }
 }
 
-export function clearSave(slot = 1) {
-  const store = storage();
-  if (!store) return false;
+export function clearSave(slot) {
+  if (typeof localStorage === 'undefined') return false;
   try {
-    store.removeItem(KEY);
+    localStorage.removeItem(KEY(slot));
     return true;
-  } catch {
+  } catch (e) {
     return false;
   }
 }

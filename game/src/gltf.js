@@ -1,88 +1,102 @@
-// Solmar Bay — tiny GLB (glTF 2.0 binary) loader.
-//
-// Only what the game needs: the first mesh's POSITION accessor and its
-// index accessor, read out of the BIN chunk. Anything malformed returns
-// null instead of throwing, so a missing or corrupt asset degrades to
-// the procedural fallback barrels.
+// Solmar Bay — minimal static GLB (glTF 2.0) loader.
+// Only what the game needs: parse the JSON + BIN chunks, read the
+// POSITION accessor and the index accessor, and push the triangles
+// into a BoxBatch. No skins, no animations, no materials.
 
-import { pushTri } from './render.js';
-
-function u32(view, off) {
-  return view.getUint32(off, true);
-}
-
-// Parse a GLB buffer into {positions, indices} or null.
-export function parseGlb(data) {
-  if (!data || data.length < 20) return null;
-  // Magic 'glTF', version 2.
-  if (data[0] !== 0x67 || data[1] !== 0x6c || data[2] !== 0x54 || data[3] !== 0x46) return null;
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  if (u32(view, 4) !== 2) return null;
-  const jsonLen = u32(view, 12);
-  if (20 + 8 + jsonLen > data.length) return null;
+export function parseGlb(bytes) {
+  if (!bytes || bytes.length < 20) return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const magic = view.getUint32(0, true);
+  if (magic !== 0x46546c67) return null; // 'glTF'
+  const version = view.getUint32(4, true);
+  if (version !== 2) return null;
+  const totalLen = view.getUint32(8, true);
+  if (totalLen > bytes.length) return null;
+  const jsonLen = view.getUint32(12, true);
+  const jsonType = view.getUint32(16, true);
+  if (jsonType !== 0x4e4f534a) return null; // 'JSON'
   let json;
   try {
-    const text = new TextDecoder('utf-8').decode(data.subarray(20, 20 + jsonLen));
-    json = JSON.parse(text);
-  } catch {
+    const jsonBytes = bytes.subarray(20, 20 + jsonLen);
+    json = JSON.parse(new TextDecoder().decode(jsonBytes));
+  } catch (e) {
     return null;
   }
-  const mesh = json.meshes && json.meshes[0];
-  const prim = mesh && mesh.primitives && mesh.primitives[0];
-  if (!prim || !prim.attributes || prim.attributes.POSITION === undefined || prim.indices === undefined) return null;
-  // Layout: 12-byte header, 8-byte JSON chunk header, the JSON,
-  // then the 8-byte BIN chunk header and the BIN data.
-  const binStart = 20 + jsonLen + 8; // past the BIN chunk header
-  if (binStart > data.length) return null;
-  const readAccessor = (idx) => {
-    const acc = json.accessors && json.accessors[idx];
-    if (!acc) return null;
-    const bv = json.bufferViews && json.bufferViews[acc.bufferView];
-    if (!bv) return null;
-    const off = binStart + (bv.byteOffset || 0) + (acc.byteOffset || 0);
-    return { acc, off };
+  // The BIN chunk follows the JSON chunk: its header is 8 bytes
+  // (length + type), so the BIN data starts at 20 + jsonLen + 8.
+  const binStart = 20 + jsonLen + 8;
+  if (binStart > bytes.length) return null;
+  const binLen = view.getUint32(20 + jsonLen, true);
+  const binType = view.getUint32(20 + jsonLen + 4, true);
+  if (binType !== 0x004e4942) return null; // 'BIN\0'
+  const bin = bytes.subarray(binStart, binStart + binLen);
+
+  const mesh = (json.meshes || [])[0];
+  if (!mesh || !mesh.primitives || !mesh.primitives.length) return null;
+  const prim = mesh.primitives[0];
+  const posAcc = json.accessors[prim.attributes.POSITION];
+  const idxAcc = prim.indices !== undefined ? json.accessors[prim.indices] : null;
+  if (!posAcc) return null;
+
+  const readAccessor = (acc) => {
+    const bv = json.bufferViews[acc.bufferView];
+    const base = (bv.byteOffset || 0) + (acc.byteOffset || 0);
+    const compBytes = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 }[acc.componentType];
+    const compCount = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }[acc.type];
+    const stride = bv.byteStride || compBytes * compCount;
+    const out = [];
+    for (let i = 0; i < acc.count; i++) {
+      const off = base + i * stride;
+      for (let c = 0; c < compCount; c++) {
+        const o = off + c * compBytes;
+        if (acc.componentType === 5126) out.push(readF32(bin, o));
+        else if (acc.componentType === 5123) out.push(readU16(bin, o));
+        else if (acc.componentType === 5125) out.push(readU32(bin, o));
+        else if (acc.componentType === 5121) out.push(bin[o]);
+        else if (acc.componentType === 5122) out.push(readI16(bin, o));
+        else out.push(bin[o]);
+      }
+    }
+    return out;
   };
-  const pos = readAccessor(prim.attributes.POSITION);
-  const idx = readAccessor(prim.indices);
-  if (!pos || !idx) return null;
-  if (pos.acc.componentType !== 5126 || pos.acc.type !== 'VEC3') return null;
-  const positions = new Float32Array(data.buffer, data.byteOffset + pos.off, pos.acc.count * 3);
-  let indices = null;
-  if (idx.acc.componentType === 5123) {
-    indices = new Uint16Array(data.buffer, data.byteOffset + idx.off, idx.acc.count);
-  } else if (idx.acc.componentType === 5125) {
-    indices = new Uint32Array(data.buffer, data.byteOffset + idx.off, idx.acc.count);
-  } else {
-    return null;
-  }
-  if (indices.length % 3 !== 0) return null;
+  const positions = readAccessor(posAcc);
+  const indices = idxAcc ? readAccessor(idxAcc) : null;
   return { positions, indices };
 }
 
-// Stamp a parsed model into a batch, scaled and translated, and return
-// how many triangles were added. The model is in its own local space
-// (the barrel stands ~0.88 m tall on y=0), so callers place it with
-// (x, y, z) and a uniform scale.
-export function pushGlbToBatch(batch, model, x, y, z, scale, color, uv) {
-  if (!model || !model.positions || !model.indices) return 0;
-  const s = scale || 1;
-  const c = color || [0.7, 0.3, 0.15];
-  const t = uv || [0, 0, 1, 1];
-  const p = model.positions;
+function readF32(bin, o) {
+  return new DataView(bin.buffer, bin.byteOffset + o, 4).getFloat32(0, true);
+}
+function readU16(bin, o) {
+  return new DataView(bin.buffer, bin.byteOffset + o, 2).getUint16(0, true);
+}
+function readU32(bin, o) {
+  return new DataView(bin.buffer, bin.byteOffset + o, 4).getUint32(0, true);
+}
+function readI16(bin, o) {
+  return new DataView(bin.buffer, bin.byteOffset + o, 2).getInt16(0, true);
+}
+
+// Push a parsed GLB model into a batch as triangles, scaled and
+// translated, tinted with one colour. Returns the triangle count.
+export function pushGlbToBatch(batch, model, x, y, z, scale, color, tile) {
+  if (!model || !model.positions || !model.positions.length) return 0;
+  const pos = model.positions;
   const idx = model.indices;
+  const uv = [0.5, 0.25, 0.75, 0.5]; // plain tile
   let tris = 0;
-  for (let i = 0; i + 2 < idx.length; i += 3) {
-    const a = idx[i] * 3;
-    const b = idx[i + 1] * 3;
-    const d = idx[i + 2] * 3;
-    pushTri(
-      batch,
-      x + p[a] * s, y + p[a + 1] * s, z + p[a + 2] * s,
-      x + p[b] * s, y + p[b + 1] * s, z + p[b + 2] * s,
-      x + p[d] * s, y + p[d + 1] * s, z + p[d + 2] * s,
-      c, t,
-    );
+  const pushTri = (a, b, c) => {
+    for (const v of [a, b, c]) {
+      batch.pos.push(x + pos[v * 3] * scale, y + pos[v * 3 + 1] * scale, z + pos[v * 3 + 2] * scale);
+      batch.col.push(color[0], color[1], color[2]);
+      batch.uv.push(uv[0], uv[1]);
+    }
     tris++;
+  };
+  if (idx && idx.length >= 3) {
+    for (let i = 0; i + 2 < idx.length; i += 3) pushTri(idx[i], idx[i + 1], idx[i + 2]);
+  } else {
+    for (let i = 0; i + 8 < pos.length; i += 9) pushTri(i / 3, i / 3 + 1, i / 3 + 2);
   }
   return tris;
 }

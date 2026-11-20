@@ -1,114 +1,95 @@
-// Solmar Bay — time of day, sky and weather.
-//
-// The clock runs 120x real time (a full day is 720 s). sampleAt(h)
-// describes an hour: sky and fog colours, the fog range IN METRES
-// (the round-8 bug was fog in NDC depth, which blanked golden hour)
-// and the neon boost that makes the signs glow after dark.
-// createWeather owns the live clock, the rain easing and the weather
-// timer that rolls a new condition every minute and a half or so.
+// Solmar Bay — weather + day/night cycle.
+// The clock runs 120x real time (30 s real = 1 game hour, a full day
+// is 720 s). sampleAt(hour) is the pure keyframe table; the weather
+// object steps the clock, the day counter and the weather state.
+// Fog distances are in METRES (fogNear is always 60 m) — the round-8
+// bug was fog computed from NDC depth, which swallowed the whole
+// scene at golden hour.
 
-// Linear interpolation between keyframes [hour, value].
-function lerpKeys(keys, h) {
-  const hh = ((h % 24) + 24) % 24;
-  for (let i = 0; i < keys.length - 1; i++) {
-    const [h0, v0] = keys[i];
-    const [h1, v1] = keys[i + 1];
-    if (hh >= h0 && hh <= h1) {
-      const t = h1 === h0 ? 0 : (hh - h0) / (h1 - h0);
-      if (Array.isArray(v0)) return v0.map((c, j) => c + (v1[j] - c) * t);
-      return v0 + (v1 - v0) * t;
-    }
-  }
-  return keys[keys.length - 1][1];
+const KEYFRAMES = [
+  // hour, phase, sky, fog, fogFar, neonBoost
+  [0, 'night', [0.03, 0.04, 0.1], [0.05, 0.06, 0.12], 180, 1.9],
+  [5, 'night', [0.04, 0.05, 0.12], [0.06, 0.07, 0.14], 180, 1.9],
+  [6, 'dawn', [0.85, 0.6, 0.55], [0.8, 0.6, 0.55], 260, 1.4],
+  [7, 'dawn', [0.7, 0.8, 0.95], [0.65, 0.75, 0.9], 320, 1.2],
+  [8, 'day', [0.55, 0.75, 0.95], [0.6, 0.75, 0.9], 380, 1.0],
+  [12, 'day', [0.45, 0.7, 0.98], [0.55, 0.72, 0.92], 420, 1.0],
+  [16, 'day', [0.55, 0.72, 0.95], [0.6, 0.72, 0.9], 400, 1.0],
+  [17, 'golden', [1, 0.62, 0.38], [0.98, 0.62, 0.4], 300, 1.6],
+  [18, 'sunset', [1, 0.45, 0.3], [0.95, 0.5, 0.35], 260, 1.6],
+  [18.75, 'sunset', [0.75, 0.35, 0.5], [0.7, 0.4, 0.5], 230, 1.7],
+  [19.5, 'night', [0.12, 0.1, 0.25], [0.14, 0.12, 0.26], 200, 1.9],
+  [23, 'night', [0.03, 0.04, 0.1], [0.05, 0.06, 0.12], 180, 1.9],
+  [24, 'night', [0.03, 0.04, 0.1], [0.05, 0.06, 0.12], 180, 1.9],
+];
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+function lerp3(a, b, t) {
+  return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
 }
 
-const FOG_FAR_KEYS = [
-  [0, 180], [5, 180], [6, 260], [12, 420], [17, 300], [18, 260], [23, 180], [24, 180],
-];
-const NEON_KEYS = [
-  [0, 1.9], [6, 1.3], [12, 1.0], [17, 1.6], [18, 1.6], [23, 1.9], [24, 1.9],
-];
-const SKY_KEYS = [
-  [0, [0.05, 0.08, 0.18]],
-  [5, [0.06, 0.09, 0.2]],
-  [6, [0.8, 0.55, 0.5]],
-  [8, [0.6, 0.75, 0.95]],
-  [12, [0.45, 0.7, 0.95]],
-  [16, [0.6, 0.7, 0.9]],
-  [17, [0.95, 0.7, 0.4]],
-  [18, [0.98, 0.5, 0.2]],
-  [19.5, [0.4, 0.25, 0.35]],
-  [23, [0.05, 0.08, 0.18]],
-  [24, [0.05, 0.08, 0.18]],
-];
-const FOG_KEYS = [
-  [0, [0.08, 0.1, 0.2]],
-  [5, [0.09, 0.11, 0.22]],
-  [6, [0.85, 0.65, 0.6]],
-  [8, [0.7, 0.8, 0.9]],
-  [12, [0.7, 0.8, 0.9]],
-  [16, [0.75, 0.75, 0.85]],
-  [17, [0.95, 0.7, 0.45]],
-  [18, [0.95, 0.6, 0.35]],
-  [19.5, [0.45, 0.3, 0.4]],
-  [23, [0.08, 0.1, 0.2]],
-  [24, [0.08, 0.1, 0.2]],
-];
-
-export function phaseAt(h) {
-  const hh = ((h % 24) + 24) % 24;
-  if (hh < 5) return 'night';
-  if (hh < 8) return 'dawn';
-  if (hh < 16) return 'day';
-  if (hh < 18) return 'golden';
-  if (hh < 19.5) return 'sunset';
+export function phaseAt(hour) {
+  const h = ((hour % 24) + 24) % 24;
+  if (h < 5.5) return 'night';
+  if (h < 7.5) return 'dawn';
+  if (h < 16.5) return 'day';
+  if (h < 17.5) return 'golden';
+  if (h < 19) return 'sunset';
   return 'night';
 }
 
-// The atmosphere at one hour. fogNear is a constant 60 m; fogFar is
-// in metres, never below it, and the sky/fog colours are interpolated.
-export function sampleAt(h) {
+export function sampleAt(hour) {
+  const h = ((hour % 24) + 24) % 24;
+  let a = KEYFRAMES[0];
+  let b = KEYFRAMES[KEYFRAMES.length - 1];
+  for (let i = 0; i < KEYFRAMES.length - 1; i++) {
+    if (h >= KEYFRAMES[i][0] && h <= KEYFRAMES[i + 1][0]) {
+      a = KEYFRAMES[i];
+      b = KEYFRAMES[i + 1];
+      break;
+    }
+  }
+  const span = b[0] - a[0] || 1;
+  const t = Math.max(0, Math.min(1, (h - a[0]) / span));
   return {
     phase: phaseAt(h),
-    sky: lerpKeys(SKY_KEYS, h),
-    fog: lerpKeys(FOG_KEYS, h),
+    sky: lerp3(a[2], b[2], t),
+    fog: lerp3(a[3], b[3], t),
     fogNear: 60,
-    fogFar: lerpKeys(FOG_FAR_KEYS, h),
-    neonBoost: lerpKeys(NEON_KEYS, h),
+    fogFar: lerp(a[4], b[4], t),
+    neonBoost: lerp(a[5], b[5], t),
   };
 }
 
-// The live weather object: the clock, the rain easing and the timer
-// that rolls a new condition. step takes the rng so the suites can
-// drive it deterministically.
 export function createWeather(game) {
   const w = {
-    game,
     timer: 120,
-    next(rng) {
-      const r = (rng || Math.random)();
-      const weather = r < 0.5 ? 'clear' : r < 0.8 ? 'rain' : 'fog';
-      game.weather = weather;
-      this.timer = 90 + (rng || Math.random)() * 90;
-      return weather;
-    },
     step(dt, rng) {
-      // The clock runs 120x: dt seconds of real time are dt/30 hours.
+      // The clock runs 120x: dt seconds real = dt/30 game hours.
       game.clock += dt / 30;
       if (game.clock >= 24) {
         game.clock -= 24;
         game.day += 1;
       }
-      // Rain eases toward 1 in rain, toward 0 otherwise.
+      // Rain intensity eases toward its target.
       const target = game.weather === 'rain' ? 1 : 0;
-      game.rain += (target - game.rain) * (1 - Math.exp(-dt * 0.15));
-      if (game.rain < 0.001) game.rain = 0;
-      if (game.rain > 0.999) game.rain = 1;
-      this.timer -= dt;
-      if (this.timer <= 0) this.next(rng);
+      game.rain += (target - game.rain) * Math.min(1, dt * 0.2);
+      if (game.rain < 0.01) game.rain = 0;
+      // Weather changes when the timer expires.
+      w.timer -= dt;
+      if (w.timer <= 0) {
+        game.weather = w.next(rng || Math.random);
+      }
+      game._phase = phaseAt(game.clock);
     },
-    // The atmosphere right now, with the weather clamps applied:
-    // rain pulls the fog in to 200 m, fog to 120 m.
+    next(rng) {
+      const r = rng();
+      const pick = r < 0.6 ? 'clear' : r < 0.85 ? 'rain' : 'fog';
+      w.timer = 90 + rng() * 90;
+      return pick;
+    },
     sample() {
       const s = sampleAt(game.clock);
       if (game.weather === 'rain') s.fogFar = Math.min(s.fogFar, 200);
