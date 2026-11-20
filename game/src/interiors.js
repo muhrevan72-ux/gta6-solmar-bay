@@ -1,4 +1,4 @@
-// Solmar Bay — interiors (rebuild #14).
+// Solmar Bay — interiors (rebuild #15).
 // Three rooms you can step into: Pizza Palace, Burger Barn and
 // Vice Threads. E at the door walks in (teleport to the room);
 // E inside walks back out. The counter inside a food room opens

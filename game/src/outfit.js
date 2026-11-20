@@ -1,4 +1,4 @@
-// Solmar Bay — the outfit shop (rebuild #14).
+// Solmar Bay — the outfit shop (rebuild #15).
 // Vice Threads at the outfit door. Cycle a slot to preview, buy
 // to pay the total of the selected items and close the modal.
 

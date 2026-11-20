@@ -1,4 +1,4 @@
-// Solmar Bay — training grounds (rebuild #14).
+// Solmar Bay — training grounds (rebuild #15).
 // Shooting range (10 targets, 60 s), swim trial (to the buoy and
 // back), slalom (5 gates in a car).
 

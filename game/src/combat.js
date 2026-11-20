@@ -1,4 +1,4 @@
-// Solmar Bay — combat (rebuild #14).
+// Solmar Bay — combat (rebuild #15).
 // Pistol 34 dmg / range 60, punch 12 dmg / range 2.5 m, bombs
 // blast 6 m ahead. A non-lethal hit is assault (1 star, once per
 // victim); a kill is killPed/killGang (2 stars) with a cash drop

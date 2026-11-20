@@ -1,4 +1,4 @@
-// Solmar Bay — the garage (rebuild #14).
+// Solmar Bay — the garage (rebuild #15).
 // Drive a car to the garage door to store it (up to 6), take a
 // stored car back out, or repaint it for $50.
 

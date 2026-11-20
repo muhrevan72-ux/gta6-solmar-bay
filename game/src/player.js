@@ -1,4 +1,4 @@
-// Solmar Bay — the player on foot (rebuild #14).
+// Solmar Bay — the player on foot (rebuild #15).
 // Movement is camera-relative (W walks away from the camera).
 // Buildings are solid: a step that would enter a building is
 // refused (the player slides along the wall instead of clipping
@@ -89,7 +89,11 @@ export function tryEnterVehicle(g) {
   const p = g.player;
   if (p.inCar) return null;
   let best = null;
-  let bestD = 4.5;
+  // Generous range (fix round 2, bug (b)): the browser play-test
+  // moves with key taps, so the player cannot position itself
+  // precisely — 4.5 m was too tight and E did nothing next to
+  // the car. 6 m still requires being right by the car.
+  let bestD = 6.0;
   for (const v of g.vehicles) {
     if (v.driver) continue;
     const d = Math.hypot(v.x - p.x, v.z - p.z);

@@ -1,4 +1,4 @@
-// Solmar Bay — dating Maya (rebuild #14).
+// Solmar Bay — dating Maya (rebuild #15).
 // Maya lives at the beach house (-300, 60). A date costs $30;
 // after 20 s the date ends and rel rises by 25 (capped at 100).
 // At rel 75+ she shares a gang tip afterwards.

@@ -1,4 +1,4 @@
-// Solmar Bay — the dense HUD (rebuild #14).
+// Solmar Bay — the dense HUD (rebuild #15).
 // Every field is written by textContent (never innerHTML). HP is
 // shown as an integer (fix (e)). The layout keeps the minimap
 // away from the radio/respect block and the Pause button away
@@ -10,6 +10,7 @@ import { districtAt } from './world.js';
 import { phaseAt } from './weather.js';
 import { policeList } from './police.js';
 import { stationLabel } from './audio.js';
+import { phoneText } from './phone.js';
 
 const IDS = {
   cash: 'hud-cash', health: 'hud-health', armour: 'hud-armour',
@@ -20,7 +21,7 @@ const IDS = {
   dialogue: 'hud-dialogue', card: 'hud-card', cardTitle: 'hud-card-title',
   cardText: 'hud-card-text', modal: 'hud-modal', modalTitle: 'hud-modal-title',
   modalBody: 'hud-modal-body', pause: 'hud-pause', menu: 'hud-menu',
-  hud: 'hud', minimap: 'hud-minimap',
+  hud: 'hud', minimap: 'hud-minimap', phone: 'hud-phone',
 };
 
 export function createHud(doc) {
@@ -113,6 +114,14 @@ export function updateHud(g, hud) {
   }
   // Pause overlay.
   setDisplay(el.pause, s.mode === 'pause' ? 'flex' : 'none');
+  // Phone (Tab). Fix round 2, bug (a): nothing ever drew the
+  // phone, so Tab opened an invisible modal that trapped the
+  // game (Escape/Pause dead, clock frozen). The phone is now a
+  // visible panel with contacts + messages + a close hint, and
+  // it hides completely when closed.
+  const phoneOpen = s.mode === 'phone';
+  setDisplay(el.phone, phoneOpen ? 'block' : 'none');
+  if (phoneOpen) setText(el.phone, phoneText(s));
   // Menu vs in-game HUD.
   if (s.mode === 'menu') {
     setDisplay(el.hud, 'none');

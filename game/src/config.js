@@ -1,8 +1,8 @@
-// Solmar Bay — tuning, tables and constants (rebuild #14).
-// One file holds every number the systems share, so a balance
-// change is a one-line edit here and never a hunt through logic.
+// Solmar Bay — tuning tables and constants (rebuild #15).
+// Every shared number lives in this one file, so rebalancing is
+// a single edit here instead of a hunt through the game logic.
 
-// ---------- movement / world tuning ----------
+// ---------- movement and world tuning ----------
 export const TUNE = {
   walkSpeed: 4,
   runSpeed: 8,
@@ -10,22 +10,22 @@ export const TUNE = {
   bikeMaxSpeed: 38,
   boatMaxSpeed: 22,
   planeMaxSpeed: 60,
-  dayLengthSec: 720, // 24 game hours per 720 real seconds (120x)
-  batchCap: 1600, // max dynamic boxes per frame
-  staticCap: 1600, // max static boxes (19200 tris)
+  dayLengthSec: 720, // one full 24-hour game day per 720 real seconds (120x)
+  batchCap: 1600, // ceiling on dynamic boxes drawn per frame
+  staticCap: 1600, // ceiling on static boxes (19,200 triangles)
   heliAltitude: 80,
   copFootSpeed: 6,
   copCarSpeed: 26,
   trafficSpeed: 12,
   pedWalkMin: 1.5,
   pedWalkMax: 3.2,
-  spawnGraceSec: 5, // no damage right after (re)spawn
-  gangSafeDist: 40, // gang spawns stay this far from the player spawn
-  wantedDecaySec: 14, // out of sight this long loses one star
-  sightRange: 60, // cops within this range keep the wanted level hot
+  spawnGraceSec: 5, // no damage right after a (re)spawn
+  gangSafeDist: 40, // gang spawns keep this far from the player spawn
+  wantedDecaySec: 14, // out of sight this long drops one star
+  sightRange: 60, // cops inside this range keep the heat on
 };
 
-// ---------- crime table (wanted stars per crime) ----------
+// ---------- wanted stars per crime ----------
 export const CRIME = {
   stealCar: { stars: 1 },
   assault: { stars: 1 },
@@ -109,9 +109,9 @@ export const STATIONS = [
 ];
 
 // ---------- spawn points (all on open, standable ground) ----------
-// hospital respawn: east of the hospital building, on the street,
-// clear of every collider and off the road grid.
-// Weapons: index 0 pistol, 1 SMG (respect 100), 2 shotgun (respect 250).
+// Hospital respawn sits east of the hospital building, on the
+// street, clear of every collider and off the road grid.
+// Weapons: 0 pistol, 1 SMG (respect 100), 2 shotgun (respect 250).
 export const WEAPONS = [
   { name: 'Pistol', damage: 34, range: 60, cooldown: 0.3 },
   { name: 'SMG', damage: 18, range: 50, cooldown: 0.08 },
@@ -179,8 +179,8 @@ export const FOOD_MENU = [
   { name: 'Feast', price: 15, heal: 100, armour: 25 },
 ];
 
-// Shop fronts: standable points just outside each shop's door,
-// clear of buildings and roads so the menu is reachable on foot.
+// Shop fronts: standable points just outside each shop door, clear
+// of buildings and roads so the menu is reachable on foot.
 export const FOOD_SHOPS = [
   { name: 'Pizza Palace', x: -120, z: 30 },
   { name: 'Burger Barn', x: 60, z: -90 },
@@ -190,7 +190,7 @@ export const FOOD_SHOPS = [
 ];
 
 // ---------- outfit catalogue ----------
-// Prices are chosen so hair 2 + shirt 1 + pants 1 + shoes 1 = $155.
+// Prices are set so hair 2 + shirt 1 + pants 1 + shoes 1 = $155.
 export const OUTFIT = {
   hair: [
     { name: 'Buzz Cut', price: 0, colour: [0.1, 0.1, 0.1] },

@@ -1,4 +1,4 @@
-// Solmar Bay — game state (rebuild #14).
+// Solmar Bay — game state (rebuild #15).
 // The game object IS the state: cash, health, chapter, the player
 // and the world lists all live directly on it, and `g` points back
 // at itself so both `game.cash` and `game.g.cash` read the same

@@ -1,4 +1,4 @@
-// Solmar Bay — food shops (rebuild #14).
+// Solmar Bay — food shops (rebuild #15).
 // Five shops. Snack $5 (+10 HP), Meal $10 (+25 HP), Feast $15
 // (full HP + 25 armour).
 

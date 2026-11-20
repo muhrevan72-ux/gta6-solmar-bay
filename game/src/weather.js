@@ -1,4 +1,4 @@
-// Solmar Bay — day/night cycle + weather (rebuild #14).
+// Solmar Bay — day/night cycle + weather (rebuild #15).
 // The clock runs 120x real time (a 720 s day). sampleAt() gives
 // the sky colour, fog range (metres) and neon boost for any hour
 // by interpolating keyframes. Night is DARK NAVY (fix (d)) —

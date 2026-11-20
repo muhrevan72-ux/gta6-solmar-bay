@@ -1,4 +1,4 @@
-// Solmar Bay — pedestrians (rebuild #14).
+// Solmar Bay — pedestrians (rebuild #15).
 // 76 peds: 7 sit, 14 chat, 7 queue, 6 vendor, 42 walk. Walkers
 // stroll between sidewalk points; sitters, chatters, queuers and
 // vendors hold their spots. A ped that is attacked flees.

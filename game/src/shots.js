@@ -1,4 +1,4 @@
-// Solmar Bay — third-person camera + matrix maths (rebuild #14).
+// Solmar Bay — third-person camera + matrix maths (rebuild #15).
 // Column-major 4x4 matrices, matching WebGL's expectations.
 // The default framing (pitch 0.28, dist 14) puts the horizon in
 // the upper-middle band so the city, not the sky, dominates the

@@ -1,4 +1,4 @@
-// Solmar Bay — keyboard/mouse input (rebuild #14).
+// Solmar Bay — keyboard and mouse input (rebuild #15).
 // `pressed` is the edge (this frame only), `down` is the held
 // state. endFrame() clears the edge set at the end of each frame.
 // attach() binds real DOM listeners on `window` — never on the

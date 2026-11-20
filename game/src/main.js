@@ -1,4 +1,4 @@
-// Solmar Bay — the game entry (rebuild #14).
+// Solmar Bay — the game entry (rebuild #15).
 // boot() sizes the canvas BEFORE the renderer is created (a
 // later resize kills the WebGL context), builds the world, and
 // starts the loop. stepGame() ticks the world. handleTaps()
@@ -189,7 +189,12 @@ function wireButtons(g, doc) {
     if (g.mode === 'pause') g.mode = 'play';
   });
   on('btn-pause', () => {
-    if (g.mode === 'play') {
+    // Fix round 2, bug (a): the Pause button did nothing while
+    // the phone was open (another trap). It now closes the phone.
+    if (g.mode === 'phone') {
+      g.mode = 'play';
+      g.phoneOpen = false;
+    } else if (g.mode === 'play') {
       g.mode = 'pause';
       saveGame(g);
     } else if (g.mode === 'pause') {
@@ -293,8 +298,13 @@ export function handleTaps(g, input) {
     }
   }
   // Escape / P: pause toggle. Always shows the overlay.
+  // Fix round 2, bug (a): Escape did nothing while the phone
+  // was open, so Tab opened a trap. Escape now closes the phone.
   if (tap('Escape') || tap('KeyP')) {
-    if (g.mode === 'play') {
+    if (g.mode === 'phone') {
+      g.mode = 'play';
+      g.phoneOpen = false;
+    } else if (g.mode === 'play') {
       g.mode = 'pause';
       g.menu = 'pause';
       saveGame(g);
@@ -378,6 +388,18 @@ export function handleInteract(g) {
   if (p.inCar && p.inCar.kind === 'taxi' && g._taxiState === 'waiting') {
     if (startTaxiFare(g)) return true;
   }
+  // A car: get in. Fix round 2, bug (b): the car-enter check used
+  // to sit at the END of a long chain of shops/activities, so a
+  // nearby cat, shop or ATM could swallow the E press and the
+  // player never got into the car. Entering a nearby car now
+  // wins over the shops (Chapter 1 is "steal a car").
+  if (!p.inCar) {
+    const entered = tryEnterVehicle(g);
+    if (entered) {
+      if (entered === g._taxiCab) startTaxiFare(g);
+      return true;
+    }
+  }
   // A room door: step inside.
   const room = tryInteriorDoor(g);
   if (room) return true;
@@ -409,17 +431,10 @@ export function handleInteract(g) {
   if (tryFish(g)) return true;
   // The garage, on foot.
   if (tryGarage(g)) return true;
-  // A car: get in (or out).
+  // In a car: get out. (Getting in is handled earlier, before
+  // the shops, so a nearby car wins — fix round 2, bug (b).)
   if (p.inCar) {
     exitVehicle(g);
-    return true;
-  }
-  const entered = tryEnterVehicle(g);
-  if (entered) {
-    // Getting into the called cab starts the fare.
-    if (entered === g._taxiCab) {
-      startTaxiFare(g);
-    }
     return true;
   }
   return false;

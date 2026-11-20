@@ -1,4 +1,4 @@
-// Solmar Bay — the fire service (rebuild #14).
+// Solmar Bay — the fire service (rebuild #15).
 // Fires break out on buildings on a timer. Spray water on one to
 // put it out: +$150, +15 respect, and one more fire out.
 

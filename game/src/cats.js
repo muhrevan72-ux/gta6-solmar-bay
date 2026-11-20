@@ -1,4 +1,4 @@
-// Solmar Bay — stray cats (rebuild #14).
+// Solmar Bay — stray cats (rebuild #15).
 // Six cats wander the city. E picks one up; E again pets it
 // (2 s). Carry it to the beach house and it is home: +$20,
 // +5 respect.

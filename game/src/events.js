@@ -1,4 +1,4 @@
-// Solmar Bay — city events (rebuild #14).
+// Solmar Bay — city events (rebuild #15).
 // A timer starts one of three events: a beach party (6 lights),
 // a street race (flags) or a market day (stalls). Each runs for
 // a while, then ends and the timer resets.

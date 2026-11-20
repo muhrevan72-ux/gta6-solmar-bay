@@ -1,5 +1,5 @@
-// Solmar Bay — the city of Solmar Bay (rebuild #14).
-// A 800x800 m grid city: roads on multiples of 60, buildings on
+// Solmar Bay — the city of Solmar Bay (rebuild #15).
+// An 800x800 m grid city: roads on multiples of 60, buildings on
 // the blocks between them, a beach and sea on the west edge, an
 // airport in the north-east, a harbour in the south-west.
 // Deterministic: buildCity() always uses seed 1337, so two builds

@@ -1,4 +1,4 @@
-// Solmar Bay — gangs (rebuild #14).
+// Solmar Bay — gangs (rebuild #15).
 // Bay Kings (gold) own downtown; Harbour Sharks (teal) own the
 // harbour. A member only hurts the player when it is CLOSE and
 // VISIBLE — there is no invisible turf damage (fix (a)). Entering

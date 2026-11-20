@@ -1,4 +1,4 @@
-// Solmar Bay — police (rebuild #14).
+// Solmar Bay — police (rebuild #15).
 // Wanted stars drive the response: 1 star foot cops, 2 stars
 // interceptors, 3 stars roadblocks, 4 stars the helicopter.
 // Cops chase, hold at shooting range, and shoot (2 + wanted

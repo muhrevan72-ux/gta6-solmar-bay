@@ -1,4 +1,4 @@
-// Solmar Bay — procedural texture atlas (rebuild #14).
+// Solmar Bay — procedural texture atlas (rebuild #15).
 // One 512x512 canvas holds 8 tiles of 128px; boxes reference a
 // tile by UV rectangle so walls read as brick, roads as asphalt,
 // and windows as framed glass instead of flat colour.

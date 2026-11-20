@@ -1,4 +1,4 @@
-// Solmar Bay — side activities (rebuild #14).
+// Solmar Bay — side activities (rebuild #15).
 // Fishing at the pier, vending machines, ATMs.
 
 import { SPAWNS } from './config.js';

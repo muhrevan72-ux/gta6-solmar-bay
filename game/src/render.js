@@ -1,4 +1,4 @@
-// Solmar Bay — raw WebGL1 voxel renderer (rebuild #14).
+// Solmar Bay — raw WebGL1 voxel renderer (rebuild #15).
 // No library: boxes are emitted as triangles (WebGL1 has no
 // four-vertex primitive) into batches, uploaded, and drawn with
 // gl.TRIANGLES. One clear per frame, in beginFrame only.

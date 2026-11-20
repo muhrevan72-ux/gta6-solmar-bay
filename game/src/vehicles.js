@@ -1,4 +1,4 @@
-// Solmar Bay — vehicles and traffic (rebuild #14).
+// Solmar Bay — vehicles and traffic (rebuild #15).
 // 36 player-usable vehicles (31 parked + starter Comet + bike +
 // boat + plane + fire truck) and 32 NPC traffic cars that stay on
 // the road grid and stop at red lights.
@@ -187,38 +187,65 @@ export function stepCarCollisions(g, dt) {
   }
 }
 
-// A car is 8 base boxes. Near the camera it gains hubcaps,
-// mirrors, headlights and (for sports cars) a spoiler.
+// A car is 8+ base boxes. Fix round 2, bug (b): the old model
+// read as a single red cube — the wheels were hidden inside the
+// body (only 0.1 m stuck out) and the cabin was a darker shade
+// of the same red, so body + cabin merged into one red block.
+// The new model makes body, cabin and wheels DISTINCT and BIG:
+// a long low body, a light-silver cabin roof with a blue glass
+// band, and large black wheels that stick out below and beside
+// the body. Part offsets are rotated by the car's yaw (the old
+// code placed wheels at fixed world offsets, so any car with a
+// heading other than 0 had its wheels in the wrong place).
 export function vehicleBoxes(g, v, b, camera) {
   const near = !camera || Math.hypot((camera.x || 0) - v.x, (camera.z || 0) - v.z) < 40
     || Math.hypot(g.player.x - v.x, g.player.z - v.z) < 40;
   const yaw = v.heading || 0;
   const col = v.color || [0.5, 0.5, 0.5];
-  const dark = [col[0] * 0.6, col[1] * 0.6, col[2] * 0.6];
-  // Body and cabin. The wheels sit at y=0 (on the ground, no
-  // floating gap) and the body at y=0.3, so the car reads as a
-  // car on the road, not a floating cube.
-  pushBoxRot(b, v.x, 0.3, v.z, 2, 0.7, 4.4, yaw, col);
-  pushBoxRot(b, v.x, 1.0, v.z - 0.3, 1.7, 0.6, 2.2, yaw, dark);
-  // Windshield (glass).
-  pushBoxRot(b, v.x, 0.95, v.z + 0.9, 1.6, 0.5, 0.15, yaw, [0.4, 0.65, 0.85]);
-  // Four wheels (base at y=0, on the ground).
-  for (const [sx, sz] of [[-0.95, 1.4], [0.95, 1.4], [-0.95, -1.4], [0.95, -1.4]]) {
-    pushBoxRot(b, v.x + sx, 0, v.z + sz, 0.3, 0.7, 0.7, yaw, [0.1, 0.1, 0.1]);
+  const cs = Math.cos(yaw), sn = Math.sin(yaw);
+  // Rotate a car-local offset (sx, sz) into the world frame.
+  const off = (sx, sz) => [v.x + sx * cs + sz * sn, v.z - sx * sn + sz * cs];
+  const boxAt = (sx, sz, y, w, h, d, color) => {
+    const [wx, wz] = off(sx, sz);
+    pushBoxRot(b, wx, y, wz, w, h, d, yaw, color);
+  };
+  // Body: long and low — 5.0 long vs 0.9 tall, clearly a car
+  // body and not a cube. Base at y=0.35.
+  pushBoxRot(b, v.x, 0.35, v.z, 2.4, 0.9, 5.0, yaw, col);
+  // Lower skirt: a dark band along the base so the body has a
+  // clear bottom edge and the wheels read against it.
+  pushBoxRot(b, v.x, 0.35, v.z, 2.5, 0.28, 5.05, yaw, [0.12, 0.12, 0.14]);
+  // Cabin (greenhouse): a LIGHT silver roof, clearly distinct
+  // from the body colour, sitting on top of the body.
+  pushBoxRot(b, v.x, 1.25, v.z - 0.2, 2.0, 0.65, 2.6, yaw, [0.88, 0.89, 0.92]);
+  // Glass bands: bright blue windows at the front and rear of
+  // the cabin, so the greenhouse reads as glass, not paint.
+  boxAt(0, 1.0, 1.3, 1.9, 0.5, 0.18, [0.35, 0.6, 0.9]);
+  boxAt(0, -1.4, 1.3, 1.9, 0.5, 0.18, [0.3, 0.5, 0.8]);
+  // Four wheels: BIG and black, sticking out below and beside
+  // the body — 1.0 tall, 0.5 wide, centred 1.15 m out (the body
+  // is 2.4 wide, so the wheels protrude 0.4 m past each side).
+  for (const [sx, sz] of [[-1.15, 1.7], [1.15, 1.7], [-1.15, -1.7], [1.15, -1.7]]) {
+    boxAt(sx, sz, 0, 0.5, 1.0, 1.0, [0.08, 0.08, 0.1]);
   }
-  // Bumper.
-  pushBoxRot(b, v.x, 0.3, v.z + 2.2, 1.9, 0.3, 0.2, yaw, [0.7, 0.7, 0.72]);
+  // Hubcaps: light discs on the outer wheel faces.
+  for (const [sx, sz] of [[-1.15, 1.7], [1.15, 1.7], [-1.15, -1.7], [1.15, -1.7]]) {
+    const ox = sx < 0 ? -0.28 : 0.28;
+    boxAt(sx + ox, sz, 0.3, 0.08, 0.4, 0.4, [0.85, 0.85, 0.88]);
+  }
+  // Bumpers (front + rear), headlights, taillights.
+  boxAt(0, 2.55, 0.35, 2.3, 0.35, 0.18, [0.75, 0.75, 0.78]);
+  boxAt(0, -2.55, 0.35, 2.3, 0.35, 0.18, [0.75, 0.75, 0.78]);
+  boxAt(-0.7, 2.55, 0.6, 0.45, 0.22, 0.1, [1, 0.95, 0.6]);
+  boxAt(0.7, 2.55, 0.6, 0.45, 0.22, 0.1, [1, 0.95, 0.6]);
+  boxAt(-0.7, -2.55, 0.6, 0.45, 0.22, 0.1, [0.9, 0.1, 0.1]);
+  boxAt(0.7, -2.55, 0.6, 0.45, 0.22, 0.1, [0.9, 0.1, 0.1]);
   if (near) {
-    // Hubcaps, mirrors, headlights.
-    for (const [sx, sz] of [[-0.95, 1.4], [0.95, 1.4], [-0.95, -1.4], [0.95, -1.4]]) {
-      pushBoxRot(b, v.x + sx, 0.3, v.z + sz, 0.32, 0.3, 0.32, yaw, [0.85, 0.85, 0.88]);
-    }
-    pushBoxRot(b, v.x - 1.05, 1.1, v.z + 0.5, 0.15, 0.15, 0.3, yaw, [0.15, 0.15, 0.16]);
-    pushBoxRot(b, v.x + 1.05, 1.1, v.z + 0.5, 0.15, 0.15, 0.3, yaw, [0.15, 0.15, 0.16]);
-    pushBoxRot(b, v.x - 0.6, 0.6, v.z + 2.25, 0.4, 0.2, 0.1, yaw, [1, 0.95, 0.6]);
-    pushBoxRot(b, v.x + 0.6, 0.6, v.z + 2.25, 0.4, 0.2, 0.1, yaw, [1, 0.95, 0.6]);
+    // Mirrors + spoiler (sports cars).
+    boxAt(-1.3, 0.6, 1.35, 0.15, 0.15, 0.3, [0.15, 0.15, 0.16]);
+    boxAt(1.3, 0.6, 1.35, 0.15, 0.15, 0.3, [0.15, 0.15, 0.16]);
     if (v.name === 'Solmar Comet' || v.name === 'Palm GT') {
-      pushBoxRot(b, v.x, 1.15, v.z - 2.1, 1.8, 0.12, 0.4, yaw, dark);
+      boxAt(0, -2.4, 1.35, 2.0, 0.12, 0.4, [0.12, 0.12, 0.14]);
     }
   }
   return 8;

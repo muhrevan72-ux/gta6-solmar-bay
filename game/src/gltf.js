@@ -1,4 +1,4 @@
-// Solmar Bay — minimal GLB (glTF 2.0 binary) reader (rebuild #14).
+// Solmar Bay — minimal GLB (glTF 2.0 binary) reader (rebuild #15).
 // Only what the game needs: parse the header + JSON + BIN chunks,
 // then stream the first meshes' triangles into a batch. Returns
 // null on a bad magic, a truncated file, or a null input.
