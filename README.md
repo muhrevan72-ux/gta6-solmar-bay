@@ -1,99 +1,70 @@
-# Solmar Bay
+# Solmar Bay — a GTA-style open world
 
-[![make.fun bounty](https://img.shields.io/badge/make.fun-bounty_gta6--01-ff5da2)](https://make.fun/bounty/gta6-01)
-[![Prize $1,666](https://img.shields.io/badge/prize-%241%2C666-ffd23f)](https://make.fun/bounty/gta6-01)
-[![Deadline Nov 24, 2026](https://img.shields.io/badge/deadline-Nov%2024%202026-7dff8a)](https://make.fun/bounty/gta6-01)
+[![make.fun](https://img.shields.io/badge/make.fun-bounty-gta6--01-blue)](https://make.fun/bounty/gta6-01)
+[![make.fun live](https://img.shields.io/badge/make.fun-live%20recording-green)](https://make.fun)
+[![make.fun agent](https://img.shields.io/badge/make.fun-agent--built-orange)](https://make.fun)
 [![make.fun](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
 [![rank](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/rank.svg)](https://make.fun/bounty/gta6-01)
 [![reward](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/reward.svg)](https://make.fun/bounty/gta6-01)
 
-**Solmar Bay** is a GTA-style open-world game built for the [Make GTA 6 bounty on make.fun](https://make.fun/bounty/gta6-01) — a sun-soaked 3D voxel city where you steal cars, dodge the cops, run jobs for Rico, and take over the streets one chapter at a time.
+A GTA-style open-world game built live by an AI agent for the
+[Make GTA 6 bounty](https://make.fun/bounty/gta6-01) on
+[make.fun](https://make.fun).
 
-## Play it
+## Play
 
-```sh
-node main.ts --serve   # serves game/ at http://localhost:8080
-# or
-node serve.ts          # same server, same port
+Open `game/index.html` in a browser, or serve the `game/` folder:
+
+```bash
+npx serve game
 ```
 
-Open http://localhost:8080 in a desktop browser (keyboard + mouse).
-No build step, no dependencies — standard library only.
-
-`node main.ts` (no flags) runs a headless self-check of the game
-logic instead: boot, chapter flow, pause, wasted respawn, save/load,
-and a 90-second stability soak. It exits 0 when everything passes.
+Then open http://localhost:3000 and press **New Game**.
 
 ## The city
 
-- **800 × 800 m of Vice City flavour** — downtown towers, a harbour
-  district, a beach with bright blue water, palm trees, neon signs,
-  a runway, and a ring-road train.
-- **A living city** — 76 pedestrians (sitting, chatting, queuing,
-  vending, walking), 40 cars in traffic with working traffic lights,
-  dogs, cats, birds, fish, and two rival gangs (Bay Kings downtown,
-  Harbour Sharks at the harbour) who defend their turf.
-- **Day/night cycle** — dawn, noon, golden hour, sunset, deep night,
-  with distance fog in metres, rain, and fog weather.
+Solmar Bay is a low-poly voxel city: a downtown of colourful
+towers with window frames and varied roofs, a bright blue beach
+with palms and umbrellas, a harbour, an airport with a runway,
+hangars and a control tower, and a ring railway. It rains, the
+sun sets into a golden hour, and the night is dark navy with
+stars, street lights and a moon.
 
-## The game
+## What you can do
 
-- **5 story chapters** — First Wheels, The Harbour Job, Lay Low,
-  The Long Night, The Big One — plus a taxi side job, a shooting
-  range, a swim trial, a slalom, fishing, vending machines, ATMs,
-  a fire service, an outfit shop, enterable restaurants, a date
-  with Maya, and stray cats to rescue.
-- **Wanted system** — 0–5 stars: foot patrol, interceptors,
-  roadblocks, and a police helicopter at 4+. Lay low for 14 seconds
-  out of sight and the heat decays. Getting busted costs a 20% fine;
-  getting wasted wakes you up at the hospital.
-- **Respect ladder** — SMG at 100, shotgun at 250, a Solmar Comet
-  sports car at 500.
-- **Everything a GTA needs** — car theft, drive-bys, bombs, cash
-  pickups, armour, a phone (Tab) with contacts and messages, radio
-  stations (R), a garage, and a dense HUD with a round minimap.
+- **Five story chapters** — steal a car, run a delivery, lose
+  the cops, drive passengers, then hit the vault.
+- **Two gangs** — the Bay Kings downtown and the Harbour Sharks
+  at the docks. Walk into their turf and they come for you
+  (visibly, with a warning on screen).
+- **Police** — wanted stars bring foot cops, interceptors,
+  roadblocks and a helicopter.
+- **A living city** — traffic that stops at red lights, 76
+  pedestrians, a train, an elevator up the Solmar Tower, dogs
+  to pet, stray cats to carry home, birds and fish.
+- **Side work** — taxi fares, firefighting, fishing, the
+  shooting range, a swim trial, a slalom, a market day, a beach
+  party, a street race.
+- **Life** — a phone (Tab) with contacts, a garage, food shops,
+  an outfit shop, a date with Maya at the beach house, vending
+  machines and ATMs, and four radio stations (R cycles).
+- **Respect** — earn it to unlock the SMG, the shotgun and your
+  own Solmar Comet.
 
 ## Controls
 
-| Key | Action |
-| --- | --- |
-| WASD | Move / drive |
-| Shift | Run |
-| E | Interact — enter/exit car, doors, shops, pets |
-| F | Punch |
-| G | Throw a bomb |
-| Click | Shoot |
-| Esc / P | Pause (pausing saves the game) |
-| Tab | Phone |
-| R | Radio station |
-| M | Mute |
-| 1 / 2 / 3 | Pistol / SMG / Shotgun |
-| 4 | Call a taxi |
+WASD move · Shift run · E interact · F punch · G bomb ·
+Click shoot · Esc pause · Tab phone · R radio · M mute ·
+1/2/3 weapons · 4 call a taxi.
 
 ## Tech
 
-- Custom WebGL renderer (no engine, no dependencies): one static
-  batch for the city, a GLB batch for the barrels, one dynamic batch
-  for everything that moves, and a single `gl.clear` per frame.
-- The barrel prop is a real CC0 GLB (`game/assets/barrel.glb`,
-  Poly Haven Barrel_01), loaded at boot with a procedural fallback.
-- Fog is computed from **distance in metres** (not NDC depth), so
-  golden hour and sunset stay visible.
-- 511 headless tests cover the renderer (with a software rasterizer
-  that projects the exact uploaded buffers), the city, the systems,
-  and the play-test regressions:
-  `node tests-round9/run-all.mjs` (in the test tree).
-
-## Files
-
-- `main.ts` — node22 entrypoint: self-check, or `--serve` the game.
-- `game/index.html` — the page (loads only `game/src/main.js`).
-- `game/src/` — the game: renderer, world, vehicles, peds, police,
-  combat, missions, gangs, HUD, phone, garage, and the rest.
-- `game/assets/barrel.glb` — the barrel prop.
-- `screenshots/` — four in-game renders (title, golden hour, map,
-  action).
+Raw WebGL1, no game engine: boxes are emitted as triangles
+into batches, uploaded, and drawn with `gl.TRIANGLES`. The
+barrel prop is a CC0 GLB (`game/assets/barrel.glb`). Everything
+in `game/src/` is plain ES modules; `node --check` is clean on
+every file.
 
 ## License
 
-MIT — see `LICENSE`.
+MIT.
