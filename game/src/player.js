@@ -1,139 +1,132 @@
-// Solmar Bay — the player on foot.
+// Solmar Bay — the player.
 //
-// WASD moves relative to the camera, Shift runs, E interacts,
-// F punches, Space swims/handbrakes, mouse click shoots. The
-// player's voxel body follows the chosen outfit: hair style and
-// colour come from the outfit's OWN colour (the round-7 bug where
-// a bought "Red mohawk" rendered brown read COL.hair by index
-// instead), shoes use the outfit shoe colour.
+// On-foot movement, entering/exiting cars, hair + shoes that
+// follow the bought outfit, and the player's box model. Car
+// driving lives in vehicles.js; this file owns the person.
+//
+// INPUT RULES (see input.js): cooldowns are gated with `<= 0`,
+// never `!cooldown`. Cooldowns decay BEFORE the in-car/inside
+// early return, or the player can never exit a car (round-8 bug:
+// cooldowns decayed after the early return).
 
-import { TUNE, COL, OUTFIT, clamp, dist } from './config.js';
+import { clamp, TUNE, SPAWNS } from './config.js';
+import { pushBox } from './render.js';
+import { tileUV } from './texture.js';
 import { isBlocked } from './world.js';
-import { hairBox } from './pedestrians.js';
+import { axis } from './input.js';
 
-// Hair style by outfit name: crop/buzz are flat, mohawk/spikes
-// stand up as a ridge. The colour ALWAYS comes from the outfit
-// entry itself — never from an index into COL.hair.
-export function outfitHairStyle(game) {
-  const name = OUTFIT.hair[game.player.outfit.hair].name;
-  if (name.includes('mohawk') || name.includes('spikes')) return 'ridge';
-  return 'flat';
+// Hair colour + shoe colour follow the bought outfit.
+export function outfitColours(game) {
+  const o = game.player.outfit;
+  const hair = [
+    [0.1, 0.1, 0.12],
+    [0.95, 0.85, 0.4],
+    [0.9, 0.15, 0.15],
+    [0.2, 0.4, 0.95],
+  ][o.hair] || [0.1, 0.1, 0.12];
+  const shirt = [
+    [0.9, 0.9, 0.9],
+    [0.95, 0.75, 0.15],
+    [0.1, 0.7, 0.7],
+    [1, 0.25, 0.6],
+  ][o.shirt] || [0.9, 0.9, 0.9];
+  const pants = [
+    [0.25, 0.35, 0.6],
+    [0.15, 0.15, 0.18],
+    [0.92, 0.92, 0.9],
+  ][o.pants] || [0.25, 0.35, 0.6];
+  const shoes = [
+    [0.9, 0.9, 0.9],
+    [0.95, 0.75, 0.15],
+    [0.9, 0.15, 0.2],
+  ][o.shoes] || [0.9, 0.9, 0.9];
+  return { hair, shirt, pants, shoes };
 }
 
-export function outfitHairColour(game) {
-  return OUTFIT.hair[game.player.outfit.hair].colour;
-}
-
-export function outfitShoeColour(game) {
-  return OUTFIT.shoes[game.player.outfit.shoes].colour;
-}
-
-export function outfitShirtColour(game) {
-  return OUTFIT.shirt[game.player.outfit.shirt].colour;
-}
-
-export function outfitPantsColour(game) {
-  return OUTFIT.pants[game.player.outfit.pants].colour;
-}
-
-// Draw the player as voxel boxes into a batch. out is an array
-// of box specs {x,y,z,w,h,d,c,tile}; the caller pushes them.
-// y0 is the ground height under the player.
-export function playerBoxes(game, out, y0 = 0) {
+// The player's voxel body: head, hair, torso, arms, legs, shoes.
+// 11 boxes, ~1.9 m tall, varied by outfit.
+export function playerBoxes(game, b) {
   const p = game.player;
-  const skin = COL.skin[0];
-  const shirt = outfitShirtColour(game);
-  const pants = outfitPantsColour(game);
-  const shoes = outfitShoeColour(game);
-  const bob = p.moving ? Math.sin(game.time * 10) * 0.12 : 0;
-  const legSwing = p.moving ? Math.sin(game.time * 10) * 0.35 : 0;
-  // Legs (swing when walking), torso, arms, head.
-  out.push({ x: p.x - 0.22, y: y0 + 0.15 + Math.max(0, legSwing) * 0.4, z: p.z, w: 0.36, h: 0.75, d: 0.36, c: pants });
-  out.push({ x: p.x + 0.22, y: y0 + 0.15 + Math.max(0, -legSwing) * 0.4, z: p.z, w: 0.36, h: 0.75, d: 0.36, c: pants });
-  out.push({ x: p.x - 0.22, y: y0, z: p.z, w: 0.4, h: 0.18, d: 0.55, c: shoes });
-  out.push({ x: p.x + 0.22, y: y0, z: p.z, w: 0.4, h: 0.18, d: 0.55, c: shoes });
-  out.push({ x: p.x, y: y0 + 0.9 + bob, z: p.z, w: 0.85, h: 0.85, d: 0.5, c: shirt });
-  out.push({ x: p.x - 0.55, y: y0 + 0.9 + bob, z: p.z, w: 0.28, h: 0.8, d: 0.32, c: shirt });
-  out.push({ x: p.x + 0.55, y: y0 + 0.9 + bob, z: p.z, w: 0.28, h: 0.8, d: 0.32, c: shirt });
-  out.push({ x: p.x, y: y0 + 1.75 + bob, z: p.z, w: 0.62, h: 0.6, d: 0.55, c: skin });
-  // Hair follows the outfit (style + its own colour).
-  hairBox(out, { x: p.x, z: p.z, hairStyle: outfitHairStyle(game), hair: outfitHairColour(game) }, y0 + 2.02 + bob, p.heading);
-  // Carried cat rides on the shoulder.
-  if (p.carryingCat) {
-    out.push({ x: p.x + 0.45, y: y0 + 2.2 + bob, z: p.z, w: 0.4, h: 0.3, d: 0.5, c: [0.85, 0.7, 0.5] });
-  }
-  // Blob shadow.
-  out.push({ x: p.x, y: y0 + 0.02, z: p.z, w: 1.1, h: 0.04, d: 1.1, c: [0.08, 0.08, 0.1] });
-  return out;
+  const c = outfitColours(game);
+  const uv = tileUV('plain');
+  const skin = [0.95, 0.8, 0.65];
+  const walk = Math.sin(game.time * 8) * 0.25 * (p.speed > 0.5 ? 1 : 0);
+  // Legs (swing when walking).
+  pushBox(b, p.x - 0.18, 0, p.z + walk * 0.3, 0.32, 0.85, 0.32, c.pants, uv);
+  pushBox(b, p.x + 0.18, 0, p.z - walk * 0.3, 0.32, 0.85, 0.32, c.pants, uv);
+  // Shoes.
+  pushBox(b, p.x - 0.18, 0, p.z + walk * 0.3 + 0.1, 0.34, 0.15, 0.5, c.shoes, uv);
+  pushBox(b, p.x + 0.18, 0, p.z - walk * 0.3 + 0.1, 0.34, 0.15, 0.5, c.shoes, uv);
+  // Torso.
+  pushBox(b, p.x, 0.85, p.z, 0.75, 0.7, 0.4, c.shirt, uv);
+  // Arms.
+  pushBox(b, p.x - 0.5, 0.9, p.z - walk * 0.3, 0.22, 0.65, 0.22, skin, uv);
+  pushBox(b, p.x + 0.5, 0.9, p.z + walk * 0.3, 0.22, 0.65, 0.22, skin, uv);
+  // Head + hair.
+  pushBox(b, p.x, 1.55, p.z, 0.45, 0.45, 0.45, skin, uv);
+  pushBox(b, p.x, 1.9, p.z, 0.48, 0.2, 0.48, c.hair, uv);
+  // Eyes (near LOD only — tiny dark quads on the face).
+  pushBox(b, p.x - 0.1, 1.65, p.z + 0.24, 0.07, 0.07, 0.02, [0.05, 0.05, 0.05], uv);
+  pushBox(b, p.x + 0.1, 1.65, p.z + 0.24, 0.07, 0.07, 0.02, [0.05, 0.05, 0.05], uv);
+  return 11;
 }
 
-// Move the player on foot. Returns nothing; mutates p.
+// On-foot step. Cooldowns decay FIRST (see header) so the player
+// can always exit a car.
 export function stepPlayer(game, dt, input) {
   const p = game.player;
-  // Cooldowns decay FIRST, before any early return: while the
-  // player is in a car, inside, on the train or on the elevator
-  // stepPlayer returns below — and a frozen eCooldown meant the
-  // player could enter a car but never get out (round-8 probe:
-  // exitVehicle always returned false while driving).
-  // The gate is always `<= 0`, never `!x`.
   p.eCooldown = Math.max(0, p.eCooldown - dt);
   p.punchCooldown = Math.max(0, p.punchCooldown - dt);
   p.bombCooldown = Math.max(0, p.bombCooldown - dt);
   p.shootCooldown = Math.max(0, p.shootCooldown - dt);
   if (p.inCar || p.inside || p.onTrain || p.onElevator) return;
+  if (game.mode !== 'play' && game.mode !== 'phone') return;
+  const run = input.downKey('ShiftLeft') || input.downKey('ShiftRight');
+  const speed = run ? TUNE.runSpeed : TUNE.walkSpeed;
+  const fwd = axis(input, 'KeyW', 'KeyS') * -1; // W = forward
+  const strafe = axis(input, 'KeyA', 'KeyD');
   const cam = game.camera;
-  // Movement relative to the camera yaw.
-  let fx = 0;
-  let fz = 0;
-  if (input) {
-    if (input.downKey('KeyW') || input.downKey('ArrowUp')) { fx -= Math.sin(cam.yaw); fz -= Math.cos(cam.yaw); }
-    if (input.downKey('KeyS') || input.downKey('ArrowDown')) { fx += Math.sin(cam.yaw); fz += Math.cos(cam.yaw); }
-    if (input.downKey('KeyA') || input.downKey('ArrowLeft')) { fx -= Math.cos(cam.yaw); fz += Math.sin(cam.yaw); }
-    if (input.downKey('KeyD') || input.downKey('ArrowRight')) { fx += Math.cos(cam.yaw); fz -= Math.sin(cam.yaw); }
+  const yaw = cam ? cam.yaw : 0;
+  // Movement is camera-relative.
+  const mx = Math.sin(yaw) * fwd + Math.cos(yaw) * strafe;
+  const mz = Math.cos(yaw) * fwd - Math.sin(yaw) * strafe;
+  const ml = Math.hypot(mx, mz) || 1;
+  const tx = (mx / ml) * speed * (fwd || strafe ? 1 : 0);
+  const tz = (mz / ml) * speed * (fwd || strafe ? 1 : 0);
+  const k = 1 - Math.exp(-TUNE.accel * dt / speed);
+  p.vx += (tx - p.vx) * k;
+  p.vz += (tz - p.vz) * k;
+  // Friction when no input.
+  if (!fwd && !strafe) {
+    const f = Math.max(0, 1 - TUNE.friction * dt / 10);
+    p.vx *= f;
+    p.vz *= f;
   }
-  const len = Math.hypot(fx, fz);
-  const running = input && (input.downKey('ShiftLeft') || input.downKey('ShiftRight'));
-  const speed = running ? TUNE.runSpeed : TUNE.walkSpeed;
-  p.moving = len > 0.01;
-  if (p.moving) {
-    fx /= len;
-    fz /= len;
-    const target = Math.atan2(fx, fz);
-    // Smooth turn toward the move direction.
-    let diff = target - p.heading;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    p.heading += clamp(diff, -6 * dt, 6 * dt);
-    const nx = p.x + fx * speed * dt;
-    const nz = p.z + fz * speed * dt;
-    // Slide along walls: try x and z separately.
-    if (!isBlocked(game.city, nx, p.z, TUNE.playerRadius)) p.x = nx;
-    if (!isBlocked(game.city, p.x, nz, TUNE.playerRadius)) p.z = nz;
-    p.speed = speed;
-  } else {
-    p.speed = 0;
-  }
-  // Swimming: in the water plane (west of x=-320 or harbour basin).
-  const inWater = (p.x < -320 && p.x > -460) || (p.z > 320 && p.z < 400 && Math.abs(p.x) < 250);
-  p.swimming = inWater && !p.inCar;
-  if (p.swimming && p.moving) {
-    p.x += fx * TUNE.swimSpeed * dt * 0.4;
-    p.z += fz * TUNE.swimSpeed * dt * 0.4;
-  }
-  // World bounds.
-  p.x = clamp(p.x, -395, 395);
-  p.z = clamp(p.z, -395, 395);
+  let nx = p.x + p.vx * dt;
+  let nz = p.z + p.vz * dt;
+  // Colliders: slide along walls (per-axis resolution).
+  if (!isBlocked(game.city, nx, p.z)) p.x = nx;
+  else p.vx = 0;
+  if (!isBlocked(game.city, p.x, nz)) p.z = nz;
+  else p.vz = 0;
+  p.x = clamp(p.x, -380, 380);
+  p.z = clamp(p.z, -380, 380);
+  p.speed = Math.hypot(p.vx, p.vz);
+  if (p.speed > 0.5) p.heading = Math.atan2(p.vx, p.vz);
+  // Swimming: the sea is x < -360.
+  p.swimming = p.x < -360;
+  // Petting a carried cat.
+  if (p.carryingCat) p.petting = Math.max(0, p.petting - dt);
 }
 
-// Try to enter the nearest vehicle (E). Returns the vehicle or null.
+// Enter the nearest vehicle within range. Returns the vehicle or null.
 export function tryEnterVehicle(game) {
   const p = game.player;
-  if (p.eCooldown > 0 || p.inCar) return null;
+  if (p.eCooldown > 0) return null;
   let best = null;
   let bestD = TUNE.interactRange;
   for (const v of game.vehicles) {
-    if (v.wrecked) continue;
-    const d = dist(p.x, p.z, v.x, v.z);
+    const d = Math.hypot(v.x - p.x, v.z - p.z);
     if (d < bestD) {
       best = v;
       bestD = d;
@@ -143,34 +136,30 @@ export function tryEnterVehicle(game) {
   p.eCooldown = 0.4;
   p.inCar = best;
   best.driver = 'player';
-  if (best.stolen === false && best.kind !== 'taxiCalled') {
-    // Stealing a parked or traffic car is a crime — unless it is
-    // the taxi the player called (driver=null, free ride).
-    if (best.owner === 'npc' || best.parked) {
-      game.policeCommit && game.policeCommit('stealCar');
-      game.stats.stolen += 1;
-    }
-  }
+  p.x = best.x;
+  p.z = best.z;
   return best;
 }
 
-// Step out of the car (E again).
+// Exit the car onto the nearest free sidewalk point.
 export function exitVehicle(game) {
   const p = game.player;
-  if (!p.inCar || p.eCooldown > 0) return false;
   const v = p.inCar;
-  p.eCooldown = 0.4;
+  if (!v) return;
   p.inCar = null;
-  v.driver = v.kind === 'taxi' ? 'npc' : null;
-  // Step out to the side of the car, clear of its collider.
-  const sx = v.x + Math.cos(v.heading) * 2.5;
-  const sz = v.z - Math.sin(v.heading) * 2.5;
-  if (!isBlocked(game.city, sx, sz, TUNE.playerRadius)) {
-    p.x = sx;
-    p.z = sz;
-  } else {
-    p.x = v.x - Math.cos(v.heading) * 2.5;
-    p.z = v.z + Math.sin(v.heading) * 2.5;
+  v.driver = null;
+  const side = Math.cos(v.heading) > 0 ? 1 : -1;
+  let x = v.x + side * 3;
+  let z = v.z;
+  if (isBlocked(game.city, x, z)) {
+    x = v.x - side * 3;
   }
-  return true;
+  if (isBlocked(game.city, x, z)) {
+    x = v.x;
+    z = v.z + 3;
+  }
+  p.x = x;
+  p.z = z;
+  p.vx = 0;
+  p.vz = 0;
 }

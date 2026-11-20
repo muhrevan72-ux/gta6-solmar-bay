@@ -1,146 +1,132 @@
-// Solmar Bay — WebAudio synth sound.
+// Solmar Bay — synthesized audio.
 //
-// No audio files: engine hum, sirens, pickup blips, punch thuds,
-// mission jingles and 4 radio stations of original synth songs
-// are all generated with WebAudio oscillators. In Node (no
-// AudioContext) every method is a silent no-op, so headless tests
-// can call the audio system freely.
+// No audio files: every sound is a WebAudio oscillator, and the
+// radio is a 32-step sequencer that plays original synth songs
+// (nothing copyrighted). In Node (no AudioContext) every method
+// is a safe no-op, so headless tests can call the audio system
+// without crashing.
 
 import { STATIONS, SONG_STEPS } from './config.js';
 
-// Note frequencies for the radio sequencer (A minor pentatonic).
-const SCALE = [220, 261.63, 293.66, 329.63, 392, 440, 523.25, 587.33, 659.25, 698.46];
+const NOTE_FREQ = [261.63, 293.66, 329.63, 349.23, 392.0, 440.0, 493.88, 523.25, 587.33, 659.25];
 
-export function createAudio(game) {
-  const audio = {
-    game,
+export function createAudio() {
+  const a = {
     ctx: null,
     master: null,
-    engineOsc: null,
-    engineGain: null,
-    sirenOsc: null,
-    sirenGain: null,
-    radioTimer: 0,
+    muted: false,
     started: false,
-  };
-
-  audio.ensure = function () {
-    if (audio.ctx || typeof window === 'undefined') return;
-    try {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return;
-      audio.ctx = new AC();
-      audio.master = audio.ctx.createGain();
-      audio.master.gain.value = game.muted ? 0 : 0.5;
-      audio.master.connect(audio.ctx.destination);
-      // Engine hum: low sawtooth, pitch follows speed.
-      audio.engineOsc = audio.ctx.createOscillator();
-      audio.engineOsc.type = 'sawtooth';
-      audio.engineOsc.frequency.value = 60;
-      audio.engineGain = audio.ctx.createGain();
-      audio.engineGain.gain.value = 0;
-      audio.engineOsc.connect(audio.engineGain);
-      audio.engineGain.connect(audio.master);
-      audio.engineOsc.start();
-      // Police siren: two-tone triangle, quiet until wanted.
-      audio.sirenOsc = audio.ctx.createOscillator();
-      audio.sirenOsc.type = 'triangle';
-      audio.sirenOsc.frequency.value = 700;
-      audio.sirenGain = audio.ctx.createGain();
-      audio.sirenGain.gain.value = 0;
-      audio.sirenOsc.connect(audio.sirenGain);
-      audio.sirenGain.connect(audio.master);
-      audio.sirenOsc.start();
-      audio.started = true;
-    } catch (e) {
-      audio.ctx = null;
-    }
-  };
-
-  audio.blip = function (freq = 880, dur = 0.08, type = 'sine', vol = 0.2) {
-    if (!audio.ctx) return;
-    const o = audio.ctx.createOscillator();
-    const g = audio.ctx.createGain();
-    o.type = type;
-    o.frequency.value = freq;
-    g.gain.setValueAtTime(vol, audio.ctx.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.001, audio.ctx.currentTime + dur);
-    o.connect(g);
-    g.connect(audio.master);
-    o.start();
-    o.stop(audio.ctx.currentTime + dur);
-  };
-
-  audio.jingle = function () {
-    if (!audio.ctx) return;
-    [523, 659, 784, 1046].forEach((f, i) => {
-      setTimeout(() => audio.blip(f, 0.18, 'triangle', 0.25), i * 110);
-    });
-  };
-
-  audio.thud = function () {
-    audio.blip(120, 0.12, 'square', 0.3);
-  };
-
-  audio.siren = function (on) {
-    if (!audio.ctx) return;
-    audio.sirenGain.gain.value = on && !game.muted ? 0.05 : 0;
-  };
-
-  // Radio: 8th-note sequencer. One step every 0.22 s; the song
-  // pattern repeats every 8 notes, the song changes every 32 steps.
-  audio.stepRadio = function (dt) {
-    if (!audio.ctx || game.muted) return;
-    audio.radioTimer += dt;
-    const stepDur = 0.22;
-    while (audio.radioTimer >= stepDur) {
-      audio.radioTimer -= stepDur;
-      const st = STATIONS[game.station];
-      const song = st.songs[game.song];
-      const note = song.notes[game.songStep % 8];
-      if (note > 0) audio.blip(SCALE[note % SCALE.length], 0.2, 'square', 0.06);
-      game.songStep += 1;
-      if (game.songStep >= SONG_STEPS) {
-        game.songStep = 0;
-        game.song = (game.song + 1) % st.songs.length;
+    // Lazily create the context on the first user gesture.
+    ensure: function () {
+      if (typeof window === 'undefined' || typeof window.AudioContext === 'undefined') return null;
+      if (!a.ctx) {
+        a.ctx = new window.AudioContext();
+        a.master = a.ctx.createGain();
+        a.master.gain.value = a.muted ? 0 : 0.5;
+        a.master.connect(a.ctx.destination);
       }
-    }
+      if (a.ctx.state === 'suspended') a.ctx.resume();
+      return a.ctx;
+    },
+    // One short beep: {freq, dur, type, vol}.
+    beep: function (freq, dur, type, vol) {
+      const ctx = a.ensure();
+      if (!ctx) return;
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = type || 'square';
+      o.frequency.value = freq || 440;
+      g.gain.value = vol || 0.15;
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (dur || 0.15));
+      o.connect(g);
+      g.connect(a.master);
+      o.start();
+      o.stop(ctx.currentTime + (dur || 0.15));
+    },
+    // A named one-shot effect.
+    sfx: function (name) {
+      if (a.muted) return;
+      switch (name) {
+        case 'shoot':
+          a.beep(180, 0.08, 'square', 0.25);
+          break;
+        case 'punch':
+          a.beep(120, 0.1, 'sawtooth', 0.2);
+          break;
+        case 'explosion':
+          a.beep(60, 0.5, 'sawtooth', 0.4);
+          break;
+        case 'pickup':
+          a.beep(880, 0.12, 'sine', 0.2);
+          break;
+        case 'mission':
+          a.beep(523.25, 0.15, 'sine', 0.2);
+          setTimeout(() => a.beep(659.25, 0.15, 'sine', 0.2), 150);
+          setTimeout(() => a.beep(783.99, 0.3, 'sine', 0.2), 300);
+          break;
+        case 'siren':
+          a.beep(700, 0.4, 'sine', 0.1);
+          break;
+        case 'phone':
+          a.beep(1200, 0.1, 'sine', 0.15);
+          break;
+        case 'cash':
+          a.beep(1046.5, 0.1, 'sine', 0.2);
+          break;
+        case 'error':
+          a.beep(140, 0.2, 'square', 0.15);
+          break;
+        default:
+          a.beep(440, 0.1, 'sine', 0.1);
+      }
+    },
+    // Engine hum: a low oscillator whose pitch follows speed.
+    engine: function (speed) {
+      const ctx = a.ensure();
+      if (!ctx) return;
+      if (!a._engine) {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sawtooth';
+        o.frequency.value = 60;
+        g.gain.value = 0;
+        o.connect(g);
+        g.connect(a.master);
+        o.start();
+        a._engine = { o, g };
+      }
+      a._engine.o.frequency.value = 50 + Math.abs(speed) * 4;
+      a._engine.g.gain.value = a.muted ? 0 : Math.min(0.12, Math.abs(speed) * 0.004);
+    },
+    // Radio: advance the 32-step sequencer for the current song.
+    // Called once per beat from main.js.
+    radioStep: function (stationIdx, songIdx, step) {
+      if (a.muted) return;
+      const st = STATIONS[stationIdx];
+      if (!st) return;
+      const song = st.songs[songIdx % st.songs.length];
+      if (!song) return;
+      const note = song.notes[step % song.notes.length];
+      const freq = NOTE_FREQ[note % NOTE_FREQ.length];
+      // Bass on every 4th step, melody on the rest.
+      if (step % 4 === 0) {
+        a.beep(freq / 2, 0.22, 'triangle', 0.18);
+      } else if (step % 2 === 0) {
+        a.beep(freq, 0.12, 'square', 0.08);
+      }
+    },
+    setMuted: function (m) {
+      a.muted = m;
+      if (a.master) a.master.gain.value = m ? 0 : 0.5;
+    },
   };
-
-  audio.nextStation = function () {
-    game.station = (game.station + 1) % STATIONS.length;
-    game.song = 0;
-    game.songStep = 0;
-    return stationLabel(game);
-  };
-
-  audio.setMuted = function (m) {
-    game.muted = m;
-    if (audio.master) audio.master.gain.value = m ? 0 : 0.5;
-  };
-
-  // Engine + siren follow the game state each frame.
-  audio.update = function (dt) {
-    if (!audio.ctx) return;
-    const speed = game.player.inCar ? Math.abs(game.player.inCar.speed || 0) : 0;
-    audio.engineGain.gain.value = game.player.inCar && !game.muted ? 0.04 + speed * 0.002 : 0;
-    audio.engineOsc.frequency.value = 50 + speed * 4;
-    audio.siren(game.wanted > 0);
-    if (audio.sirenGain.gain.value > 0) {
-      audio.sirenOsc.frequency.value = 650 + Math.sin(game.time * 6) * 150;
-    }
-    audio.stepRadio(dt);
-  };
-
-  return audio;
+  return a;
 }
 
-export function stationLabel(game) {
-  const st = STATIONS[game.station];
-  return `${st.name} ${st.freq} — ${st.songs[game.song].title}`;
-}
-
-export function currentSong(game) {
-  const st = STATIONS[game.station];
-  return st.songs[game.song].title;
+// Human-readable radio label for the HUD.
+export function stationLabel(stationIdx, songIdx) {
+  const st = STATIONS[stationIdx];
+  if (!st) return 'Radio off';
+  const song = st.songs[songIdx % st.songs.length];
+  return `${st.name} ${st.freq} — ${song ? song.title : ''}`;
 }

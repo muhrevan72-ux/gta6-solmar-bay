@@ -1,6 +1,6 @@
 // Solmar Bay — procedural texture atlas.
 //
-// A runtime-generated atlas (canvas 512x512, 7 tiles), no external
+// A runtime-generated atlas (canvas 512x512, 8 tiles), no external
 // files. The renderer multiplies each vertex colour by the tile
 // texel, so brick walls, asphalt, sand and water get real texture
 // while the voxel colours stay in charge. In Node (no document)
@@ -10,7 +10,7 @@
 // Tile layout: 4 columns x 2 rows of 128px tiles.
 export const ATLAS_SIZE = 512;
 export const TILE = 128;
-export const TILES = ['brick', 'asphalt', 'sidewalk', 'sand', 'grass', 'water', 'plain'];
+export const TILES = ['brick', 'asphalt', 'sidewalk', 'sand', 'grass', 'water', 'plain', 'window'];
 
 const TILE_INDEX = {};
 TILES.forEach((name, i) => {
@@ -113,9 +113,12 @@ function drawGrass(ctx, x, y) {
 }
 
 function drawWater(ctx, x, y) {
-  ctx.fillStyle = '#1d6f96';
+  // B9: light tint base — the vertex colour (COL.water) does the
+  // colouring, so the sea reads bright tropical blue in daylight
+  // instead of dark teal. Wave lines stay as pale foam bands.
+  ctx.fillStyle = '#9fd4ec';
   ctx.fillRect(x, y, TILE, TILE);
-  ctx.strokeStyle = 'rgba(200,240,255,0.5)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)';
   ctx.lineWidth = 2;
   for (let r = 0; r < 6; r++) {
     const yy = y + 12 + r * 20;
@@ -134,6 +137,24 @@ function drawPlain(ctx, x, y) {
   ctx.fillRect(x, y, TILE, TILE);
 }
 
+function drawWindow(ctx, x, y) {
+  // B9: framed window. Dark frame border, bright glass centre,
+  // mullion cross. The renderer multiplies by the vertex colour
+  // (COL.glass), so the glass stays bright blue while the frame
+  // reads dark — framed windows with zero extra geometry, and the
+  // glass still reads as lit at night.
+  ctx.fillStyle = '#20242c';
+  ctx.fillRect(x, y, TILE, TILE);
+  ctx.fillStyle = '#cfe8f5';
+  ctx.fillRect(x + 12, y + 12, TILE - 24, TILE - 24);
+  ctx.fillStyle = '#5a7a94';
+  ctx.fillRect(x + TILE / 2 - 4, y + 12, 8, TILE - 24);
+  ctx.fillRect(x + 12, y + TILE / 2 - 4, TILE - 24, 8);
+  // Top highlight.
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillRect(x + 12, y + 12, TILE - 24, 10);
+}
+
 const PAINTERS = {
   brick: drawBrick,
   asphalt: drawAsphalt,
@@ -142,6 +163,7 @@ const PAINTERS = {
   grass: drawGrass,
   water: drawWater,
   plain: drawPlain,
+  window: drawWindow,
 };
 
 // Build the atlas canvas (browser only). Returns the canvas or null.

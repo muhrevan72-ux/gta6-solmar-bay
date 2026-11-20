@@ -135,8 +135,10 @@ export function projectPoint(cam, viewProj, x, y, z, w, h) {
 }
 
 // Framing check used by the QA suite: with the default camera the
-// horizon must sit in the upper half of the screen, so the city
-// (below the horizon) dominates the view.
+// horizon sits in the upper-middle band of the screen (measured
+// y ≈ 181 at 720p), so the city dominates the view with sky above
+// it. The old defaults (pitch 0.42, dist 11) pushed the horizon
+// to the top (y ≈ 82) and the view was mostly empty foreground road.
 export function horizonScreenY(cam, w, h) {
   const view = cameraView(cam);
   const proj = perspective((60 * Math.PI) / 180, w / h, 0.1, 1200);

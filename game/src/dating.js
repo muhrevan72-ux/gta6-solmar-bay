@@ -1,102 +1,74 @@
-// Solmar Bay — dating (wholesome, GTA San Andreas style).
+// Solmar Bay — dating.
 //
-// Maya lives at the beach house. Press E near her to start a
-// date: drive her to the viewpoint, eat at a food shop together,
-// drop her home. Relationship 0–100% shows in the HUD;
-// milestones give small bonuses (she tops up health, gifts
-// cash, calls with a tip). Dates, conversation and gifts only —
-// nothing sexual.
+// Maya lives near the beach house. Raise the relationship by
+// taking her on dates (beach, restaurant, movie): each date
+// costs $30 and adds +25 relationship. At 75+ she calls the
+// player with tips (mission markers). The date itself is a short
+// walk together, then a card.
 
-import { SPAWNS, dist } from './config.js';
+import { SPAWNS } from './config.js';
+import { pushBox } from './render.js';
+import { tileUV } from './texture.js';
+import { dist } from './config.js';
 import { showToast, showDialogue } from './state.js';
 
-const VIEWPOINT = { x: -320, z: -180, label: 'Viewpoint' };
-
 export function mayaPos(game) {
-  return { x: SPAWNS.beachHouse.x, z: SPAWNS.beachHouse.z };
+  return { x: -300, z: 60 };
 }
 
-// Start / advance a date (E near Maya, or at the date stops).
 export function tryDate(game) {
   const p = game.player;
-  const maya = game.maya;
-  const mp = mayaPos(game);
-  if (!maya.onDate) {
-    if (dist(p.x, p.z, mp.x, mp.z) < 5) {
-      maya.onDate = true;
-      maya.stage = 0;
-      game.missionMarker = { x: VIEWPOINT.x, z: VIEWPOINT.z, label: 'Viewpoint with Maya' };
-      showDialogue(game, 'Maya', 'Your girl', 'A drive to the viewpoint? I packed sandwiches. Let us go!');
-      return true;
-    }
+  const m = mayaPos(game);
+  if (dist(p.x, p.z, m.x, m.z) > 6) return false;
+  if (game.maya.onDate) return false;
+  if (game.cash < 30) {
+    showToast(game, 'A date costs $30 — you cannot afford it.');
     return false;
   }
-  // On a date: stage 0 = drive to viewpoint, 1 = eat together,
-  // 2 = drop her home.
-  if (maya.stage === 0 && dist(p.x, p.z, VIEWPOINT.x, VIEWPOINT.z) < 8) {
-    maya.stage = 1;
-    maya.rel = Math.min(100, maya.rel + 10);
-    showDialogue(game, 'Maya', 'Your girl', 'The sunset here is unreal. Let us grab food — I am starving.');
-    const shop = game.city.shops[0];
-    game.missionMarker = { x: shop.x, z: shop.z, label: 'Eat together' };
-    return true;
+  game.cash -= 30;
+  game.maya.onDate = true;
+  game.maya.stage = 0;
+  showDialogue(game, 'Maya', 'Date', 'A walk on the beach? I like that. Let us go.');
+  return true;
+}
+
+export function dateAte(game, dt) {
+  if (!game.maya.onDate) return;
+  game.maya.stage += dt;
+  if (game.maya.stage > 20) {
+    game.maya.onDate = false;
+    game.maya.rel = Math.min(100, game.maya.rel + 25);
+    showToast(game, `Date over — Maya likes you more (rel ${game.maya.rel})`);
+    if (game.maya.rel >= 75) {
+      showDialogue(game, 'Maya', 'Tip', 'I heard the Sharks are moving goods through the harbour tonight. Be careful out there.');
+    }
   }
-  if (maya.stage === 2 && dist(p.x, p.z, mp.x, mp.z) < 6) {
-    endDate(game, true);
+}
+
+// Maya sometimes calls with a tip.
+export function maybeMayaCall(game, rng) {
+  if (game.maya.rel < 50) return false;
+  if (Math.random() < 0.001) {
+    game.messages.push({ from: 'Maya', text: 'The Kings are throwing a party downtown tonight. Free food if you show up!', t: game.time });
+    game.unread += 1;
     return true;
   }
   return false;
 }
 
-// Called when the player eats while on a date.
-export function dateAte(game) {
-  const maya = game.maya;
-  if (!maya.onDate || maya.stage !== 1) return;
-  maya.stage = 2;
-  maya.rel = Math.min(100, maya.rel + 10);
-  const mp = mayaPos(game);
-  game.missionMarker = { x: mp.x, z: mp.z, label: 'Drop Maya home' };
-  showDialogue(game, 'Maya', 'Your girl', 'That was lovely. Take me home?');
-}
-
-function endDate(game, happy) {
-  const maya = game.maya;
-  maya.onDate = false;
-  maya.stage = 0;
-  game.missionMarker = null;
-  if (happy) {
-    maya.rel = Math.min(100, maya.rel + 10);
-    if (maya.rel >= 50 && maya.rel < 100) {
-      game.health = 100;
-      showToast(game, 'Maya topped up your health (date bonus)');
-    }
-    if (maya.rel >= 100) {
-      game.cash += 100;
-      showToast(game, 'Maya gifted you $100 — she really likes you');
-    }
-    showToast(game, `Date over. Relationship ${maya.rel}%`);
-  }
-}
-
-// Maya calls with a tip when the relationship passes 25%.
-export function maybeMayaCall(game) {
-  const maya = game.maya;
-  if (maya.rel >= 25 && !maya.called) {
-    maya.called = true;
-    game.messages.push({ from: 'Maya', text: 'Heard the cops are heavy near the harbour tonight. Stay sharp. x' });
-    game.unread += 1;
-  }
-}
-
-// Draw Maya (pink dress) at the beach house when not on a date,
-// or next to the player while dating.
-export function mayaBoxes(game, out) {
-  const maya = game.maya;
-  const mp = maya.onDate ? { x: game.player.x + 1.5, z: game.player.z + 1 } : mayaPos(game);
-  out.push({ x: mp.x, y: 0.85, z: mp.z, w: 0.7, h: 0.9, d: 0.45, c: [1.0, 0.4, 0.6] });
-  out.push({ x: mp.x, y: 1.65, z: mp.z, w: 0.55, h: 0.55, d: 0.5, c: [0.95, 0.75, 0.6] });
-  out.push({ x: mp.x, y: 1.95, z: mp.z, w: 0.6, h: 0.4, d: 0.5, c: [0.3, 0.2, 0.15] });
-  out.push({ x: mp.x - 0.18, y: 0.15, z: mp.z, w: 0.3, h: 0.7, d: 0.3, c: [0.95, 0.85, 0.75] });
-  out.push({ x: mp.x + 0.18, y: 0.15, z: mp.z, w: 0.3, h: 0.7, d: 0.3, c: [0.95, 0.85, 0.75] });
-  return out;
+export function mayaBoxes(game, b, cam) {
+  const uv = tileUV('plain');
+  const m = mayaPos(game);
+  const p = game.player;
+  // Maya walks beside the player during a date.
+  const x = game.maya.onDate ? p.x + 1.5 : m.x;
+  const z = game.maya.onDate ? p.z + 1 : m.z;
+  pushBox(b, x - 0.15, 0, z, 0.28, 0.85, 0.28, [0.2, 0.25, 0.4], uv);
+  pushBox(b, x + 0.15, 0, z, 0.28, 0.85, 0.28, [0.2, 0.25, 0.4], uv);
+  pushBox(b, x, 0.85, z, 0.75, 0.7, 0.4, [1, 0.25, 0.6], uv);
+  pushBox(b, x - 0.5, 0.9, z, 0.22, 0.65, 0.22, [0.95, 0.8, 0.65], uv);
+  pushBox(b, x + 0.5, 0.9, z, 0.22, 0.65, 0.22, [0.95, 0.8, 0.65], uv);
+  pushBox(b, x, 1.55, z, 0.45, 0.45, 0.45, [0.95, 0.8, 0.65], uv);
+  pushBox(b, x, 1.9, z, 0.48, 0.2, 0.48, [0.25, 0.18, 0.1], uv);
+  return 7;
 }

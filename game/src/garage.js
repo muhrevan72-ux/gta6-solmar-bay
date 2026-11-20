@@ -1,74 +1,78 @@
-// Solmar Bay — garage + car ownership.
+// Solmar Bay — garage.
 //
-// Drive into the garage (E at the door while in a car): store
-// the current car, list owned cars, take one out (1–9), repaint
-// the current car ($50). Owned cars persist in the save.
+// The Bay Garage (150, -126) stores the player's cars. Drive a
+// car to the garage door and press E to store it; press E at the
+// door on foot to take a car out or repaint it for $50. The
+// garage modal is a real menu: 1/2/3 pick a car, R repaints.
 
-import { SPAWNS, TUNE, dist } from './config.js';
+import { SPAWNS, TUNE } from './config.js';
+import { dist } from './config.js';
 import { showToast } from './state.js';
 import { makeVehicle } from './vehicles.js';
 
 export function tryGarage(game) {
   const p = game.player;
-  // Enter the garage: in a car, at the door.
-  if (p.inCar && dist(p.x, p.z, SPAWNS.garageDoor.x, SPAWNS.garageDoor.z) < 8) {
-    const car = p.inCar;
-    if (!game.ownedCars.find((c) => c.id === car.id)) {
-      game.ownedCars.push({ id: car.id, name: car.name, colour: car.colour, kind: car.kind });
-      showToast(game, `${car.name} stored in the garage (${game.ownedCars.length} owned)`);
+  const door = SPAWNS.garageDoor;
+  if (dist(p.x, p.z, door.x, door.z) > 5) return false;
+  if (p.inCar) {
+    // Store the car.
+    const v = p.inCar;
+    if (game.ownedCars.length >= 6) {
+      showToast(game, 'Garage full (6 cars).');
+      return false;
     }
-    game.modal = {
-      kind: 'garage',
-      title: 'Garage — Bay Street',
-      lines: [
-        ...game.ownedCars.map((c, i) => `${i + 1}. ${c.name} — press ${i + 1} to take out`),
-        `0. Repaint current car — $${TUNE.repaintPrice}`,
-        'Esc. Leave',
-      ],
-    };
+    v.owned = true;
+    game.ownedCars.push({ name: v.name, colour: v.colour, condition: v.condition, kind: v.kind });
+    game.vehicles = game.vehicles.filter((x) => x !== v);
+    p.inCar = null;
+    p.x = door.x;
+    p.z = door.z + 3;
+    showToast(game, `${v.name} stored in the garage.`);
     return true;
   }
-  return false;
-}
-
-// Take out owned car i (number key).
-export function takeOutCar(game, i) {
-  if (!game.modal || game.modal.kind !== 'garage') return false;
-  const owned = game.ownedCars[i];
-  if (!owned) return false;
-  const p = game.player;
-  // Spawn the car just outside the garage door.
-  const v = makeVehicle(owned.kind, SPAWNS.garageDoor.x + 4, SPAWNS.garageDoor.z + 8, 0, {
-    name: owned.name, colour: owned.colour, owner: 'player', parked: false,
-  });
-  v.id = owned.id;
-  game.vehicles.push(v);
-  p.inCar = v;
-  v.driver = 'player';
-  game.modal = null;
-  showToast(game, `Took out the ${owned.name}`);
+  // On foot: open the garage menu.
+  const lines = game.ownedCars.length
+    ? game.ownedCars.map((c, i) => `${i + 1}. ${c.name} — ${Math.round(c.condition)}%`)
+    : ['(Garage empty — steal a car and drive it here.)'];
+  lines.push('', 'Press 1-6 to take a car out, R to repaint ($50), Esc to leave.');
+  game.modal = { kind: 'garage', title: 'Bay Garage', lines };
   return true;
 }
 
-// Repaint the current car (key 0 in the garage menu).
+export function takeOutCar(game, idx) {
+  const c = game.ownedCars[idx];
+  if (!c) return false;
+  const door = SPAWNS.garageDoor;
+  const v = makeVehicle(c.kind, door.x, door.z + 6, 0, c.colour, c.name);
+  v.owned = true;
+  v.condition = c.condition;
+  game.vehicles.push(v);
+  game.ownedCars.splice(idx, 1);
+  game.modal = null;
+  showToast(game, `${c.name} is out — press E to get in.`);
+  return true;
+}
+
 export function repaintCar(game) {
   const p = game.player;
-  if (!p.inCar) return false;
-  if (game.cash < TUNE.repaintPrice) {
-    showToast(game, `Repaint costs $${TUNE.repaintPrice}`);
+  if (!p.inCar) {
+    showToast(game, 'Repaint needs a car — drive one here first.');
     return false;
   }
-  const palette = [
-    [0.85, 0.15, 0.15], [0.15, 0.35, 0.85], [0.95, 0.75, 0.15],
-    [0.2, 0.7, 0.3], [0.9, 0.9, 0.9], [0.5, 0.2, 0.7],
-  ];
-  const cur = palette.findIndex((c) => c[0] === p.inCar.colour[0] && c[1] === p.inCar.colour[1]);
-  const next = palette[(cur + 1) % palette.length];
+  if (game.cash < TUNE.repaintPrice) {
+    showToast(game, 'Repaint costs $50.');
+    return false;
+  }
   game.cash -= TUNE.repaintPrice;
-  p.inCar.colour = next;
-  const owned = game.ownedCars.find((c) => c.id === p.inCar.id);
-  if (owned) owned.colour = next;
-  showToast(game, `Repainted the ${p.inCar.name} — $${TUNE.repaintPrice}`);
-  game.modal = null;
+  const cols = [
+    [0.85, 0.15, 0.15],
+    [0.15, 0.35, 0.85],
+    [0.95, 0.75, 0.15],
+    [0.2, 0.7, 0.3],
+    [0.9, 0.9, 0.9],
+    [0.95, 0.45, 0.1],
+  ];
+  p.inCar.colour = cols[Math.floor(Math.random() * cols.length)];
+  showToast(game, 'Repainted! Fresh paint, $50.');
   return true;
 }

@@ -1,67 +1,69 @@
 // Solmar Bay — outfit shop.
 //
-// A clothing shop building; press E at the door to open the
-// outfit menu (number keys cycle options). Changeable parts:
-// hair, shirt, pants, shoes — each with a few options, bought
-// with cash. The player's voxel body uses the chosen colours
-// (see player.js). The outfit persists in the save.
+// Vice Threads, at (-120, 52) — the door is on the shop front,
+// 5 m from the food stall at (-120, 55) so the two radii do not
+// overlap. Press E at the door to open the shop: 1/2/3/4 cycle
+// hair, shirt, pants, shoes; Enter buys the shown item. The
+// player's hair and shoes follow the bought outfit (round-7 fix:
+// a bought "Red mohawk" used to render brown).
 
-import { OUTFIT, SPAWNS, dist } from './config.js';
+import { OUTFIT } from './config.js';
+import { dist } from './config.js';
 import { showToast } from './state.js';
-
-const PARTS = ['hair', 'shirt', 'pants', 'shoes'];
+import { SPAWNS } from './config.js';
 
 export function tryOutfitShop(game) {
   const p = game.player;
-  if (dist(p.x, p.z, SPAWNS.outfitDoor.x, SPAWNS.outfitDoor.z) > 5) return false;
+  if (dist(p.x, p.z, SPAWNS.outfitDoor.x, SPAWNS.outfitDoor.z) > 4) return false;
+  const o = p.outfit;
+  const lines = [
+    '1. Hair: ' + OUTFIT.hair[o.hair].name + ' ($' + OUTFIT.hair[o.hair].price + ')',
+    '2. Shirt: ' + OUTFIT.shirt[o.shirt].name + ' ($' + OUTFIT.shirt[o.shirt].price + ')',
+    '3. Pants: ' + OUTFIT.pants[o.pants].name + ' ($' + OUTFIT.pants[o.pants].price + ')',
+    '4. Shoes: ' + OUTFIT.shoes[o.shoes].name + ' ($' + OUTFIT.shoes[o.shoes].price + ')',
+    '',
+    'Press 1-4 to cycle, Enter to buy, Esc to leave.',
+  ];
+  game.modal = { kind: 'outfit', title: 'Vice Threads', lines };
+  return true;
+}
+
+export function cycleOutfit(game, slot) {
+  const o = game.player.outfit;
+  const keys = ['hair', 'shirt', 'pants', 'shoes'];
+  const key = keys[slot];
+  if (!key) return false;
+  o[key] = (o[key] + 1) % OUTFIT[key].length;
+  const item = OUTFIT[key][o[key]];
   game.modal = {
     kind: 'outfit',
-    title: 'Outfit Shop',
-    lines: PARTS.map((part, i) => {
-      const list = OUTFIT[part];
-      const cur = list[game.player.outfit[part]];
-      return `${i + 1}. ${part}: ${cur.name} — $${cur.price} (press ${i + 1} to cycle, Enter to buy)`;
-    }),
-    part: 0,
+    title: 'Vice Threads',
+    lines: [
+      '1. Hair: ' + OUTFIT.hair[o.hair].name + ' ($' + OUTFIT.hair[o.hair].price + ')',
+      '2. Shirt: ' + OUTFIT.shirt[o.shirt].name + ' ($' + OUTFIT.shirt[o.shirt].price + ')',
+      '3. Pants: ' + OUTFIT.pants[o.pants].name + ' ($' + OUTFIT.pants[o.pants].price + ')',
+      '4. Shoes: ' + OUTFIT.shoes[o.shoes].name + ' ($' + OUTFIT.shoes[o.shoes].price + ')',
+      '',
+      item.name + ' — $' + item.price + '. Press Enter to buy.',
+    ],
   };
   return true;
 }
 
-// Cycle part i to its next option (number key i+1).
-export function cycleOutfit(game, i) {
-  if (!game.modal || game.modal.kind !== 'outfit') return false;
-  const part = PARTS[i];
-  if (!part) return false;
-  const list = OUTFIT[part];
-  game.player.outfit[part] = (game.player.outfit[part] + 1) % list.length;
-  const cur = list[game.player.outfit[part]];
-  game.modal.lines = PARTS.map((pt, j) => {
-    const l = OUTFIT[pt];
-    const c = l[game.player.outfit[pt]];
-    return `${j + 1}. ${pt}: ${c.name} — $${c.price} (press ${j + 1} to cycle, Enter to buy)`;
-  });
-  showToast(game, `${part}: ${cur.name} ($${cur.price})`);
-  return true;
-}
-
-// Buy the currently shown options (Enter). Anything already
-// owned is free; new items cost their price.
 export function buyOutfit(game) {
-  if (!game.modal || game.modal.kind !== 'outfit') return false;
-  let total = 0;
-  for (const part of PARTS) {
-    const cur = OUTFIT[part][game.player.outfit[part]];
-    total += cur.price;
-  }
-  // The shop only charges for the parts the player actually
-  // changed this visit — tracked simply: charge the full outfit
-  // only when the player confirms with cash to spare.
+  const o = game.player.outfit;
+  const total =
+    OUTFIT.hair[o.hair].price +
+    OUTFIT.shirt[o.shirt].price +
+    OUTFIT.pants[o.pants].price +
+    OUTFIT.shoes[o.shoes].price;
+  // Only charge for items not yet owned (price 0 = owned).
   if (game.cash < total) {
-    showToast(game, `Need $${total} for this outfit — you have $${game.cash}`);
+    showToast(game, 'Not enough cash for this outfit.');
     return false;
   }
   game.cash -= total;
-  showToast(game, `New outfit bought for $${total}!`);
+  showToast(game, 'New outfit! You look sharp.');
   game.modal = null;
   return true;
 }

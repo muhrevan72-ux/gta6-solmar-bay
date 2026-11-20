@@ -1,108 +1,97 @@
 // Solmar Bay — minimal static .glb loader.
 //
-// Parses a binary glTF file far enough to draw one static mesh:
-// the JSON chunk (nodes, meshes, accessors, bufferViews) and the
-// BIN chunk (positions, indices). No skinning, no animation, no
-// materials beyond a flat colour — the barrel prop is a static
-// decoration. If anything fails, the caller draws procedural boxes
-// instead, so a bad model can never break the game.
-//
-// Source of the shipped model: Barrel_01 by Jorge Camacho,
-// Poly Haven (https://polyhaven.com/a/Barrel_01), CC0 licence,
-// 2,682 triangles, stored at game/assets/barrel.glb.
+// Parses a glTF 2.0 binary file (GLB) far enough to push its
+// triangles into a BoxBatch: JSON chunk + BIN chunk, POSITION
+// accessor + indices (UNSIGNED_SHORT or UNSIGNED_INT). No
+// animations, no skins, no materials — flat-shaded static props
+// only. Returns a model {positions, indices} or null on bad input.
+// Load failures are NOT fatal: the caller falls back to a
+// procedural barrel box, so a missing or corrupt model can never
+// blank the game.
+
+import { pushTri } from './render.js';
 
 const GLB_MAGIC = 0x46546c67; // 'glTF'
 const CHUNK_JSON = 0x4e4f534a; // 'JSON'
 const CHUNK_BIN = 0x004e4942; // 'BIN\0'
 
-// Pure parser: ArrayBuffer -> {positions: Float32Array, indices:
-// Uint16Array|Uint32Array, count} or null on any error. Testable
-// in Node without fetch or WebGL.
 export function parseGlb(buf) {
-  try {
-    if (!buf || buf.byteLength < 20) return null;
-    const view = new DataView(buf);
-    if (view.getUint32(0, true) !== GLB_MAGIC) return null;
-    if (view.getUint32(4, true) !== 2) return null; // glTF 2.0 only
-    let off = 12;
-    let json = null;
-    let bin = null;
-    while (off + 8 <= buf.byteLength) {
-      const len = view.getUint32(off, true);
-      const type = view.getUint32(off + 4, true);
-      const start = off + 8;
-      if (type === CHUNK_JSON) {
-        const text = new TextDecoder('utf-8').decode(new Uint8Array(buf, start, len));
-        json = JSON.parse(text);
-      } else if (type === CHUNK_BIN) {
-        bin = new Uint8Array(buf, start, len);
-      }
-      off = start + len;
+  if (!buf || buf.byteLength < 20) return null;
+  const view = new DataView(buf.buffer || buf, buf.byteOffset || 0, buf.byteLength);
+  if (view.getUint32(0, true) !== GLB_MAGIC) return null;
+  if (view.getUint32(4, true) !== 2) return null; // glTF 2.0 only
+  let json = null;
+  let bin = null;
+  let off = 12;
+  while (off + 8 <= view.byteLength) {
+    const len = view.getUint32(off, true);
+    const type = view.getUint32(off + 4, true);
+    const data = new Uint8Array(buf.buffer || buf, (buf.byteOffset || 0) + off + 8, len);
+    if (type === CHUNK_JSON) {
+      json = JSON.parse(new TextDecoder().decode(data));
+    } else if (type === CHUNK_BIN) {
+      bin = data;
     }
-    if (!json || !bin) return null;
-    const mesh = json.meshes && json.meshes[0];
-    if (!mesh || !mesh.primitives || !mesh.primitives[0]) return null;
-    const prim = mesh.primitives[0];
-    const posAcc = json.accessors[prim.attributes.POSITION];
-    const idxAcc = prim.indices !== undefined ? json.accessors[prim.indices] : null;
-    if (!posAcc) return null;
-    const posView = json.bufferViews[posAcc.bufferView];
-    const posOff = (posView.byteOffset || 0) + (posAcc.byteOffset || 0);
-    const positions = new Float32Array(bin.buffer, bin.byteOffset + posOff, posAcc.count * 3);
-    let indices = null;
-    if (idxAcc) {
-      const idxView = json.bufferViews[idxAcc.bufferView];
-      const idxOff = (idxView.byteOffset || 0) + (idxAcc.byteOffset || 0);
-      // 5123 = UNSIGNED_SHORT, 5125 = UNSIGNED_INT.
-      if (idxAcc.componentType === 5123) {
-        indices = new Uint16Array(bin.buffer, bin.byteOffset + idxOff, idxAcc.count);
-      } else if (idxAcc.componentType === 5125) {
-        indices = new Uint32Array(bin.buffer, bin.byteOffset + idxOff, idxAcc.count);
-      } else {
-        return null;
-      }
-    }
-    return { positions, indices, count: posAcc.count };
-  } catch (e) {
-    return null;
+    off += 8 + len;
   }
+  if (!json || !bin) return null;
+  const mesh = (json.meshes || [])[0];
+  if (!mesh || !mesh.primitives || !mesh.primitives.length) return null;
+  const prim = mesh.primitives[0];
+  const posAcc = json.accessors[prim.attributes.POSITION];
+  const idxAcc = prim.indices !== undefined ? json.accessors[prim.indices] : null;
+  if (!posAcc) return null;
+  const posView = json.bufferViews[posAcc.bufferView];
+  const pos = new Float32Array(
+    bin.buffer,
+    bin.byteOffset + (posView.byteOffset || 0) + (posAcc.byteOffset || 0),
+    posAcc.count * 3,
+  );
+  let indices = null;
+  if (idxAcc) {
+    const idxView = json.bufferViews[idxAcc.bufferView];
+    const base = bin.byteOffset + (idxView.byteOffset || 0) + (idxAcc.byteOffset || 0);
+    if (idxAcc.componentType === 5123) {
+      indices = new Uint16Array(bin.buffer, base, idxAcc.count);
+    } else if (idxAcc.componentType === 5125) {
+      indices = new Uint32Array(bin.buffer, base, idxAcc.count);
+    }
+  }
+  return { positions: pos, indices, json };
 }
 
-// Push a parsed model into a BoxBatch as flat-shaded triangles,
-// scaled and translated to a world position. Colour is flat
-// (the barrel is one rusty-red prop).
-export function pushGlbToBatch(batch, model, x, y, z, scale, colour) {
+// Push a parsed model into a batch at (x, y, z), scaled and
+// coloured. The model's own vertex order is kept; flat shading
+// comes from the batch (per-face tint is baked into the colour).
+export function pushGlbToBatch(b, model, x, y, z, scale, col, uvRect) {
   if (!model || !model.positions) return 0;
-  const { positions, indices } = model;
+  const [u0, v0, u1, v1] = uvRect;
+  const pos = model.positions;
+  const idx = model.indices;
   let pushed = 0;
-  const tri = (a, b, c) => {
-    const p1 = [x + positions[a * 3] * scale, y + positions[a * 3 + 1] * scale, z + positions[a * 3 + 2] * scale];
-    const p2 = [x + positions[b * 3] * scale, y + positions[b * 3 + 1] * scale, z + positions[b * 3 + 2] * scale];
-    const p3 = [x + positions[c * 3] * scale, y + positions[c * 3 + 1] * scale, z + positions[c * 3 + 2] * scale];
-    batch.pushTri(p1, p2, p3, colour);
-    pushed += 1;
+  const tri = (a, c, d) => {
+    const pa = [x + pos[a * 3] * scale, y + pos[a * 3 + 1] * scale, z + pos[a * 3 + 2] * scale];
+    const pb = [x + pos[c * 3] * scale, y + pos[c * 3 + 1] * scale, z + pos[c * 3 + 2] * scale];
+    const pc = [x + pos[d * 3] * scale, y + pos[d * 3 + 1] * scale, z + pos[d * 3 + 2] * scale];
+    pushTri(b, [pa, pb, pc], [col, col, col], [[u0, v0], [u1, v0], [u1, v1]]);
+    pushed++;
   };
-  if (indices) {
-    for (let i = 0; i + 2 < indices.length; i += 3) tri(indices[i], indices[i + 1], indices[i + 2]);
+  if (idx) {
+    for (let i = 0; i + 2 < idx.length; i += 3) tri(idx[i], idx[i + 1], idx[i + 2]);
   } else {
-    for (let i = 0; i + 2 < model.count; i += 3) tri(i, i + 1, i + 2);
+    for (let i = 0; i + 8 < pos.length; i += 9) tri(i / 3, i / 3 + 1, i / 3 + 2);
   }
   return pushed;
 }
 
-// Browser loader: fetch the .glb, parse it, hand it to the
-// callback. Never throws — on failure the callback gets null and
-// the caller falls back to procedural boxes.
-export function loadGlb(url, onDone) {
-  if (typeof fetch === 'undefined') {
-    onDone(null);
-    return;
+// Async fetch + parse. Resolves to a model or null (never rejects).
+export async function loadGlb(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const buf = await res.arrayBuffer();
+    return parseGlb(new Uint8Array(buf));
+  } catch (e) {
+    return null;
   }
-  fetch(url)
-    .then((r) => {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.arrayBuffer();
-    })
-    .then((buf) => onDone(parseGlb(buf)))
-    .catch(() => onDone(null));
 }

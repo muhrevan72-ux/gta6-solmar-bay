@@ -139,7 +139,7 @@ export const COL = {
   roadLine: [0.95, 0.8, 0.2],
   sidewalk: [0.55, 0.55, 0.58],
   sand: [0.93, 0.82, 0.6],
-  water: [0.15, 0.45, 0.65],
+  water: [0.2, 0.65, 0.9], // B9: bright tropical blue (was a dark 0.15/0.45/0.65)
   grass: [0.35, 0.6, 0.3],
   trunk: [0.4, 0.28, 0.16],
   leaf: [0.2, 0.55, 0.25],
@@ -404,7 +404,7 @@ export const GANGS = {
 // entrance, 30+ units from the hospital building.
 export const SPAWNS = {
   player: { x: 0, z: 20 },
-  hospital: { x: -60, z: 150 }, // street east of the hospital at (-100, 100); the old (-88,150) sat INSIDE the downtown tower at (-90,150) (round-8 probe: respawn soft-lock)
+  hospital: { x: -110, z: 150 }, // sidewalk east of the hospital at (-150, 150): 17 m clear of the hospital wall, 4 m clear of road x=-120. The old (-60,150) sat ON road x=-60, so traffic drove through the respawn point.
   garage: { x: 150, z: -140 }, // south face -129: 3 m clear of road z=-120
   garageDoor: { x: 150, z: -126 }, // on the forecourt, 3 m off the face
   // Hospital + fire station sit on BLOCK CENTRES, never on road

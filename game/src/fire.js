@@ -1,80 +1,74 @@
-// Solmar Bay — firefighters.
+// Solmar Bay — fire service.
 //
-// Fires spawn on random cars/buildings (smoke + flame). The fire
-// truck is drivable; park near a fire and hold the spray key
-// (F) to extinguish it. Each fire out pays $150 and +15 respect.
-// Firefighter NPCs hang out at the fire station.
+// Fires break out in random buildings. The fire truck is parked
+// at the fire station; drive it (or walk) to a fire and spray
+// water (hold F near the flames). Each fire put out pays $150
+// and +15 respect. Unattended fires spread slowly.
 
-import { TUNE, SPAWNS, dist, makeRng } from './config.js';
+import { makeRng, SPAWNS, TUNE } from './config.js';
+import { pushBox } from './render.js';
+import { tileUV } from './texture.js';
+import { dist } from './config.js';
 import { addCash, showToast } from './state.js';
+import { makeVehicle } from './vehicles.js';
 
 export function spawnFireService(game) {
   game.fires = [];
-  game.fireTimer = 90;
-  game.firefighters = [];
-  for (let i = 0; i < 3; i++) {
-    game.firefighters.push({
-      x: SPAWNS.fireStation.x - 10 + i * 8,
-      z: SPAWNS.fireStation.z + 20,
-      heading: 0, hp: 100,
-    });
-  }
+  game._fireTimer = 60;
+  // The fire truck at the station.
+  const truck = makeVehicle('car', SPAWNS.fireStation.x + 10, SPAWNS.fireStation.z, 0, [0.85, 0.2, 0.15], 'Fire Truck');
+  game.vehicles.push(truck);
 }
 
 export function stepFires(game, dt) {
-  game.fireTimer -= dt;
-  if (game.fireTimer <= 0) {
-    game.fireTimer = 90 + Math.random() * 90;
-    // A fire starts on a random parked car or a building edge.
-    const spots = game.vehicles.filter((v) => v.parked && !v.wrecked);
-    if (spots.length > 0 && game.fires.length < 3) {
-      const v = spots[Math.floor(Math.random() * spots.length)];
-      game.fires.push({ x: v.x, z: v.z, t: 120, size: 2 });
-      showToast(game, 'Fire reported! Grab the fire truck (F to spray)');
+  // NB: `|| 60` would treat a 0 timer as "unset" and reset it to
+  // 60, so a fire could never break out — default only when the
+  // timer is truly undefined.
+  game._fireTimer = (game._fireTimer === undefined ? 60 : game._fireTimer) - dt;
+  if (game._fireTimer <= 0) {
+    game._fireTimer = 90 + Math.random() * 90;
+    const b = game.city.buildings[Math.floor(Math.random() * game.city.buildings.length)];
+    if (b && !game.fires.some((f) => f.x === b.x && f.z === b.z)) {
+      game.fires.push({ x: b.x, z: b.z, hp: 100, spread: 0 });
+      showToast(game, `Fire reported near ${b.label || 'a building'}!`);
     }
   }
-  for (const f of [...game.fires]) {
-    f.t -= dt;
-    if (f.t <= 0) {
-      game.fires.splice(game.fires.indexOf(f), 1);
-      showToast(game, 'A fire burned out on its own');
-    }
+  for (const f of game.fires) {
+    f.spread += dt;
+    // A fire grows until it is sprayed.
+    f.hp = Math.min(150, f.hp + dt * 0.5);
   }
+  game.fires = game.fires.filter((f) => f.hp > 0);
 }
 
-// Spray water (hold F near a fire while in the fire truck).
-// Returns true when a fire was extinguished this frame.
+// Spray water at the nearest fire within 8 m. Hold F near flames.
 export function sprayFire(game, dt) {
   const p = game.player;
-  const truck = p.inCar && p.inCar.kind === 'firetruck' ? p.inCar : null;
-  if (!truck) return false;
-  for (const f of [...game.fires]) {
-    if (dist(truck.x, truck.z, f.x, f.z) < 14) {
-      f.t -= dt * 4; // spraying drains the fire fast
-      if (f.t <= 0) {
-        game.fires.splice(game.fires.indexOf(f), 1);
-        addCash(game, TUNE.fireReward, 'fire out');
-        game.respect += 15;
+  for (const f of game.fires) {
+    const d = dist(f.x, f.z, p.x, p.z);
+    if (d < 8) {
+      f.hp -= 40 * dt;
+      if (f.hp <= 0) {
         game.stats.firesOut += 1;
-        return true;
+        addCash(game, TUNE.fireReward, '— fire put out');
+        game.respect += 15;
+        showToast(game, `Fire out! +$${TUNE.fireReward} · +15 respect`);
       }
+      return true;
     }
   }
   return false;
 }
 
-// Draw fires: flame boxes + smoke boxes, flickering with time.
-export function fireBoxes(game, out) {
+// Fire boxes: orange/red flickering flames + smoke.
+export function fireBoxes(game, b, cam) {
+  const uv = tileUV('plain');
+  const flick = 0.8 + Math.sin(game.time * 12) * 0.2;
   for (const f of game.fires) {
-    const fl = 1 + Math.sin(game.time * 9 + f.x) * 0.3;
-    out.push({ x: f.x, y: 0, z: f.z, w: f.size * fl, h: 2.2 * fl, d: f.size * fl, c: [1.3, 0.5, 0.1] });
-    out.push({ x: f.x + 0.5, y: 1.5, z: f.z, w: f.size * 0.7, h: 2 * fl, d: f.size * 0.7, c: [1.3, 0.9, 0.2] });
-    out.push({ x: f.x, y: 3, z: f.z, w: 1.4, h: 1.6, d: 1.4, c: [0.35, 0.35, 0.36] });
+    const h = 2 + (f.hp / 100) * 3;
+    pushBox(b, f.x, 0, f.z, 2, h * flick, 2, [1, 0.45 * flick, 0.1], uv);
+    pushBox(b, f.x + 1, 0, f.z, 1.2, h * 0.7 * flick, 1.2, [1, 0.7, 0.1], uv);
+    pushBox(b, f.x, h, f.z, 2.5, 1.5, 2.5, [0.3, 0.3, 0.3], uv); // smoke
   }
-  for (const ff of game.firefighters) {
-    out.push({ x: ff.x, y: 0.85, z: ff.z, w: 0.8, h: 0.8, d: 0.45, c: [0.85, 0.2, 0.15] });
-    out.push({ x: ff.x, y: 1.65, z: ff.z, w: 0.58, h: 0.55, d: 0.5, c: [0.95, 0.8, 0.65] });
-    out.push({ x: ff.x, y: 1.9, z: ff.z, w: 0.6, h: 0.2, d: 0.55, c: [0.9, 0.15, 0.15] });
-  }
-  return out;
+  return game.fires.length;
 }
