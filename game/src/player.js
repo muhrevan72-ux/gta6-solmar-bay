@@ -1,52 +1,88 @@
-// Solmar Bay — on-foot player (rebuild #13).
+// Solmar Bay — the player on foot (rebuild #14).
+// Movement is camera-relative (W walks away from the camera).
+// Buildings are solid: a step that would enter a building is
+// refused (the player slides along the wall instead of clipping
+// through it). Cooldowns decay BEFORE the in-car early return,
+// so a cooldown set while driving still ticks down.
+
+import { TUNE, OUTFIT } from './config.js';
 import { isBlocked } from './world.js';
 import { axis } from './input.js';
-import { pushBox } from './render.js';
-import { TUNE, OUTFIT } from './config.js';
+import { pushBox, pushBoxRot } from './render.js';
 
 export function outfitColours(g) {
-  const o = g.player.outfit;
+  const o = g.player.outfit || { hair: 0, shirt: 0, pants: 0, shoes: 0 };
+  const pick = (list, i) => (list[i] || list[0]).colour || (list[i] || list[0]).col;
   return {
-    hair: OUTFIT.hair[o.hair].colour,
-    shirt: OUTFIT.shirt[o.shirt].colour,
-    pants: OUTFIT.pants[o.pants].colour,
-    shoes: OUTFIT.shoes[o.shoes].colour,
+    hair: pick(OUTFIT.hair, o.hair),
+    shirt: pick(OUTFIT.shirt, o.shirt),
+    pants: pick(OUTFIT.pants, o.pants),
+    shoes: pick(OUTFIT.shoes, o.shoes),
   };
 }
 
 export function stepPlayer(g, dt, input) {
   const p = g.player;
-  // Cooldowns decay BEFORE the in-car early return.
-  p.eCooldown = Math.max(0, p.eCooldown - dt);
-  p.shootCooldown = Math.max(0, p.shootCooldown - dt);
-  p.punchCooldown = Math.max(0, p.punchCooldown - dt);
-  p.bombCooldown = Math.max(0, p.bombCooldown - dt);
+  // Cooldowns decay first — even when the player is in a car.
+  p.eCooldown = Math.max(0, (p.eCooldown || 0) - dt);
+  p.shootCooldown = Math.max(0, (p.shootCooldown || 0) - dt);
+  p.punchCooldown = Math.max(0, (p.punchCooldown || 0) - dt);
+  p.damageCooldown = Math.max(0, (p.damageCooldown || 0) - dt);
+  p.graceTimer = Math.max(0, (p.graceTimer || 0) - dt);
   if (p.inCar) return;
-  if (p.onTrain && g.train) {
-    p.x = 300 * Math.sin(g.train.a);
-    p.z = 300 * Math.cos(g.train.a);
-    return;
-  }
-  const yaw = g.camera ? g.camera.yaw : p.heading;
-  p.heading = yaw;
-  const fwd = -axis(input, 'KeyW', 'KeyS'); // W = +1 forward
-  const strafe = axis(input, 'KeyA', 'KeyD'); // D = +1 right
+  if (!input) return;
+  const cam = g.camera || { yaw: Math.PI };
+  const fwd = axis(input, 'KeyW', 'KeyS');
+  const strafe = axis(input, 'KeyA', 'KeyD');
   const running = input.down.has('ShiftLeft') || input.down.has('ShiftRight');
   const speed = running ? TUNE.runSpeed : TUNE.walkSpeed;
-  const mx = Math.sin(yaw) * fwd + Math.cos(yaw) * strafe;
-  const mz = Math.cos(yaw) * fwd - Math.sin(yaw) * strafe;
-  const dx = mx * speed * dt;
-  const dz = mz * speed * dt;
-  const nx = p.x + dx;
-  const nz = p.z + dz;
-  if (g.city) {
-    if (!isBlocked(g.city, nx, p.z)) p.x = nx;
-    if (!isBlocked(g.city, p.x, nz)) p.z = nz;
+  // Camera-relative move: forward is (-sin yaw, -cos yaw).
+  const fx = -Math.sin(cam.yaw);
+  const fz = -Math.cos(cam.yaw);
+  // Right vector (90 deg clockwise from forward, so D strafes
+  // right when facing the camera's view direction).
+  const rx = fz;
+  const rz = -fx;
+  let mx = fx * -fwd + rx * strafe;
+  let mz = fz * -fwd + rz * strafe;
+  const len = Math.hypot(mx, mz);
+  if (len > 0) {
+    mx /= len;
+    mz /= len;
+    p.speed = speed;
+    p.heading = Math.atan2(mx, mz);
   } else {
-    p.x = nx;
-    p.z = nz;
+    p.speed = 0;
   }
-  p.speed = Math.hypot(dx, dz) / Math.max(dt, 1e-6);
+  if (p.speed > 0) {
+    const nx = p.x + mx * p.speed * dt;
+    const nz = p.z + mz * p.speed * dt;
+    // Solid buildings: try the full step, then slide on each axis.
+    if (!isBlocked(g.city, nx, nz)) {
+      p.x = nx;
+      p.z = nz;
+    } else if (!isBlocked(g.city, nx, p.z)) {
+      p.x = nx;
+    } else if (!isBlocked(g.city, p.x, nz)) {
+      p.z = nz;
+    }
+    // If the player somehow ended up inside a building (e.g. a
+    // spawn overlap), push them back out toward open ground.
+    if (isBlocked(g.city, p.x, p.z)) {
+      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [2, 0], [-2, 0], [0, 2], [0, -2]]) {
+        if (!isBlocked(g.city, p.x + dx, p.z + dz)) {
+          p.x += dx;
+          p.z += dz;
+          break;
+        }
+      }
+    }
+  }
+  // Carrying a cat: it rides along.
+  if (p.carryingCat) {
+    p.carryingCat.x = p.x;
+    p.carryingCat.z = p.z;
+  }
 }
 
 export function tryEnterVehicle(g) {
@@ -57,13 +93,14 @@ export function tryEnterVehicle(g) {
   for (const v of g.vehicles) {
     if (v.driver) continue;
     const d = Math.hypot(v.x - p.x, v.z - p.z);
-    if (d < bestD) { bestD = d; best = v; }
+    if (d < bestD) {
+      bestD = d;
+      best = v;
+    }
   }
   if (!best) return null;
   p.inCar = best;
   best.driver = 'player';
-  p.x = best.x;
-  p.z = best.z;
   return best;
 }
 
@@ -71,12 +108,13 @@ export function exitVehicle(g) {
   const p = g.player;
   const v = p.inCar;
   if (!v) return;
-  v.driver = null;
   p.inCar = null;
-  const spots = [[2.5, 0], [-2.5, 0], [0, 2.5], [0, -2.5], [3.5, 0], [0, 3.5]];
-  for (const [dx, dz] of spots) {
-    const nx = v.x + dx, nz = v.z + dz;
-    if (!g.city || !isBlocked(g.city, nx, nz)) {
+  v.driver = null;
+  // Step out to the first free spot beside the car.
+  for (const [dx, dz] of [[2.5, 0], [-2.5, 0], [0, 2.5], [0, -2.5], [3.5, 0], [0, 3.5]]) {
+    const nx = v.x + dx;
+    const nz = v.z + dz;
+    if (!isBlocked(g.city, nx, nz)) {
       p.x = nx;
       p.z = nz;
       return;
@@ -86,24 +124,30 @@ export function exitVehicle(g) {
   p.z = v.z;
 }
 
-// 11 boxes: shoes 2, legs 2, torso, arms 2, head, hair, weapon, pack.
-export function playerBoxes(g, b, cam) {
+// The player model: 11 boxes (head, hair, torso, 2 arms, 2 legs,
+// 2 shoes, gun, belt) = 132 tris. Colours follow the outfit.
+export function playerBoxes(g, b, camera) {
   const p = g.player;
-  const cols = outfitColours(g);
-  const plain = [0, 0, 1, 1];
-  const s = 1;
-  let n = 0;
-  const box = (x, y, z, w, h, d, col) => { pushBox(b, x, y, z, w, h, d, col, plain); n++; };
-  box(p.x - 0.18, 0.25 * s, p.z, 0.22, 0.6 * s, 0.22, cols.shoes);
-  box(p.x + 0.18, 0.25 * s, p.z, 0.22, 0.6 * s, 0.22, cols.shoes);
-  box(p.x - 0.16, 0.25 * s, p.z, 0.3, 0.75 * s, 0.3, cols.pants);
-  box(p.x + 0.16, 0.25 * s, p.z, 0.3, 0.75 * s, 0.3, cols.pants);
-  box(p.x, 0.85 * s, p.z, 0.85, 0.6 * s, 0.45, cols.shirt);
-  box(p.x - 0.55, 0.85 * s, p.z, 0.22, 0.6 * s, 0.22, cols.shirt);
-  box(p.x + 0.55, 0.85 * s, p.z, 0.22, 0.6 * s, 0.22, cols.shirt);
-  box(p.x, 1.45 * s, p.z, 0.42, 0.42 * s, 0.42, [0.85, 0.65, 0.5]);
-  box(p.x, 1.8 * s, p.z, 0.44, 0.18 * s, 0.44, cols.hair);
-  box(p.x + 0.55, 1.0 * s, p.z + 0.25, 0.12, 0.12, 0.5, [0.15, 0.15, 0.15]);
-  box(p.x, 1.0 * s, p.z - 0.3, 0.6, 0.5 * s, 0.15, [0.3, 0.25, 0.2]);
-  return n;
+  const c = outfitColours(g);
+  const skin = [0.85, 0.65, 0.5];
+  const yaw = p.heading || 0;
+  const x = p.x;
+  const z = p.z;
+  // Legs (pants) and shoes.
+  pushBoxRot(b, x - 0.14, 0, z, 0.26, 0.85, 0.26, yaw, c.pants);
+  pushBoxRot(b, x + 0.14, 0, z, 0.26, 0.85, 0.26, yaw, c.pants);
+  pushBoxRot(b, x - 0.14, 0, z + 0.08, 0.28, 0.14, 0.4, yaw, c.shoes);
+  pushBoxRot(b, x + 0.14, 0, z + 0.08, 0.28, 0.14, 0.4, yaw, c.shoes);
+  // Torso (shirt) and belt.
+  pushBoxRot(b, x, 0.85, z, 0.62, 0.65, 0.34, yaw, c.shirt);
+  pushBoxRot(b, x, 0.82, z, 0.64, 0.1, 0.36, yaw, [0.15, 0.12, 0.1]);
+  // Arms (shirt sleeves + skin hands are one box each).
+  pushBoxRot(b, x - 0.42, 0.9, z, 0.2, 0.6, 0.2, yaw, c.shirt);
+  pushBoxRot(b, x + 0.42, 0.9, z, 0.2, 0.6, 0.2, yaw, c.shirt);
+  // Head and hair.
+  pushBoxRot(b, x, 1.5, z, 0.42, 0.42, 0.42, yaw, skin);
+  pushBoxRot(b, x, 1.86, z, 0.44, 0.16, 0.44, yaw, c.hair);
+  // Gun in the right hand.
+  pushBoxRot(b, x + 0.42, 0.75, z + 0.15, 0.08, 0.08, 0.4, yaw, [0.12, 0.12, 0.14]);
+  return 11;
 }

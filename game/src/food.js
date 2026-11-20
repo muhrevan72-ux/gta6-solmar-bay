@@ -1,45 +1,58 @@
-// Solmar Bay — food shops (rebuild #13).
-import { FOOD_SHOPS, FOOD_MENU } from './config.js';
+// Solmar Bay — food shops (rebuild #14).
+// Five shops. Snack $5 (+10 HP), Meal $10 (+25 HP), Feast $15
+// (full HP + 25 armour).
+
+import { FOOD_MENU, FOOD_SHOPS } from './config.js';
+import { showToast } from './state.js';
 import { pushBox } from './render.js';
+
+export { FOOD_MENU, FOOD_SHOPS };
 
 export function nearestFoodShop(g) {
   let best = null;
   let bestD = 10;
   for (const s of FOOD_SHOPS) {
     const d = Math.hypot(s.x - g.player.x, s.z - g.player.z);
-    if (d < bestD) { bestD = d; best = s; }
+    if (d < bestD) {
+      bestD = d;
+      best = s;
+    }
   }
   return best;
 }
 
 export function tryFoodShop(g) {
-  const s = nearestFoodShop(g);
-  if (!s) return false;
+  const shop = nearestFoodShop(g);
+  if (!shop) return false;
   g.modal = {
     kind: 'food',
-    title: s.name,
-    lines: FOOD_MENU.map((m, i) => `${i + 1}. ${m.name} — $${m.price} (+${m.heal} HP${m.armour ? `, +${m.armour} armour` : ''})`),
+    title: shop.name,
+    lines: FOOD_MENU.map((m) => `${m.name} — $${m.price} · ${m.desc}`),
   };
   return true;
 }
 
-export function buyFood(g, i) {
-  const item = FOOD_MENU[i];
+export function buyFood(g, index) {
+  const item = FOOD_MENU[index];
   if (!item) return false;
   if (g.cash < item.price) return false;
   g.cash -= item.price;
-  g.health = Math.min(100, g.health + item.heal);
-  if (item.armour) g.armour += item.armour;
+  if (index === 0) {
+    g.health = Math.min(100, g.health + 10);
+  } else if (index === 1) {
+    g.health = Math.min(100, g.health + 25);
+  } else {
+    g.health = 100;
+    g.armour = (g.armour || 0) + 25;
+  }
+  showToast(g, `${item.name} — $${item.price}`);
   return true;
 }
 
-// One sign per shop; returns the shop count.
-export function foodSignBoxes(g, b, cam) {
-  const plain = [0, 0, 1, 1];
-  let n = 0;
+// One sign box per shop (5).
+export function foodSignBoxes(g, b, camera) {
   for (const s of FOOD_SHOPS) {
-    pushBox(b, s.x, 3, s.z, 3, 1, 0.3, [0.95, 0.8, 0.2], plain);
-    n += 1;
+    pushBox(b, s.x, 4, s.z + 6, 6, 1.5, 0.3, [0.95, 0.75, 0.2]);
   }
-  return n;
+  return FOOD_SHOPS.length;
 }

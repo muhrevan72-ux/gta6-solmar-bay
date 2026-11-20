@@ -1,88 +1,89 @@
-// Solmar Bay — weather + day/night cycle (rebuild #13).
-// Fog distances are in METRES (fogNear 60, fogFar 180–420).
-// The clock runs 120x real time: 30 s real = 1 game hour,
-// a full day is 720 s.
-
-const KEYS = [
-  { h: 0, phase: 'night', sky: [0.05, 0.07, 0.15], fog: [0.05, 0.07, 0.15], fogFar: 180, neonBoost: 1.9 },
-  { h: 6, phase: 'dawn', sky: [0.9, 0.6, 0.5], fog: [0.85, 0.65, 0.55], fogFar: 260, neonBoost: 1.3 },
-  { h: 12, phase: 'day', sky: [0.45, 0.7, 0.95], fog: [0.6, 0.75, 0.9], fogFar: 420, neonBoost: 1.0 },
-  { h: 17, phase: 'golden', sky: [1.0, 0.65, 0.3], fog: [0.95, 0.7, 0.45], fogFar: 300, neonBoost: 1.6 },
-  { h: 18, phase: 'sunset', sky: [0.98, 0.45, 0.2], fog: [0.9, 0.5, 0.3], fogFar: 260, neonBoost: 1.6 },
-  { h: 23, phase: 'night', sky: [0.05, 0.07, 0.15], fog: [0.05, 0.07, 0.15], fogFar: 180, neonBoost: 1.9 },
-];
+// Solmar Bay — day/night cycle + weather (rebuild #14).
+// The clock runs 120x real time (a 720 s day). sampleAt() gives
+// the sky colour, fog range (metres) and neon boost for any hour
+// by interpolating keyframes. Night is DARK NAVY (fix (d)) —
+// never the rusty orange-brown of round 13.
 
 export function phaseAt(h) {
-  const hh = ((h % 24) + 24) % 24;
-  if (hh >= 5 && hh < 7) return 'dawn';
-  if (hh >= 7 && hh < 16) return 'day';
-  if (hh >= 16 && hh < 18) return 'golden';
-  if (hh >= 18 && hh < 19) return 'sunset';
+  const hour = (((h % 24) + 24) % 24);
+  if (hour >= 5.5 && hour < 7.5) return 'dawn';
+  if (hour >= 7.5 && hour < 16.5) return 'day';
+  if (hour >= 16.5 && hour < 17.5) return 'golden';
+  if (hour >= 17.5 && hour < 19) return 'sunset';
   return 'night';
 }
 
-export function sampleAt(hour) {
-  const h = ((hour % 24) + 24) % 24;
-  // Find the bracketing keyframes (wrap at midnight).
-  let a = KEYS[KEYS.length - 1], b = KEYS[0];
-  for (let i = 0; i < KEYS.length; i++) {
-    if (KEYS[i].h <= h) a = KEYS[i];
-    if (KEYS[i].h > h) { b = KEYS[i]; break; }
-  }
-  let span = b.h - a.h;
-  if (span <= 0) span += 24;
-  let t = (h - a.h) / span;
-  if (t < 0) t += 1;
-  if (t > 1) t = 1;
-  const lerp = (u, v) => u + (v - u) * t;
-  const sky = [lerp(a.sky[0], b.sky[0]), lerp(a.sky[1], b.sky[1]), lerp(a.sky[2], b.sky[2])];
-  const fog = [lerp(a.fog[0], b.fog[0]), lerp(a.fog[1], b.fog[1]), lerp(a.fog[2], b.fog[2])];
+// Keyframes: [hour, sky RGB, fogFar (m), neonBoost].
+const KEYS = [
+  [0, [0.04, 0.07, 0.16], 180, 1.9],
+  [5, [0.05, 0.08, 0.18], 180, 1.9],
+  [6, [0.6, 0.5, 0.55], 260, 1.4],
+  [8, [0.5, 0.72, 0.95], 380, 1.0],
+  [12, [0.45, 0.7, 0.95], 420, 1.0],
+  [16, [0.5, 0.72, 0.95], 380, 1.0],
+  [17, [0.95, 0.62, 0.32], 300, 1.6],
+  [18, [0.95, 0.45, 0.25], 260, 1.6],
+  [20, [0.1, 0.12, 0.25], 200, 1.9],
+  [23, [0.05, 0.08, 0.18], 180, 1.9],
+  [24, [0.04, 0.07, 0.16], 180, 1.9],
+];
+
+export function sampleAt(h) {
+  const hour = (((h % 24) + 24) % 24);
+  let i = 0;
+  while (i < KEYS.length - 2 && KEYS[i + 1][0] <= hour) i++;
+  const a = KEYS[i];
+  const b = KEYS[i + 1];
+  const span = b[0] - a[0] || 1;
+  const t = Math.max(0, Math.min(1, (hour - a[0]) / span));
+  const lerp = (x, y) => x + (y - x) * t;
+  const sky = [lerp(a[1][0], b[1][0]), lerp(a[1][1], b[1][1]), lerp(a[1][2], b[1][2])];
   return {
-    phase: phaseAt(h),
+    phase: phaseAt(hour),
     sky,
-    fog,
+    // The fog colour follows the sky (darker), so it differs per
+    // phase just like the sky does.
+    fog: [sky[0] * 0.85, sky[1] * 0.85, sky[2] * 0.9],
     fogNear: 60,
-    fogFar: lerp(a.fogFar, b.fogFar),
-    neonBoost: lerp(a.neonBoost, b.neonBoost),
+    fogFar: lerp(a[2], b[2]),
+    neonBoost: lerp(a[3], b[3]),
   };
 }
 
-export function createWeather(game) {
+// The live weather object on the game: advances the clock, eases
+// the rain intensity toward its target, and re-rolls the weather
+// when the timer expires.
+export function createWeather(g) {
   const w = {
     timer: 120,
-    next(rng) {
-      const r = rng();
-      let next;
-      if (r < 0.6) next = 'clear';
-      else if (r < 0.85) next = 'rain';
-      else next = 'fog';
-      this.timer = 90 + rng() * 90;
-      return next;
-    },
+    rain: 0,
     step(dt, rng) {
-      // Clock: 120x — dt seconds real = dt/30 game hours.
-      game.clock += dt / 30;
-      if (game.clock >= 24) {
-        game.clock -= 24;
-        game.day += 1;
+      g.clock += (dt * 120) / 3600;
+      while (g.clock >= 24) {
+        g.clock -= 24;
+        g.day += 1;
       }
-      game._phase = phaseAt(game.clock);
-      this.timer -= dt;
-      if (this.timer <= 0) {
-        game.weather = this.next(rng || Math.random);
-      }
-      // Rain intensity eases toward its target.
-      const target = game.weather === 'rain' ? 1 : 0;
-      const rate = dt * 0.1;
-      if (game.rain < target) game.rain = Math.min(target, game.rain + rate);
-      else if (game.rain > target) game.rain = Math.max(target, game.rain - rate);
+      const target = g.weather === 'rain' ? 1 : 0;
+      w.rain += (target - w.rain) * Math.min(1, dt * 0.5);
+      g.rain = w.rain;
+      w.timer -= dt;
+      if (w.timer <= 0) w.next(rng || Math.random);
     },
+    next(rng) {
+      const r = (rng || Math.random)();
+      if (r < 0.5) g.weather = 'clear';
+      else if (r < 0.8) g.weather = 'rain';
+      else g.weather = 'fog';
+      w.timer = 90 + (rng || Math.random)() * 90;
+      return g.weather;
+    },
+    // The current sample, with the fog distance clamped by the
+    // weather: rain never sees past 200 m, fog never past 120 m.
     sample() {
-      const s = sampleAt(game.clock);
-      let fogFar = s.fogFar;
-      if (game.weather === 'rain') fogFar = Math.min(fogFar, 200);
-      if (game.weather === 'fog') fogFar = Math.min(fogFar, 120);
-      return { ...s, fogNear: 60, fogFar };
+      const s = sampleAt(g.clock);
+      if (g.weather === 'rain') s.fogFar = Math.min(s.fogFar, 200);
+      if (g.weather === 'fog') s.fogFar = Math.min(s.fogFar, 120);
+      return s;
     },
   };
   return w;

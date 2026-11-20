@@ -1,87 +1,114 @@
-// Solmar Bay — rival gangs (rebuild #13).
-// Bay Kings own Downtown; Harbour Sharks own the Harbour.
-// Members attack the player inside their turf — but never during
-// the 5-second spawn grace period after (re)spawning.
-import { pushBox } from './render.js';
+// Solmar Bay — gangs (rebuild #14).
+// Bay Kings (gold) own downtown; Harbour Sharks (teal) own the
+// harbour. A member only hurts the player when it is CLOSE and
+// VISIBLE — there is no invisible turf damage (fix (a)). Entering
+// Kings turf shows a clear on-screen warning instead.
+
+import { TUNE, COL } from './config.js';
 import { damagePlayer } from './combat.js';
-import { COL } from './config.js';
+import { showToast } from './state.js';
+import { pushBox, pushBoxRot } from './render.js';
+import { mulberry32 } from './state.js';
 
 export function gangInTurf(gang, x, z) {
-  if (gang === 'kings') return x >= -180 && x <= 180 && z >= -180 && z <= 120;
-  if (gang === 'sharks') return x >= -300 && x <= -120 && z >= 120 && z <= 300;
+  if (gang === 'kings') return x >= -80 && x <= 80 && z >= -140 && z <= -20;
+  if (gang === 'sharks') return x >= -280 && x <= -140 && z >= 140 && z <= 280;
   return false;
 }
 
 export function spawnGangs(g) {
-  // No gang member spawns within 40 m of the player spawn (0, 20):
-  // the player must be able to boot in and look around before anyone
-  // can reach them, and a member standing on the spawn would make the
-  // opening seconds (and a bomb thrown at the spawn) a coin flip.
-  // The clear zone is far outside every gang's chase radius (18 m),
-  // so a member still has to patrol in before it can attack.
-  const clear = (x, z) => Math.hypot(x - 0, z - 20) >= 40;
+  const rng = mulberry32(4242);
   const members = [];
   for (let i = 0; i < 13; i++) {
-    let x, z;
-    do {
-      x = -150 + Math.random() * 300;
-      z = -150 + Math.random() * 240;
-    } while (!clear(x, z));
     members.push({
-      gang: 'kings',
-      x, z,
-      hp: 100, dead: false, heading: Math.random() * Math.PI * 2, speed: 3.5, _assaulted: false,
+      gang: 'kings', x: -70 + rng() * 140, z: -130 + rng() * 100,
+      hp: 100, heading: rng() * Math.PI * 2, speed: 2, attackCd: 0,
+      target: null, state: 'alive',
     });
   }
   for (let i = 0; i < 12; i++) {
-    let x, z;
-    do {
-      x = -290 + Math.random() * 160;
-      z = 130 + Math.random() * 150;
-    } while (!clear(x, z));
     members.push({
-      gang: 'sharks',
-      x, z,
-      hp: 100, dead: false, heading: Math.random() * Math.PI * 2, speed: 3.5, _assaulted: false,
+      gang: 'sharks', x: -270 + rng() * 120, z: 150 + rng() * 120,
+      hp: 100, heading: rng() * Math.PI * 2, speed: 2, attackCd: 0,
+      target: null, state: 'alive',
     });
   }
   g.gangMembers = members;
+  return members;
 }
 
 export function stepGangs(g, dt) {
+  if (!g.gangMembers) return;
+  const p = g.player;
+  // Turf warning (fix (a)): a clear message on entering turf.
+  const inKings = gangInTurf('kings', p.x, p.z);
+  const inSharks = gangInTurf('sharks', p.x, p.z);
+  if (inKings && !g._warnedKings) {
+    showToast(g, 'You are in Bay Kings turf — watch your back.');
+    g._warnedKings = true;
+  } else if (!inKings) {
+    g._warnedKings = false;
+  }
+  if (inSharks && !g._warnedSharks) {
+    showToast(g, 'You are in Harbour Sharks turf — watch your back.');
+    g._warnedSharks = true;
+  } else if (!inSharks) {
+    g._warnedSharks = false;
+  }
   for (const m of g.gangMembers) {
-    if (m.dead) continue;
-    const d = Math.hypot(g.player.x - m.x, g.player.z - m.z);
-    const inTurf = gangInTurf(m.gang, g.player.x, g.player.z);
-    if (inTurf && d < 18 && g._spawnGrace <= 0) {
-      // Chase and attack.
-      if (d > 0.01) {
-        m.x += ((g.player.x - m.x) / d) * m.speed * dt;
-        m.z += ((g.player.z - m.z) / d) * m.speed * dt;
+    if (m.hp <= 0) continue;
+    m.attackCd = Math.max(0, (m.attackCd || 0) - dt);
+    const d = Math.hypot(p.x - m.x, p.z - m.z);
+    const playerInMyTurf = gangInTurf(m.gang, p.x, p.z);
+    if (playerInMyTurf && d < 3) {
+      // Visible attack: the member is right next to the player.
+      // Damage routes through damagePlayer (sets the WASTED card).
+      if (m.attackCd <= 0) {
+        damagePlayer(g, 5);
+        m.attackCd = 1;
       }
-      if (d < 2.5) damagePlayer(g, 4 * dt);
+      m.heading = Math.atan2(p.x - m.x, p.z - m.z);
+    } else if (playerInMyTurf && d < 25) {
+      // Chase the player inside the turf.
+      m.x += ((p.x - m.x) / d) * m.speed * dt;
+      m.z += ((p.z - m.z) / d) * m.speed * dt;
+      m.heading = Math.atan2(p.x - m.x, p.z - m.z);
     } else {
-      // Patrol: wander.
-      m.heading += (Math.random() - 0.5) * dt * 2;
-      m.x += Math.sin(m.heading) * 1.2 * dt;
-      m.z += Math.cos(m.heading) * 1.2 * dt;
+      // Patrol: drift toward a patrol point, pick a new one there.
+      if (!m.target) {
+        const home = m.gang === 'kings' ? { x: 0, z: -80 } : { x: -210, z: 210 };
+        m.target = { x: home.x + (g.rng ? (g.rng() - 0.5) * 120 : 0), z: home.z + (g.rng ? (g.rng() - 0.5) * 120 : 0) };
+      }
+      const dx = m.target.x - m.x;
+      const dz = m.target.z - m.z;
+      const td = Math.hypot(dx, dz);
+      if (td < 2) {
+        m.target = null;
+      } else {
+        m.x += (dx / td) * m.speed * 0.5 * dt;
+        m.z += (dz / td) * m.speed * 0.5 * dt;
+        m.heading = Math.atan2(dx / td, dz / td);
+      }
     }
   }
 }
 
-// 7 boxes: legs 2, torso, arms 2, head, bandana (LAST, gang colour).
-export function gangBoxes(g, m, b, cam) {
-  if (m.dead) return 0;
-  const plain = [0, 0, 1, 1];
-  const bandana = m.gang === 'kings' ? COL.kings : COL.sharks;
-  let n = 0;
-  const box = (x, y, z, w, h, d, col) => { pushBox(b, x, y, z, w, h, d, col, plain); n++; };
-  box(m.x - 0.14, 0.2, m.z, 0.2, 0.6, 0.2, [0.15, 0.15, 0.18]);
-  box(m.x + 0.14, 0.2, m.z, 0.2, 0.6, 0.2, [0.15, 0.15, 0.18]);
-  box(m.x, 0.8, m.z, 0.6, 0.6, 0.3, m.gang === 'kings' ? [0.3, 0.3, 0.35] : [0.2, 0.3, 0.45]);
-  box(m.x - 0.42, 0.8, m.z, 0.18, 0.55, 0.18, [0.85, 0.65, 0.5]);
-  box(m.x + 0.42, 0.8, m.z, 0.18, 0.55, 0.18, [0.85, 0.65, 0.5]);
-  box(m.x, 1.4, m.z, 0.36, 0.36, 0.36, [0.85, 0.65, 0.5]);
-  box(m.x, 1.72, m.z, 0.38, 0.14, 0.38, bandana);
-  return n;
+// A gang member is 7 boxes; the bandana is LAST, in the gang
+// colour, so it reads clearly at a distance.
+export function gangBoxes(g, m, b, camera) {
+  if (!m || m.hp <= 0) return 0;
+  const col = m.gang === 'kings' ? COL.kingsGold : COL.sharksTeal;
+  const yaw = m.heading || 0;
+  const x = m.x;
+  const z = m.z;
+  const skin = [0.8, 0.6, 0.45];
+  pushBoxRot(b, x - 0.14, 0, z, 0.26, 0.85, 0.26, yaw, [0.25, 0.25, 0.3]);
+  pushBoxRot(b, x + 0.14, 0, z, 0.26, 0.85, 0.26, yaw, [0.25, 0.25, 0.3]);
+  pushBoxRot(b, x, 0.85, z, 0.62, 0.65, 0.34, yaw, col);
+  pushBoxRot(b, x - 0.42, 0.9, z, 0.2, 0.6, 0.2, yaw, col);
+  pushBoxRot(b, x + 0.42, 0.9, z, 0.2, 0.6, 0.2, yaw, col);
+  pushBoxRot(b, x, 1.5, z, 0.42, 0.42, 0.42, yaw, skin);
+  // Bandana last, in the gang colour.
+  pushBoxRot(b, x, 1.82, z, 0.44, 0.14, 0.44, yaw, col);
+  return 7;
 }

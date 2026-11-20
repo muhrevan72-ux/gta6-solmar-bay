@@ -1,104 +1,142 @@
-// Solmar Bay — dense HUD + minimap (rebuild #13).
+// Solmar Bay — the dense HUD (rebuild #14).
+// Every field is written by textContent (never innerHTML). HP is
+// shown as an integer (fix (e)). The layout keeps the minimap
+// away from the radio/respect block and the Pause button away
+// from the clock (fix (c)) — see index.html for the positions.
+
+import { STATIONS, WEAPONS, respectLevel } from './config.js';
 import { chapterTitle } from './state.js';
 import { districtAt } from './world.js';
+import { phaseAt } from './weather.js';
 import { policeList } from './police.js';
 import { stationLabel } from './audio.js';
-import { respectLevel, CHAPTERS } from './config.js';
-import { phaseAt } from './weather.js';
-import { WEAPONS } from './combat.js';
 
-const IDS = [
-  'hud', 'hud-menu', 'hud-cash', 'hud-health', 'hud-armour', 'hud-wanted',
-  'hud-clock', 'hud-respect', 'hud-completion', 'hud-mission', 'hud-police',
-  'hud-district', 'hud-speed', 'hud-weapon', 'hud-car', 'hud-radio',
-  'hud-toast', 'hud-dialogue', 'hud-card', 'hud-card-title', 'hud-card-text',
-  'hud-modal', 'hud-modal-title', 'hud-modal-lines', 'hud-pause', 'hud-minimap',
-  'btn-new', 'btn-continue', 'btn-resume', 'btn-pause',
-];
+const IDS = {
+  cash: 'hud-cash', health: 'hud-health', armour: 'hud-armour',
+  wanted: 'hud-wanted', clock: 'hud-clock', respect: 'hud-respect',
+  completion: 'hud-completion', mission: 'hud-mission', police: 'hud-police',
+  district: 'hud-district', speed: 'hud-speed', weapon: 'hud-weapon',
+  car: 'hud-car', radio: 'hud-radio', toast: 'hud-toast',
+  dialogue: 'hud-dialogue', card: 'hud-card', cardTitle: 'hud-card-title',
+  cardText: 'hud-card-text', modal: 'hud-modal', modalTitle: 'hud-modal-title',
+  modalBody: 'hud-modal-body', pause: 'hud-pause', menu: 'hud-menu',
+  hud: 'hud', minimap: 'hud-minimap',
+};
 
 export function createHud(doc) {
   const el = {};
-  for (const id of IDS) {
-    el[id] = doc ? doc.getElementById(id) : null;
-    // Short alias (hud-cash -> cash) so logic can read hud.el.cash.
-    if (id.startsWith('hud-')) el[id.slice(4)] = el[id];
+  for (const [key, id] of Object.entries(IDS)) {
+    el[key] = doc && typeof doc.getElementById === 'function' ? doc.getElementById(id) : null;
   }
-  return { el, doc };
+  return { el, doc: doc || null };
 }
 
-function setText(el, id, text) {
-  if (el[id]) el[id].textContent = text;
+function setText(el, text) {
+  if (el) el.textContent = text;
 }
-function setDisplay(el, id, disp) {
-  if (el[id]) el[id].style.display = disp;
+function setDisplay(el, value) {
+  if (el) el.style.display = value;
 }
 
-export function updateHud(game, hud) {
+function fmtClock(g) {
+  const h = Math.floor(g.clock || 0);
+  const m = Math.floor(((g.clock || 0) - h) * 60);
+  const hh = String(h).padStart(2, '0');
+  const mm = String(m).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+export function updateHud(g, hud) {
   if (!hud || !hud.el) return;
   const el = hud.el;
-  const p = game.player;
-  setText(el, 'hud-cash', `$${game.cash}`);
-  setText(el, 'hud-health', `${game.health}`);
-  setText(el, 'hud-armour', game.armour > 0 ? `Armour ${game.armour}` : '');
-  const stars = '★'.repeat(game.wanted) + '☆'.repeat(5 - game.wanted);
-  setText(el, 'hud-wanted', stars);
-  const hh = Math.floor(game.clock);
-  const mm = Math.floor((game.clock - hh) * 60);
-  const phase = game._phase || phaseAt(game.clock);
-  setText(el, 'hud-clock', `Day ${game.day} · ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${phase} · ${game.weather}`);
-  const rl = respectLevel(game.respect);
-  setText(el, 'hud-respect', `Respect ${game.respect} · ${rl.name}${rl.next ? ` → ${rl.next}` : ''}`);
-  setText(el, 'hud-completion', `${game.completion}%`);
-  if (game.chapter > 5) {
-    setText(el, 'hud-mission', 'Free Roam');
+  const s = g.g || g; // the state (the game is its own state)
+  // Cash / health / armour / wanted.
+  setText(el.cash, `$${Math.floor(s.cash)}`);
+  setText(el.health, `${Math.round(s.health)}`);
+  setText(el.armour, s.armour > 0 ? `Armour ${Math.round(s.armour)}` : '');
+  const stars = Math.max(0, Math.min(5, s.wanted || 0));
+  setText(el.wanted, '★'.repeat(stars) + '☆'.repeat(5 - stars));
+  // Clock: "Day 1 · 08:00 · day · clear".
+  const phase = s._phase || phaseAt(s.clock || 8);
+  setText(el.clock, `Day ${s.day || 1} · ${fmtClock(s)} · ${phase} · ${s.weather || 'clear'}`);
+  // Respect.
+  const lvl = respectLevel(s.respect || 0);
+  setText(el.respect, `Respect ${s.respect || 0} · ${lvl.name} → ${lvl.next || 'Max'}`);
+  setText(el.completion, `${s.completion || 0}%`);
+  // Mission panel.
+  if ((s.chapter || 1) >= 6) {
+    setText(el.mission, 'Free Roam');
   } else {
-    const ch = CHAPTERS[game.chapter - 1];
-    setText(el, 'hud-mission', `${chapterTitle(game)} · ${ch.objective}`);
+    const ch = s.chapter || 1;
+    setText(el.mission, `${chapterTitle(s)} — ${missionObjective(s, ch)}`);
   }
-  setText(el, 'hud-police', policeList(game).join(' · '));
-  setText(el, 'hud-district', districtAt(p.x, p.z));
-  const speed = p.inCar ? Math.round(Math.abs(p.inCar.speed) * 3.6) : Math.round(p.speed || 0);
-  setText(el, 'hud-speed', `${speed} km/h`);
-  const w = WEAPONS[p.weapon];
-  const ammo = p.ammo[p.weapon] === Infinity ? '∞' : p.ammo[p.weapon];
-  setText(el, 'hud-weapon', `[${w.name} ${ammo}]`);
-  if (p.inCar) {
-    setText(el, 'hud-car', `${p.inCar.name} · Condition ${Math.round(p.inCar.condition)}%`);
+  // Police list.
+  setText(el.police, policeList(s).join(' · '));
+  // District / speed / weapon / car / radio.
+  setText(el.district, districtAt(s.player.x, s.player.z));
+  const speed = s.player.inCar ? Math.abs(s.player.inCar.speed || 0) : (s.player.speed || 0);
+  setText(el.speed, `${Math.round(speed * 3.6)} km/h`);
+  const w = WEAPONS[s.player.weapon || 0] || WEAPONS[0];
+  const ammo = s.player.ammo ? s.player.ammo[s.player.weapon || 0] : Infinity;
+  setText(el.weapon, `[${w.name} ${ammo === Infinity ? '∞' : ammo}]`);
+  if (s.player.inCar) {
+    const v = s.player.inCar;
+    setText(el.car, `${v.name} — Condition ${Math.round(v.condition)}%`);
   } else {
-    setText(el, 'hud-car', 'On foot');
+    setText(el.car, 'On foot');
   }
-  setText(el, 'hud-radio', stationLabel(game.station, game.song));
-  setText(el, 'hud-toast', game.toastTimer > 0 ? game.toast : '');
-  if (game.dialogue && game.dialogue.t > 0) {
-    setText(el, 'hud-dialogue', `${game.dialogue.name} (${game.dialogue.role}): ${game.dialogue.text}`);
-    setDisplay(el, 'hud-dialogue', 'block');
+  const song = s.radio ? Math.floor((s.radio.songStep || 0) / 32) % 2 : 0;
+  setText(el.radio, stationLabel(s.station || 0, song));
+  // Toast / dialogue.
+  setText(el.toast, (s.toastTimer || 0) > 0 ? (s.toast || '') : '');
+  const d = s.dialogue;
+  if (d) {
+    const text = typeof d === 'string' ? d : `${d.name || ''}: ${d.text || ''}`;
+    setText(el.dialogue, text);
+    setDisplay(el.dialogue, 'block');
   } else {
-    setText(el, 'hud-dialogue', '');
-    setDisplay(el, 'hud-dialogue', 'none');
+    setText(el.dialogue, '');
+    setDisplay(el.dialogue, 'none');
   }
-  // Screens.
-  setDisplay(el, 'hud', game.mode === 'menu' ? 'none' : 'block');
-  setDisplay(el, 'hud-menu', game.mode === 'menu' ? 'flex' : 'none');
-  const cardModes = ['card', 'passed', 'wasted', 'busted'];
-  setDisplay(el, 'hud-card', cardModes.includes(game.mode) ? 'flex' : 'none');
-  if (game.card) {
-    setText(el, 'hud-card-title', game.card.title);
-    setText(el, 'hud-card-text', game.card.text || '');
+  // Card (chapter / passed / wasted / busted).
+  const showCard = !!s.card && (s.mode === 'card' || s.mode === 'passed' || s.mode === 'wasted' || s.mode === 'busted');
+  setDisplay(el.card, showCard ? 'flex' : 'none');
+  if (s.card) {
+    setText(el.cardTitle, s.card.title || '');
+    setText(el.cardText, s.card.text || '');
   }
-  setDisplay(el, 'hud-pause', game.mode === 'pause' ? 'flex' : 'none');
-  if (game.modal) {
-    setDisplay(el, 'hud-modal', 'block');
-    setText(el, 'hud-modal-title', game.modal.title || '');
-    setText(el, 'hud-modal-lines', (game.modal.lines || []).join('\n'));
+  // Modal.
+  setDisplay(el.modal, s.modal ? 'block' : 'none');
+  if (s.modal) {
+    setText(el.modalTitle, s.modal.title || '');
+    setText(el.modalBody, (s.modal.lines || []).join('\n'));
+  }
+  // Pause overlay.
+  setDisplay(el.pause, s.mode === 'pause' ? 'flex' : 'none');
+  // Menu vs in-game HUD.
+  if (s.mode === 'menu') {
+    setDisplay(el.hud, 'none');
+    setDisplay(el.menu, 'flex');
   } else {
-    setDisplay(el, 'hud-modal', 'none');
+    setDisplay(el.hud, 'block');
+    setDisplay(el.menu, 'none');
   }
 }
 
-export function drawMinimap(game, hud) {
-  if (!hud || !hud.doc) return;
-  const canvas = hud.doc.getElementById('hud-minimap');
-  if (!canvas) return;
+function missionObjective(s, ch) {
+  const briefs = {
+    1: 'Steal a car and drive to the garage',
+    2: 'Pick up the package at the harbour, deliver it to the hideout',
+    3: 'Lose the heat — get wanted to 0',
+    4: 'Pick up 3 passengers',
+    5: 'Grab the vault cash, then reach the safehouse clean',
+  };
+  return briefs[ch] || 'Free Roam';
+}
+
+// The round minimap: roads, the player arrow, the mission marker.
+export function drawMinimap(g, canvas, camera) {
+  if (!canvas || typeof canvas.getContext !== 'function') return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   const W = canvas.width || 200;
@@ -109,31 +147,21 @@ export function drawMinimap(game, hud) {
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#1a2a1a';
   ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = '#2f6fb8';
-  ctx.fillRect(0, 0, 70 * scale, H);
-  ctx.strokeStyle = '#444';
-  for (let v = -360; v <= 360; v += 60) {
-    ctx.beginPath(); ctx.moveTo(toX(v), 0); ctx.lineTo(toX(v), H); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, toZ(v)); ctx.lineTo(W, toZ(v)); ctx.stroke();
+  ctx.fillStyle = '#3a3a3e';
+  for (let i = -360; i <= 360; i += 60) {
+    ctx.fillRect(toX(i) - 1, 0, 2, H);
+    ctx.fillRect(0, toZ(i) - 1, W, 2);
   }
-  if (game.city) {
-    ctx.fillStyle = '#888';
-    for (const b of game.city.buildings) {
-      ctx.fillRect(toX(b.x - b.w / 2), toZ(b.z - b.d / 2), b.w * scale, b.d * scale);
-    }
-  }
-  if (game.missionMarker) {
+  ctx.fillStyle = '#2f7fc4';
+  ctx.fillRect(0, 0, toX(-300), H);
+  if (g.missionMarker) {
     ctx.fillStyle = '#ffd23f';
     ctx.beginPath();
-    ctx.arc(toX(game.missionMarker.x), toZ(game.missionMarker.z), 5, 0, Math.PI * 2);
+    ctx.arc(toX(g.missionMarker.x), toZ(g.missionMarker.z), 5, 0, Math.PI * 2);
     ctx.fill();
   }
-  if (game._taxiCab) {
-    ctx.fillStyle = '#ffe14d';
-    ctx.fillRect(toX(game._taxiCab.x) - 3, toZ(game._taxiCab.z) - 3, 6, 6);
-  }
-  ctx.fillStyle = '#ff4444';
+  ctx.fillStyle = '#fff';
   ctx.beginPath();
-  ctx.arc(toX(game.player.x), toZ(game.player.z), 4, 0, Math.PI * 2);
+  ctx.arc(toX(g.player.x), toZ(g.player.z), 4, 0, Math.PI * 2);
   ctx.fill();
 }

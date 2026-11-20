@@ -1,55 +1,70 @@
-// Solmar Bay — side activities: fishing, vending, ATMs (rebuild #13).
+// Solmar Bay — side activities (rebuild #14).
+// Fishing at the pier, vending machines, ATMs.
+
 import { SPAWNS } from './config.js';
-import { addCash, showToast } from './state.js';
+import { showToast } from './state.js';
+import { pushBox } from './render.js';
 
 export function spawnActivities(g) {
   g.vending = [
-    { x: -60, z: 8 }, { x: 60, z: -52 }, { x: -120, z: 128 }, { x: 180, z: 8 },
+    { x: -60, z: 30 }, { x: 90, z: -30 }, { x: -180, z: 90 }, { x: 150, z: 60 },
   ];
   g.atms = [
-    { x: -30, z: 8 }, { x: 90, z: -52 }, { x: -180, z: 68 },
+    { x: -30, z: -30 }, { x: 120, z: 30 }, { x: -90, z: -60 },
   ];
+  return { vending: g.vending, atms: g.atms };
 }
 
 export function tryFish(g) {
   const d = Math.hypot(g.player.x - SPAWNS.fishing.x, g.player.z - SPAWNS.fishing.z);
   if (d > 8) return false;
-  g._fishing = { active: true, t: 0 };
+  g._fishing = { active: true, timer: 3 };
   return true;
 }
 
 export function tryVending(g) {
-  for (const v of g.vending) {
-    if (Math.hypot(v.x - g.player.x, v.z - g.player.z) < 4) {
-      if (g.cash < 3) return false;
-      g.cash -= 3;
-      g.health = Math.min(100, g.health + 15);
-      showToast(g, 'Snack +15 HP — $3');
-      return true;
+  let v = null;
+  let bestD = 5;
+  for (const m of g.vending || []) {
+    const d = Math.hypot(m.x - g.player.x, m.z - g.player.z);
+    if (d < bestD) {
+      bestD = d;
+      v = m;
     }
   }
-  return false;
+  if (!v) return false;
+  if (g.cash < 3) return false;
+  g.cash -= 3;
+  g.health = Math.min(100, g.health + 15);
+  showToast(g, 'Snack! +15 HP');
+  return true;
 }
 
 export function tryAtm(g) {
-  for (const a of g.atms) {
-    if (Math.hypot(a.x - g.player.x, a.z - g.player.z) < 4) {
-      g.modal = { kind: 'atm', title: 'ATM', lines: [`Cash $${g.cash} · Bank $${g.bank}`, '1. Deposit $50', '2. Withdraw $50'] };
-      return true;
+  let a = null;
+  let bestD = 5;
+  for (const m of g.atms || []) {
+    const d = Math.hypot(m.x - g.player.x, m.z - g.player.z);
+    if (d < bestD) {
+      bestD = d;
+      a = m;
     }
   }
-  return false;
+  if (!a) return false;
+  g.modal = { kind: 'atm', title: 'ATM', lines: ['Deposit $50', 'Withdraw $50'] };
+  return true;
 }
 
-// action 0 = deposit $50, 1 = withdraw $50.
-export function atmAction(g, action) {
-  if (action === 0) {
+export function atmAction(g, which) {
+  if (which === 0) {
+    // Deposit $50.
     if (g.cash < 50) return false;
     g.cash -= 50;
-    g.bank += 50;
+    g.bank = (g.bank || 0) + 50;
     return true;
   }
-  if (g.bank < 50) return false;
+  // Withdraw $50.
+  if ((g.bank || 0) < 50) return false;
   g.bank -= 50;
   g.cash += 50;
   return true;
@@ -57,12 +72,13 @@ export function atmAction(g, action) {
 
 export function stepActivities(g, dt) {
   if (g._fishing && g._fishing.active) {
-    g._fishing.t += dt;
-    if (g._fishing.t >= 3) {
+    g._fishing.timer -= dt;
+    if (g._fishing.timer <= 0) {
       g._fishing.active = false;
-      const amount = 5 + Math.floor(Math.random() * 11);
-      addCash(g, amount, 'fish');
-      g.stats.fishCaught += 1;
+      const pay = 5 + Math.floor(g.rng() * 11);
+      g.cash += pay;
+      g.stats.fishCaught = (g.stats.fishCaught || 0) + 1;
+      showToast(g, `Caught a fish! +$${pay}`);
     }
   }
 }

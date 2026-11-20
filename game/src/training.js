@@ -1,13 +1,14 @@
-// Solmar Bay — training: shooting range, swim trial, slalom (rebuild #13).
-import { pushBox } from './render.js';
+// Solmar Bay — training grounds (rebuild #14).
+// Shooting range (10 targets, 60 s), swim trial (to the buoy and
+// back), slalom (5 gates in a car).
+
 import { SPAWNS } from './config.js';
-import { addCash } from './state.js';
+import { showToast } from './state.js';
+import { pushBox } from './render.js';
 
 export function spawnTraining(g) {
-  g.training = { rangeBest: 0, swimBest: 0, slalomBest: 0 };
-  g._range = { active: false, t: 0, targets: [], hits: 0 };
-  g._swim = { active: false, reached: false };
-  g._slalom = { active: false, gates: 0 };
+  g.training = { rangeBest: 0, rangeScore: 0, swimBest: 0, slalomBest: 0 };
+  return g.training;
 }
 
 export function tryRange(g) {
@@ -15,25 +16,27 @@ export function tryRange(g) {
   if (d > 10) return false;
   const targets = [];
   for (let i = 0; i < 10; i++) {
-    targets.push({ x: SPAWNS.shootingRange.x + 10 + (i % 5) * 4, z: SPAWNS.shootingRange.z - 10 - Math.floor(i / 5) * 4 });
+    targets.push({ x: SPAWNS.shootingRange.x - 20 + (i % 5) * 10, z: SPAWNS.shootingRange.z - 10 + Math.floor(i / 5) * 8, hit: false });
   }
-  g._range = { active: true, t: 60, targets, hits: 0 };
+  g._range = { active: true, targets, hits: 0, t: 60 };
   return true;
 }
 
 export function rangeHit(g, x, z) {
-  if (!g._range.active) return false;
-  for (let i = 0; i < g._range.targets.length; i++) {
-    const t = g._range.targets[i];
-    if (Math.hypot(t.x - x, t.z - z) < 3) {
-      g._range.targets.splice(i, 1);
-      g._range.hits += 1;
-      g.training.rangeScore = g._range.hits;
-      if (g._range.targets.length === 0) {
-        g._range.active = false;
-        addCash(g, 80, 'range');
+  const r = g._range;
+  if (!r || !r.active) return false;
+  for (const t of r.targets) {
+    if (t.hit) continue;
+    if (Math.hypot(x - t.x, z - t.z) < 2.5) {
+      t.hit = true;
+      r.hits += 1;
+      g.training.rangeScore = (g.training.rangeScore || 0) + 1;
+      if (r.hits >= 10) {
+        r.active = false;
+        g.training.rangeBest = 10;
+        g.cash += 80;
         g.respect += 10;
-        g.training.rangeBest = Math.max(g.training.rangeBest, 10);
+        showToast(g, 'Range cleared! +$80');
       }
       return true;
     }
@@ -42,7 +45,8 @@ export function rangeHit(g, x, z) {
 }
 
 export function trySwim(g) {
-  if (g.player.x >= -330) return false; // must be in the sea
+  // The sea is west of x = -340.
+  if (g.player.x > -340) return false;
   g._swim = { active: true, reached: false };
   return true;
 }
@@ -56,52 +60,51 @@ export function trySlalom(g) {
 }
 
 export function stepTraining(g, dt) {
-  if (g._range.active) {
+  // Shooting range timer.
+  if (g._range && g._range.active) {
     g._range.t -= dt;
     if (g._range.t <= 0) g._range.active = false;
   }
-  if (g._swim.active) {
-    if (!g._swim.reached && Math.hypot(g.player.x - SPAWNS.swimBuoy.x, g.player.z - SPAWNS.swimBuoy.z) < 10) {
+  // Swim trial: reach the buoy, then get back to the shore.
+  if (g._swim && g._swim.active) {
+    const b = SPAWNS.swimBuoy;
+    if (!g._swim.reached && Math.hypot(g.player.x - b.x, g.player.z - b.z) < 5) {
       g._swim.reached = true;
-    } else if (g._swim.reached && g.player.x >= -330) {
+    }
+    if (g._swim.reached && Math.hypot(g.player.x + 330, g.player.z - 100) < 6) {
       g._swim.active = false;
-      addCash(g, 100, 'swim trial');
-      g.training.swimBest = 1;
+      g.cash += 100;
+      showToast(g, 'Swim trial done! +$100');
     }
   }
-  if (g._slalom.active) {
-    if (g._slalom.gates >= 5) {
-      g._slalom.active = false;
-      addCash(g, 150, 'slalom');
-      g.training.slalomBest = 1;
-      return;
-    }
-    const gx = 200 + g._slalom.gates * 20;
-    if (Math.hypot(g.player.x - gx, g.player.z - 200) < 8) {
-      g._slalom.gates += 1;
-      if (g._slalom.gates >= 5) {
-        g._slalom.active = false;
-        addCash(g, 150, 'slalom');
-        g.training.slalomBest = 1;
+  // Slalom: 5 gates at (200 + i*20, 200).
+  if (g._slalom && g._slalom.active) {
+    if (g._slalom.gates < 5) {
+      const gx = 200 + g._slalom.gates * 20;
+      if (Math.hypot(g.player.x - gx, g.player.z - 200) < 6) {
+        g._slalom.gates += 1;
       }
+    } else {
+      g._slalom.active = false;
+      g.cash += 150;
+      showToast(g, 'Slalom done! +$150');
     }
   }
 }
 
-export function trainingBoxes(g, b, cam) {
-  const plain = [0, 0, 1, 1];
+// The buoy (orange) and the range targets (red/white).
+export function trainingBoxes(g, b, camera) {
   let n = 0;
-  const box = (x, y, z, w, h, d, col) => { pushBox(b, x, y, z, w, h, d, col, plain); n++; };
-  box(SPAWNS.swimBuoy.x, 0, SPAWNS.swimBuoy.z, 1.5, 1, 1.5, [1, 0.6, 0.1]);
-  if (g._range.active) {
-    for (const t of g._range.targets) box(t.x, 1, t.z, 1.2, 1.2, 0.2, [0.9, 0.2, 0.2]);
-  } else {
-    for (let i = 0; i < 10; i++) {
-      box(SPAWNS.shootingRange.x + 10 + (i % 5) * 4, 1, SPAWNS.shootingRange.z - 10 - Math.floor(i / 5) * 4, 1.2, 1.2, 0.2, [0.9, 0.2, 0.2]);
+  const buoy = SPAWNS.swimBuoy;
+  pushBox(b, buoy.x, 0, buoy.z, 1, 1, 1, [1, 0.4, 0.1]);
+  n += 1;
+  if (g._range && g._range.active) {
+    for (const t of g._range.targets) {
+      if (!t.hit) {
+        pushBox(b, t.x, 0.5, t.z, 1.5, 1.5, 0.2, [0.9, 0.1, 0.1]);
+        n += 1;
+      }
     }
-  }
-  if (g._slalom.active) {
-    for (let i = 0; i < 5; i++) box(200 + i * 20, 0, 200, 0.4, 3, 0.4, [1, 0.8, 0.2]);
   }
   return n;
 }

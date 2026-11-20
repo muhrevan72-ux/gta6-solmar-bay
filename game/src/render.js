@@ -1,225 +1,249 @@
-// Solmar Bay — WebGL renderer + box batches (rebuild #13).
-// Triangles only. Per-face shading: top 1.0, sides 0.85, bottom
-// 0.7. Fog is computed from distance in METRES (uFogRange), never
-// from NDC depth.
-import { createAtlasTexture } from './texture.js';
-// Re-exported here because the render suites import the camera
-// maths from the renderer module; the implementation lives in
-// shots.js (no import cycle: shots.js does not import render.js).
-export { computeViewProj } from './shots.js';
+// Solmar Bay — raw WebGL1 voxel renderer (rebuild #14).
+// No library: boxes are emitted as triangles (WebGL1 has no
+// four-vertex primitive) into batches, uploaded, and drawn with
+// gl.TRIANGLES. One clear per frame, in beginFrame only.
 
+import { perspective, matMul, lookAt } from './shots.js';
+
+// ---------- batch ----------
+// A batch is three parallel arrays: positions (3 floats/vertex),
+// colours (3 floats/vertex, already per-face shaded) and UVs
+// (2 floats/vertex). Every face is 2 triangles = 6 vertices.
 export function BoxBatch() {
-  return { pos: [], col: [], uv: [], _bufs: null };
+  return { pos: [], col: [], uv: [] };
 }
-
 export function batchReset(b) {
   b.pos.length = 0;
   b.col.length = 0;
   b.uv.length = 0;
 }
-
 export function batchTris(b) {
   return b.pos.length / 9;
 }
 
-export function pushQuad(b, a, b2, c, d, col, uv) {
-  const [u0, v0, u1, v1] = uv;
-  const verts = [a, b2, c, a, c, d];
-  const uvs = [[u0, v0], [u1, v0], [u1, v1], [u0, v0], [u1, v1], [u0, v1]];
-  for (let i = 0; i < 6; i++) {
-    const v = verts[i];
-    b.pos.push(v[0], v[1], v[2]);
-    b.col.push(col[0], col[1], col[2]);
-    b.uv.push(uvs[i][0], uvs[i][1]);
+// Face shade factors, in face order: top, bottom, +Z, -Z, +X, -X.
+const SHADE = [1.0, 0.7, 0.85, 0.85, 0.85, 0.85];
+
+function pushTri(b, p, c, uv) {
+  for (let i = 0; i < 3; i++) {
+    b.pos.push(p[i][0], p[i][1], p[i][2]);
+    b.col.push(c[0], c[1], c[2]);
+    b.uv.push(uv[i][0], uv[i][1]);
   }
 }
 
-// Box centred at (x, z), sitting on y (y is the BOTTOM), size w/h/d.
-// Face order: top, bottom, +Z, -Z, +X, -X — all wound CCW from outside.
-export function pushBox(b, x, y, z, w, h, d, col, uv) {
-  const x0 = x - w / 2, x1 = x + w / 2;
-  const y0 = y, y1 = y + h;
-  const z0 = z - d / 2, z1 = z + d / 2;
-  const shade = (f) => [col[0] * f, col[1] * f, col[2] * f];
-  // top (+Y)
-  pushQuad(b, [x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], shade(1.0), uv);
-  // bottom (-Y)
-  pushQuad(b, [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], shade(0.7), uv);
-  // front (+Z)
-  pushQuad(b, [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], shade(0.85), uv);
-  // back (-Z)
-  pushQuad(b, [x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], shade(0.85), uv);
-  // right (+X)
-  pushQuad(b, [x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], shade(0.85), uv);
-  // left (-X)
-  pushQuad(b, [x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], shade(0.85), uv);
+// Emit one quad (two triangles) from four CCW corners.
+function pushFace(b, corners, color, shade, uvRect) {
+  const c = [color[0] * shade, color[1] * shade, color[2] * shade];
+  const u = uvRect || [0, 0, 1, 1];
+  // UV corners follow the position corners:
+  // (u0,v0) (u0,v1) (u1,v1) (u1,v0).
+  const uvs = [
+    [u[0], u[1]],
+    [u[0], u[3]],
+    [u[2], u[3]],
+    [u[2], u[1]],
+  ];
+  pushTri(b, [corners[0], corners[1], corners[2]], c, [uvs[0], uvs[1], uvs[2]]);
+  pushTri(b, [corners[0], corners[2], corners[3]], c, [uvs[0], uvs[2], uvs[3]]);
 }
 
-// Box rotated around the Y axis by `angle` radians.
-export function pushBoxRot(b, x, y, z, w, h, d, angle, col, uv) {
-  const cos = Math.cos(angle), sin = Math.sin(angle);
-  const rot = (px, pz) => {
-    const dx = px - x, dz = pz - z;
-    return [x + dx * cos + dz * sin, z - dx * sin + dz * cos];
+// A box whose base sits at y (spans y..y+h), centred on (x, z).
+// Faces, in order: top, bottom, +Z, -Z, +X, -X — each wound CCW
+// from outside so its normal points outward.
+export function pushBox(b, x, y, z, w, h, d, color, uvRect) {
+  const hx = w / 2, hz = d / 2;
+  const y0 = y, y1 = y + h;
+  const faces = [
+    // top (+Y)
+    [[x - hx, y1, z - hz], [x - hx, y1, z + hz], [x + hx, y1, z + hz], [x + hx, y1, z - hz]],
+    // bottom (-Y)
+    [[x - hx, y0, z + hz], [x - hx, y0, z - hz], [x + hx, y0, z - hz], [x + hx, y0, z + hz]],
+    // front (+Z)
+    [[x - hx, y0, z + hz], [x + hx, y0, z + hz], [x + hx, y1, z + hz], [x - hx, y1, z + hz]],
+    // back (-Z)
+    [[x + hx, y0, z - hz], [x - hx, y0, z - hz], [x - hx, y1, z - hz], [x + hx, y1, z - hz]],
+    // right (+X)
+    [[x + hx, y0, z + hz], [x + hx, y0, z - hz], [x + hx, y1, z - hz], [x + hx, y1, z + hz]],
+    // left (-X)
+    [[x - hx, y0, z - hz], [x - hx, y0, z + hz], [x - hx, y1, z + hz], [x - hx, y1, z - hz]],
+  ];
+  for (let f = 0; f < 6; f++) pushFace(b, faces[f], color, SHADE[f], uvRect);
+}
+
+// A box rotated by yaw around its vertical centre axis.
+export function pushBoxRot(b, x, y, z, w, h, d, yaw, color, uvRect) {
+  const hx = w / 2, hz = d / 2;
+  const y0 = y, y1 = y + h;
+  const cs = Math.cos(yaw), sn = Math.sin(yaw);
+  const rot = (lx, lz) => [x + lx * cs + lz * sn, z - lx * sn + lz * cs];
+  const P = (lx, ly, lz) => {
+    const [rx, rz] = rot(lx, lz);
+    return [rx, ly, rz];
   };
-  const x0 = x - w / 2, x1 = x + w / 2;
-  const y0 = y, y1 = y + h;
-  const z0 = z - d / 2, z1 = z + d / 2;
-  const [a00, a01] = rot(x0, z0); const [a10, a11] = rot(x1, z0);
-  const [a01x, a01z] = rot(x0, z1); const [a11x, a11z] = rot(x1, z1);
-  const shade = (f) => [col[0] * f, col[1] * f, col[2] * f];
-  const top = [[a01x, y1, a01z], [a11x, y1, a11z], [a10, y1, a11], [a00, y1, a01]];
-  const bot = [[a00, y0, a01], [a10, y0, a11], [a11x, y0, a11z], [a01x, y0, a01z]];
-  const fr = [[a01x, y0, a01z], [a11x, y0, a11z], [a11x, y1, a11z], [a01x, y1, a01z]];
-  const bk = [[a10, y0, a11], [a00, y0, a01], [a00, y1, a01], [a10, y1, a11]];
-  const rt = [[a11x, y0, a11z], [a10, y0, a11], [a10, y1, a11], [a11x, y1, a11z]];
-  const lf = [[a00, y0, a01], [a01x, y0, a01z], [a01x, y1, a01z], [a00, y1, a01]];
-  pushQuad(b, top[0], top[1], top[2], top[3], shade(1.0), uv);
-  pushQuad(b, bot[0], bot[1], bot[2], bot[3], shade(0.7), uv);
-  pushQuad(b, fr[0], fr[1], fr[2], fr[3], shade(0.85), uv);
-  pushQuad(b, bk[0], bk[1], bk[2], bk[3], shade(0.85), uv);
-  pushQuad(b, rt[0], rt[1], rt[2], rt[3], shade(0.85), uv);
-  pushQuad(b, lf[0], lf[1], lf[2], lf[3], shade(0.85), uv);
+  const faces = [
+    [P(-hx, y1, -hz), P(-hx, y1, hz), P(hx, y1, hz), P(hx, y1, -hz)],
+    [P(-hx, y0, hz), P(-hx, y0, -hz), P(hx, y0, -hz), P(hx, y0, hz)],
+    [P(-hx, y0, hz), P(hx, y0, hz), P(hx, y1, hz), P(-hx, y1, hz)],
+    [P(hx, y0, -hz), P(-hx, y0, -hz), P(-hx, y1, -hz), P(hx, y1, -hz)],
+    [P(hx, y0, hz), P(hx, y0, -hz), P(hx, y1, -hz), P(hx, y1, hz)],
+    [P(-hx, y0, -hz), P(-hx, y0, hz), P(-hx, y1, hz), P(-hx, y1, -hz)],
+  ];
+  for (let f = 0; f < 6; f++) pushFace(b, faces[f], color, SHADE[f], uvRect);
 }
 
-export function boxVisible(cam, x, y, z, r) {
-  const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
-  const dist = Math.hypot(dx, dy, dz);
-  if (dist > 700 + r) return false;
+// A flat quad (two triangles), unshaded, for dashes and signs.
+export function pushQuad(b, p0, p1, p2, p3, color, uvRect) {
+  const u = uvRect || [0, 0, 1, 1];
+  const uvs = [[u[0], u[1]], [u[0], u[3]], [u[2], u[3]], [u[2], u[1]]];
+  pushTri(b, [p0, p1, p2], color, [uvs[0], uvs[1], uvs[2]]);
+  pushTri(b, [p0, p2, p3], color, [uvs[0], uvs[2], uvs[3]]);
+}
+
+// ---------- culling ----------
+// True when a sphere at (x,y,z) with the given radius is in front
+// of the camera and within the 700 m draw distance.
+export function boxVisible(cam, x, y, z, radius) {
   const fx = cam.tx - cam.x, fy = cam.ty - cam.y, fz = cam.tz - cam.z;
   const fl = Math.hypot(fx, fy, fz) || 1;
-  const dot = (dx * fx + dy * fy + dz * fz) / fl;
-  return dot > -r;
+  const nx = fx / fl, ny = fy / fl, nz = fz / fl;
+  const dx = x - cam.x, dy = y - cam.y, dz = z - cam.z;
+  const along = dx * nx + dy * ny + dz * nz;
+  if (along + radius < 0) return false;
+  const dist = Math.hypot(dx, dy, dz);
+  if (dist - radius > 700) return false;
+  return true;
 }
 
+// ---------- view-projection ----------
+export function computeViewProj(cam, w, h) {
+  const view = lookAt(cam.x, cam.y, cam.z, cam.tx, cam.ty, cam.tz);
+  const proj = perspective((60 * Math.PI) / 180, w / h, 0.1, 1200);
+  return matMul(proj, view);
+}
+
+// ---------- renderer ----------
 const VERT = `
-attribute vec3 aPos; attribute vec3 aCol; attribute vec2 aUV;
-uniform mat4 uVP; uniform vec3 uCamPos; uniform vec2 uFogRange;
-varying vec3 vCol; varying vec2 vUV; varying float vFog;
-void main(){
-  vec4 p = uVP * vec4(aPos, 1.0);
-  gl_Position = p;
-  vCol = aCol; vUV = aUV;
-  float d = distance(aPos, uCamPos);
-  vFog = smoothstep(uFogRange.x, uFogRange.y, d);
+attribute vec3 aPos;
+attribute vec3 aCol;
+attribute vec2 aUV;
+uniform mat4 uVP;
+uniform vec3 uCamPos;
+uniform vec2 uFogRange;
+varying vec3 vCol;
+varying vec2 vUV;
+varying float vDist;
+void main() {
+  vec4 wp = vec4(aPos, 1.0);
+  vCol = aCol;
+  vUV = aUV;
+  vDist = distance(aPos, uCamPos);
+  gl_Position = uVP * wp;
 }`;
 const FRAG = `
 precision mediump float;
-varying vec3 vCol; varying vec2 vUV; varying float vFog;
-uniform sampler2D uTex; uniform vec3 uFogColor;
-void main(){
-  vec4 t = texture2D(uTex, vUV);
-  vec3 c = vCol * t.rgb;
-  c = mix(c, uFogColor, vFog);
-  gl_FragColor = vec4(c, 1.0);
+uniform sampler2D uTex;
+uniform vec3 uFogColor;
+uniform vec2 uFogRange;
+varying vec3 vCol;
+varying vec2 vUV;
+varying float vDist;
+void main() {
+  vec4 tex = texture2D(uTex, vUV);
+  vec3 col = tex.rgb * vCol;
+  float f = smoothstep(uFogRange.x, uFogRange.y, vDist);
+  gl_FragColor = vec4(mix(col, uFogColor, f), 1.0);
 }`;
 
-function compile(gl, type, src) {
-  const sh = gl.createShader(type);
-  gl.shaderSource(sh, src);
-  gl.compileShader(sh);
-  return sh;
-}
-
-export function createRenderer(canvas, doc) {
+// Create the renderer. IMPORTANT: size the canvas BEFORE calling
+// this — assigning canvas.width/height afterwards resets the WebGL
+// context and kills the program, buffers and textures (the
+// round-6/7 boot-order bug). On a later resize, re-create the
+// renderer instead of resizing around it.
+export function createRenderer(canvas, atlasTex) {
   const gl = canvas.getContext('webgl');
   if (!gl) return null;
+  const vs = gl.createShader(gl.VERTEX_SHADER);
+  gl.shaderSource(vs, VERT);
+  gl.compileShader(vs);
+  const fs = gl.createShader(gl.FRAGMENT_SHADER);
+  gl.shaderSource(fs, FRAG);
+  gl.compileShader(fs);
   const prog = gl.createProgram();
-  gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT));
-  gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG));
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
   gl.linkProgram(prog);
   gl.useProgram(prog);
-  if (gl.enable) {
-    gl.enable(gl.DEPTH_TEST);
-    gl.enable(gl.CULL_FACE);
-    gl.cullFace(gl.BACK);
-  }
-  gl.viewport(0, 0, canvas.width, canvas.height);
-  // Texture: the atlas when the browser can build one, else a 1x1
-  // white fallback so the shader still multiplies by 1.
-  let texture = null;
-  try {
-    texture = createAtlasTexture(gl);
-  } catch (e) {
-    texture = null;
-  }
+  const aPos = gl.getAttribLocation(prog, 'aPos');
+  const aCol = gl.getAttribLocation(prog, 'aCol');
+  const aUV = gl.getAttribLocation(prog, 'aUV');
+  const uVP = gl.getUniformLocation(prog, 'uVP');
+  const uCamPos = gl.getUniformLocation(prog, 'uCamPos');
+  const uFogRange = gl.getUniformLocation(prog, 'uFogRange');
+  const uFogColor = gl.getUniformLocation(prog, 'uFogColor');
+  const uTex = gl.getUniformLocation(prog, 'uTex');
+  gl.enableVertexAttribArray(aPos);
+  gl.enableVertexAttribArray(aCol);
+  gl.enableVertexAttribArray(aUV);
+  gl.enable(gl.DEPTH_TEST);
+  gl.enable(gl.CULL_FACE);
+  gl.cullFace(gl.BACK);
+  const posBuf = gl.createBuffer();
+  const colBuf = gl.createBuffer();
+  const uvBuf = gl.createBuffer();
+  // Texture: the atlas when the browser built one, else a 1x1
+  // white fallback so the shader still multiplies cleanly.
+  let texture = atlasTex || null;
   if (!texture) {
     texture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, texture);
-    try {
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
-    } catch (e) { /* mock GLs ignore pixel uploads */ }
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   }
-  const locs = {
-    uVP: gl.getUniformLocation(prog, 'uVP'),
-    uCamPos: gl.getUniformLocation(prog, 'uCamPos'),
-    uFogRange: gl.getUniformLocation(prog, 'uFogRange'),
-    uFogColor: gl.getUniformLocation(prog, 'uFogColor'),
-    uTex: gl.getUniformLocation(prog, 'uTex'),
-    aPos: gl.getAttribLocation(prog, 'aPos'),
-    aCol: gl.getAttribLocation(prog, 'aCol'),
-    aUV: gl.getAttribLocation(prog, 'aUV'),
-  };
-  const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-
-  function ensureBufs(batch) {
-    if (!batch._bufs) {
-      batch._bufs = {
-        pos: gl.createBuffer(),
-        col: gl.createBuffer(),
-        uv: gl.createBuffer(),
-      };
-    }
-    return batch._bufs;
-  }
-
-  const renderer = {
-    gl,
-    canvas,
-    texture,
-    program: prog,
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.uniform1i(uTex, 0);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  const r = {
+    gl, canvas, texture,
     staticBatch: BoxBatch(),
     glbBatch: BoxBatch(),
-    dynBatch: BoxBatch(),
-    // Assigned by main.js (avoids a render <-> world import cycle):
-    // rebuilds staticBatch + glbBatch from the game state.
-    rebuildStaticBatches: null,
-    beginFrame(sky) {
-      gl.clearColor(sky[0], sky[1], sky[2], 1);
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    _prog: prog, _posBuf: posBuf, _colBuf: colBuf, _uvBuf: uvBuf,
+    _aPos: aPos, _aCol: aCol, _aUV: aUV,
+    _uVP: uVP, _uCamPos: uCamPos, _uFogRange: uFogRange, _uFogColor: uFogColor,
+    setView(vp, camPos, fogNear, fogFar, fogColor) {
+      const g = this.gl;
+      g.uniformMatrix4fv(this._uVP, false, new Float32Array(vp));
+      g.uniform3f(this._uCamPos, camPos[0], camPos[1], camPos[2]);
+      g.uniform2f(this._uFogRange, fogNear, fogFar);
+      g.uniform3f(this._uFogColor, fogColor[0], fogColor[1], fogColor[2]);
     },
-    drawBatch(batch, vp, camPos, fogRange, fogColor) {
-      const bufs = ensureBufs(batch);
-      gl.bindBuffer(gl.ARRAY_BUFFER, bufs.pos);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(batch.pos), gl.DYNAMIC_DRAW);
-      gl.bindBuffer(gl.ARRAY_BUFFER, bufs.col);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(batch.col), gl.DYNAMIC_DRAW);
-      gl.bindBuffer(gl.ARRAY_BUFFER, bufs.uv);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(batch.uv), gl.DYNAMIC_DRAW);
-      gl.useProgram(prog);
-      gl.uniformMatrix4fv(locs.uVP, false, vp || IDENTITY);
-      const cp = camPos || [0, 0, 0];
-      gl.uniform3f(locs.uCamPos, cp[0], cp[1], cp[2]);
-      const fr = fogRange || [60, 420];
-      gl.uniform2f(locs.uFogRange, fr[0], fr[1]);
-      const fc = fogColor || [0.6, 0.75, 0.9];
-      gl.uniform3f(locs.uFogColor, fc[0], fc[1], fc[2]);
-      gl.uniform1i(locs.uTex, 0);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.bindBuffer(gl.ARRAY_BUFFER, bufs.pos);
-      gl.enableVertexAttribArray(locs.aPos);
-      gl.vertexAttribPointer(locs.aPos, 3, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ARRAY_BUFFER, bufs.col);
-      gl.enableVertexAttribArray(locs.aCol);
-      gl.vertexAttribPointer(locs.aCol, 3, gl.FLOAT, false, 0, 0);
-      gl.bindBuffer(gl.ARRAY_BUFFER, bufs.uv);
-      gl.enableVertexAttribArray(locs.aUV);
-      gl.vertexAttribPointer(locs.aUV, 2, gl.FLOAT, false, 0, 0);
-      gl.drawArrays(gl.TRIANGLES, 0, batchTris(batch) * 3);
+    // The ONLY clear per frame. drawBatch never clears.
+    beginFrame(sky) {
+      const g = this.gl;
+      g.viewport(0, 0, this.canvas.width, this.canvas.height);
+      g.clearColor(sky[0], sky[1], sky[2], 1);
+      g.clear(g.COLOR_BUFFER_BIT | g.DEPTH_BUFFER_BIT);
+    },
+    drawBatch(batch) {
+      const g = this.gl;
+      const tris = batchTris(batch);
+      if (tris === 0) return;
+      g.bindBuffer(g.ARRAY_BUFFER, this._posBuf);
+      g.bufferData(g.ARRAY_BUFFER, new Float32Array(batch.pos), g.DYNAMIC_DRAW);
+      g.bindBuffer(g.ARRAY_BUFFER, this._colBuf);
+      g.bufferData(g.ARRAY_BUFFER, new Float32Array(batch.col), g.DYNAMIC_DRAW);
+      g.bindBuffer(g.ARRAY_BUFFER, this._uvBuf);
+      g.bufferData(g.ARRAY_BUFFER, new Float32Array(batch.uv), g.DYNAMIC_DRAW);
+      g.bindBuffer(g.ARRAY_BUFFER, this._posBuf);
+      g.vertexAttribPointer(this._aPos, 3, g.FLOAT, false, 0, 0);
+      g.bindBuffer(g.ARRAY_BUFFER, this._colBuf);
+      g.vertexAttribPointer(this._aCol, 3, g.FLOAT, false, 0, 0);
+      g.bindBuffer(g.ARRAY_BUFFER, this._uvBuf);
+      g.vertexAttribPointer(this._aUV, 2, g.FLOAT, false, 0, 0);
+      g.drawArrays(g.TRIANGLES, 0, tris * 3);
     },
   };
-  return renderer;
+  return r;
 }

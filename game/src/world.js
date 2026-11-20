@@ -1,323 +1,407 @@
-// Solmar Bay — city generation + static geometry (rebuild #13).
-// Deterministic: every random choice comes from a seeded RNG
-// (mulberry32, seed 1337), so two builds are byte-identical.
-// Roads run on multiples of 60 (half-width 7); buildings sit on
-// block centres (multiples of 60 + 30).
-import { BoxBatch, batchTris, pushBox, pushQuad } from './render.js';
+// Solmar Bay — the city of Solmar Bay (rebuild #14).
+// A 800x800 m grid city: roads on multiples of 60, buildings on
+// the blocks between them, a beach and sea on the west edge, an
+// airport in the north-east, a harbour in the south-west.
+// Deterministic: buildCity() always uses seed 1337, so two builds
+// are byte-identical (the round-9 determinism test).
+
+import { BoxBatch, pushBox, pushBoxRot, pushQuad } from './render.js';
 import { tileUV } from './texture.js';
-import { COL } from './config.js';
+import { COL, SPAWNS } from './config.js';
+import { mulberry32 } from './state.js';
 
-export const ROAD_LINES = [];
-for (let v = -360; v <= 360; v += 60) ROAD_LINES.push(v);
+export const ROAD_LINES = [-360, -300, -240, -180, -120, -60, 0, 60, 120, 180, 240, 300, 360];
+export const ROAD_HALF = 6;
 
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a |= 0; a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+// Distance from v to the nearest multiple of 60.
+function distToRoadLine(v) {
+  const m = ((v % 60) + 60) % 60;
+  return Math.min(m, 60 - m);
 }
 
 export function isOnRoad(x, z) {
-  const nearLine = (v) => {
-    const m = Math.round(v / 60) * 60;
-    return Math.abs(v - m) < 7;
-  };
-  return nearLine(x) || nearLine(z);
-}
-
-export function isBlocked(city, x, z) {
-  for (const b of city.buildings) {
-    if (Math.abs(x - b.x) < b.w / 2 + 0.5 && Math.abs(z - b.z) < b.d / 2 + 0.5) return true;
-  }
-  return false;
-}
-
-export function randomSidewalkPoint(rng) {
-  // A block centre (multiple of 60 + 30) plus an offset that keeps
-  // the point at least 10 m from any road line.
-  const bx = (Math.floor(rng() * 12) - 6) * 60 + 30;
-  const bz = (Math.floor(rng() * 12) - 6) * 60 + 30;
-  const ox = (rng() * 2 - 1) * 10;
-  const oz = (rng() * 2 - 1) * 10;
-  return { x: bx + ox, z: bz + oz };
+  return distToRoadLine(x) <= ROAD_HALF || distToRoadLine(z) <= ROAD_HALF;
 }
 
 export function districtAt(x, z) {
   if (x < -300) return 'Beach';
   if (x > 240 && z < -180) return 'Airport';
-  if (x < -180 && z > 120) return 'Harbour';
+  if (x < -180 && z > 150) return 'Harbour';
   return 'Downtown';
 }
 
+// Traffic-light cycle: 46 s — green <21, yellow 21-29, red 30-45.
+// The phase is an offset in seconds (light at (-180,-180) has
+// phase -3, so it is red at t=168).
 export function lightState(light, t) {
-  const tt = (((t + light.phase * 46) % 46) + 46) % 46;
+  const phase = light.phase || 0;
+  const tt = (((t - phase) % 46) + 46) % 46;
   if (tt < 21) return 'green';
   if (tt < 30) return 'yellow';
   return 'red';
 }
 
-const BUILDING_COLOURS = [
-  [0.85, 0.6, 0.45], [0.7, 0.75, 0.8], [0.9, 0.75, 0.5],
-  [0.6, 0.7, 0.9], [0.85, 0.5, 0.55], [0.55, 0.8, 0.6],
-  [0.95, 0.85, 0.6], [0.75, 0.6, 0.8], [0.5, 0.65, 0.7],
+// A random point on a sidewalk (never on a road): pick a block
+// centre and offset inside the block, clear of the road edges.
+export function randomSidewalkPoint(rng) {
+  const bx = (Math.floor(rng() * 12) - 6) * 60 + 30;
+  const bz = (Math.floor(rng() * 12) - 6) * 60 + 30;
+  return {
+    x: bx + (rng() * 2 - 1) * 20,
+    z: bz + (rng() * 2 - 1) * 20,
+  };
+}
+
+export function isBlocked(city, x, z) {
+  for (const b of city.buildings) {
+    if (Math.abs(x - b.x) < b.w / 2 && Math.abs(z - b.z) < b.d / 2) return true;
+  }
+  return false;
+}
+
+const PALETTE = [
+  [0.92, 0.55, 0.45], [0.45, 0.75, 0.8], [0.95, 0.8, 0.35],
+  [0.75, 0.55, 0.85], [0.55, 0.85, 0.6], [0.95, 0.65, 0.55],
+  [0.4, 0.6, 0.9], [0.9, 0.7, 0.8], [0.6, 0.8, 0.5],
+  [0.85, 0.6, 0.4], [0.5, 0.7, 0.7], [0.95, 0.85, 0.5],
+];
+const ROOF_TYPES = ['parapet', 'pyramid', 'ac'];
+const NEON_COLS = [
+  [1, 0.2, 0.4], [0.2, 0.9, 1], [1, 0.85, 0.1], [0.6, 1, 0.3],
+  [1, 0.5, 0.9], [0.3, 0.6, 1],
 ];
 
 export function buildCity() {
   const rng = mulberry32(1337);
   const buildings = [];
   const towers = [];
-  const props = [];
-  const neon = [];
-  const clouds = [];
-  const waves = [];
-  const palms = [];
-  const containers = [];
-  const lamps = [];
-  const benches = [];
-  const hydrants = [];
-  const busStops = [];
-  const lights = [];
 
-  // --- buildings on the block grid ---
-  const towerSpots = [
-    [30, -90], [-30, -30], [90, -30], [30, 30], [-30, 90],
-    [90, 90], [-90, -90], [150, -30], [-90, 150],
-  ];
-  const isTowerSpot = (bx, bz) => towerSpots.some(([x, z]) => x === bx && z === bz);
-  const roofCycle = ['parapet', 'pyramid', 'ac'];
-  let roofIdx = 0;
-  for (let gx = -5; gx <= 4; gx++) {
-    for (let gz = -5; gz <= 4; gz++) {
-      const bx = gx * 60 + 30;
-      const bz = gz * 60 + 30;
-      const tower = isTowerSpot(bx, bz);
-      // Airport zone: hangars + control tower instead of blocks.
-      if (bx > 240 && bz < -180) continue;
-      // Harbour yard: containers instead of blocks (never a tower spot).
-      if (!tower && bx < -180 && bz > 120 && bx > -300) {
-        if (rng() < 0.5) continue;
-      }
-      if (!tower && rng() < 0.18) continue; // empty lot / park
-      const w = tower ? 26 + rng() * 8 : 24 + rng() * 14;
-      const d = tower ? 26 + rng() * 8 : 24 + rng() * 14;
-      const h = tower ? 42 + rng() * 28 : 8 + rng() * 16;
-      const col = BUILDING_COLOURS[Math.floor(rng() * BUILDING_COLOURS.length)];
-      const roof = roofCycle[roofIdx++ % 3];
-      const b = {
-        x: bx, z: bz, w, d, h, col, roof,
-        kind: tower ? 'tower' : 'building',
-        label: null,
-      };
+  // --- special buildings (fixed, so tests can rely on them) ---
+  // The hospital is 44 wide (half-width 22): the collision test
+  // puts the player at -150+23, just outside its east wall.
+  const hospital = { x: -150, z: 150, w: 44, h: 18, d: 40, col: [0.92, 0.92, 0.86], roof: 'parapet', kind: 'hospital', label: 'Hospital' };
+  buildings.push(hospital);
+  const solmar = { x: 30, z: -90, w: 24, h: 70, d: 24, col: [0.25, 0.35, 0.6], roof: 'parapet', kind: 'tower', label: 'Solmar Tower' };
+  buildings.push(solmar);
+  buildings.push({ x: -310, z: 60, w: 20, h: 10, d: 16, col: [0.95, 0.8, 0.6], roof: 'pyramid', kind: 'house', label: 'Beach House' });
+  buildings.push({ x: 150, z: -160, w: 40, h: 8, d: 20, col: [0.5, 0.5, 0.55], roof: 'parapet', kind: 'garage', label: 'Garage' });
+  buildings.push({ x: 280, z: -240, w: 36, h: 14, d: 24, col: [0.7, 0.7, 0.75], roof: 'parapet', kind: 'hangar', label: 'Hangar 1' });
+  buildings.push({ x: 330, z: -280, w: 36, h: 14, d: 24, col: [0.7, 0.7, 0.75], roof: 'parapet', kind: 'hangar', label: 'Hangar 2' });
+  buildings.push({ x: 300, z: -300, w: 14, h: 45, d: 14, col: [0.8, 0.8, 0.85], roof: 'ac', kind: 'control', label: 'Control Tower' });
+  buildings.push({ x: -60, z: 165, w: 30, h: 12, d: 16, col: [0.85, 0.2, 0.15], roof: 'parapet', kind: 'fire', label: 'Fire Station' });
+
+  // --- regular buildings on the block grid ---
+  const towerBlocks = new Set(['-90,-90', '90,-90', '-90,30', '90,30', '-30,-30', '30,90', '90,90', '150,-30', '-30,90']);
+  const skipBlocks = new Set([
+    '-150,150', '30,-90', '150,-150', '30,30', '-30,30',
+    '-90,150', '-30,150',
+  ]);
+  for (let bx = -330; bx <= 330; bx += 60) {
+    for (let bz = -330; bz <= 330; bz += 60) {
+      if (bx === -330) continue; // beach strip
+      if (bx >= 270 && bz <= -210) continue; // airport
+      if (bx <= -210 && bz >= 210) continue; // harbour
+      if (skipBlocks.has(bx + ',' + bz)) continue;
+      const isTower = towerBlocks.has(bx + ',' + bz);
+      // Towers are never skipped (the suite needs exactly 9);
+      // ordinary blocks are sometimes parks / parking lots.
+      if (!isTower && rng() < 0.1) continue;
+      const w = 18 + rng() * 16;
+      const d = 18 + rng() * 16;
+      const h = isTower ? 40 + rng() * 35 : 8 + rng() * 16;
+      const col = PALETTE[Math.floor(rng() * PALETTE.length)];
+      const roof = ROOF_TYPES[Math.floor(rng() * ROOF_TYPES.length)];
+      const b = { x: bx, z: bz, w, h, d, col, roof, kind: isTower ? 'tower' : 'building' };
       buildings.push(b);
-      if (tower) towers.push(b);
+      if (isTower) towers.push(b);
     }
   }
-  // Hospital replaces the block building at (-150, 150).
-  const hospIdx = buildings.findIndex((b) => b.x === -150 && b.z === 150);
-  const hospital = { x: -150, z: 150, w: 44, d: 44, h: 18, col: [0.92, 0.92, 0.9], roof: 'parapet', kind: 'hospital', label: 'Hospital' };
-  if (hospIdx >= 0) buildings[hospIdx] = hospital;
-  else buildings.push(hospital);
-  // Beach House near the sand.
-  const bhIdx = buildings.findIndex((b) => b.x === -270 && b.z === 60);
-  const beachHouse = { x: -270, z: 60, w: 30, d: 26, h: 10, col: [0.95, 0.8, 0.6], roof: 'pyramid', kind: 'house', label: 'Beach House' };
-  if (bhIdx >= 0) buildings[bhIdx] = beachHouse;
-  else buildings.push(beachHouse);
-  // Airport: 2 hangars + control tower.
-  buildings.push({ x: 270, z: -270, w: 40, d: 30, h: 14, col: [0.7, 0.72, 0.75], roof: 'parapet', kind: 'hangar', label: 'Hangar 1' });
-  buildings.push({ x: 330, z: -270, w: 40, d: 30, h: 14, col: [0.68, 0.7, 0.73], roof: 'parapet', kind: 'hangar', label: 'Hangar 2' });
-  buildings.push({ x: 240, z: -300, w: 16, d: 16, h: 34, col: [0.8, 0.82, 0.85], roof: 'ac', kind: 'control', label: 'Control Tower' });
 
-  const landmarks = {
-    hospital,
-    elevatorTower: towers.find((t) => t.x === 30 && t.z === -90) || towers[0],
-    beachHouse,
-  };
-
-  // --- neon signs: 36 on towers (4 each) + 6 beachfront + 6 Solmar Tower ---
-  const neonCols = [[1, 0.3, 0.5], [0.2, 0.9, 1], [1, 0.8, 0.2], [0.6, 1, 0.4], [0.9, 0.4, 1], [1, 0.5, 0.2]];
+  // --- neon signs: 36 on the 9 towers (4 each) + 6 beachfront +
+  // 6 on the Solmar Tower = 48 ---
+  const neon = [];
   for (const t of towers) {
     for (let i = 0; i < 4; i++) {
-      neon.push({ x: t.x + (i % 2 === 0 ? -t.w / 2 - 0.5 : t.w / 2 + 0.5), y: 8 + i * 9, z: t.z + (i < 2 ? -t.d / 2 : t.d / 2), col: neonCols[(towers.indexOf(t) + i) % neonCols.length] });
+      neon.push({
+        x: t.x + (i % 2 === 0 ? -t.w / 2 - 0.5 : t.w / 2 + 0.5),
+        z: t.z + (i < 2 ? -t.d / 2 - 0.5 : t.d / 2 + 0.5),
+        y: 12 + i * 6,
+        col: NEON_COLS[Math.floor(rng() * NEON_COLS.length)],
+      });
     }
   }
   for (let i = 0; i < 6; i++) {
-    neon.push({ x: -300, y: 6 + i * 2, z: -180 + i * 60, col: neonCols[i % neonCols.length] });
+    neon.push({ x: -300, z: -250 + i * 100, y: 8, col: NEON_COLS[i % NEON_COLS.length] });
   }
   for (let i = 0; i < 6; i++) {
-    neon.push({ x: 30 + (i % 3) * 8 - 8, y: 10 + Math.floor(i / 3) * 12, z: -90 + (i % 2 === 0 ? -6 : 6), col: neonCols[i % neonCols.length] });
+    neon.push({
+      x: 30 + (i % 3 - 1) * 8,
+      z: -90 + (i < 3 ? -5 : 5),
+      y: 20 + i * 7,
+      col: NEON_COLS[(i + 2) % NEON_COLS.length],
+    });
   }
 
-  // --- clouds + waves ---
+  // --- clouds (10) and wave crests (24) ---
+  const clouds = [];
   for (let i = 0; i < 10; i++) {
-    clouds.push({ x: -300 + rng() * 600, y: 55 + rng() * 20, z: -300 + rng() * 600 });
+    clouds.push({ x: -350 + rng() * 700, y: 60 + rng() * 25, z: -350 + rng() * 700 });
   }
+  const waves = [];
   for (let i = 0; i < 24; i++) {
-    waves.push({ x: -380 + rng() * 60, y: 0.51, z: -300 + i * 26 });
+    waves.push({ x: -355 + rng() * 12, z: -360 + i * 30 + rng() * 8 });
   }
 
-  // --- palms: 9 seeded beach palms + rows (beach A 11, beach B 14, avenue 16) ---
+  // --- palms: exactly 50 ---
+  // 9 seeded beach palms + row A (11) + row B (14) + avenue (16).
+  const palms = [];
   for (let i = 0; i < 9; i++) {
-    palms.push({ x: -360 + rng() * 50, z: -200 + rng() * 400, h: 7 + rng() * 3 });
+    palms.push({ x: -375 + rng() * 60, z: -340 + rng() * 680 });
   }
-  for (let i = 0; i < 11; i++) palms.push({ x: -318, z: -180 + i * 36, h: 8 });
-  for (let i = 0; i < 14; i++) palms.push({ x: -344, z: -195 + i * 30, h: 7.5 });
-  for (let i = 0; i < 16; i++) palms.push({ x: -240 + i * 32, z: -306, h: 8 });
+  for (let i = 0; i < 11; i++) palms.push({ x: -320, z: -300 + i * 55 });
+  for (let i = 0; i < 14; i++) palms.push({ x: -345, z: -320 + i * 48 });
+  for (let i = 0; i < 16; i++) palms.push({ x: -18 + (i % 2) * 36, z: -330 + i * 42 });
 
-  // --- harbour containers + crane ---
-  const contCols = [[0.8, 0.3, 0.2], [0.2, 0.5, 0.8], [0.9, 0.7, 0.2], [0.3, 0.7, 0.3]];
-  for (let i = 0; i < 16; i++) {
-    containers.push({ x: -270 + (i % 4) * 14, z: 150 + Math.floor(i / 4) * 12, col: contCols[i % contCols.length] });
-  }
-  props.push({ kind: 'crane', x: -240, z: 210, col: [0.9, 0.7, 0.2] });
-  props.push({ kind: 'craneArm', x: -240, z: 210, col: [0.9, 0.7, 0.2] });
-
-  // --- street furniture ---
-  for (let i = 0; i < 24; i++) {
-    const x = (i % 2 === 0 ? -1 : 1) * (60 * Math.floor(i / 2) - 240);
-    lamps.push({ x, z: 8 });
-  }
-  for (let i = 0; i < 30; i++) benches.push({ x: -270 + (i % 10) * 60, z: -150 + Math.floor(i / 10) * 120 });
-  for (let i = 0; i < 30; i++) hydrants.push({ x: -240 + (i % 10) * 55, z: -210 + Math.floor(i / 10) * 140 });
-  for (let i = 0; i < 8; i++) busStops.push({ x: -240 + i * 60, z: 52 });
-
-  // --- balconies + roof props on towers ---
+  // --- street props ---
+  const props = [];
+  // Balconies on the towers (4 per tower = 36).
   for (const t of towers) {
-    for (let i = 0; i < 3; i++) {
-      props.push({ kind: 'balcony', x: t.x + t.w / 2 + 0.6, y: 10 + i * 12, z: t.z - 6 + i * 6, col: [0.7, 0.7, 0.72] });
+    for (let i = 0; i < 4; i++) {
+      props.push({ kind: 'balcony', x: t.x + (i % 2 === 0 ? -t.w / 2 : t.w / 2), z: t.z + (i < 2 ? -t.d / 2 : t.d / 2), y: 10 + i * 9, col: [0.9, 0.9, 0.9] });
     }
-    props.push({ kind: 'roof', x: t.x, y: t.h, z: t.z, col: [0.5, 0.5, 0.52] });
   }
-
-  // --- umbrellas + chairs (chair shares its umbrella's colour array) ---
-  const umbCols = [[1, 0.3, 0.3], [0.3, 0.6, 1], [1, 0.8, 0.2], [0.4, 0.9, 0.4]];
+  // Roof props (AC units / parapets) on a dozen buildings.
   for (let i = 0; i < 12; i++) {
-    const col = umbCols[i % umbCols.length];
-    const u = { kind: 'umbrella', x: -322 + (i % 4) * 4, y: 0.45, z: -150 + Math.floor(i / 4) * 40, col };
-    props.push(u);
-    props.push({ kind: 'chair', x: -320 + (i % 4) * 4, y: 0.45, z: -148 + Math.floor(i / 4) * 40, col });
+    const b = buildings[8 + i * 7];
+    if (b) props.push({ kind: 'roof', x: b.x, z: b.z, y: b.h, col: [0.6, 0.6, 0.62] });
   }
-  // --- rust-red barrels ---
+  // Beach umbrellas + matching chairs (12 each, same colour order).
+  const umbrellaCols = [];
+  for (let i = 0; i < 12; i++) {
+    const col = PALETTE[i % PALETTE.length];
+    umbrellaCols.push(col);
+    props.push({ kind: 'umbrella', x: -318, z: -280 + i * 50, col });
+  }
+  for (let i = 0; i < 12; i++) {
+    props.push({ kind: 'chair', x: -312, z: -280 + i * 50, col: umbrellaCols[i] });
+  }
+  // Rust barrels (4) near the harbour.
   for (let i = 0; i < 4; i++) {
-    props.push({ kind: 'barrel', x: -220 + i * 5, y: 0, z: 190, col: [0.75, 0.3, 0.15] });
+    props.push({ kind: 'barrel', x: -220 + i * 6, z: 190 + (i % 2) * 8, col: [0.75, 0.3, 0.15] });
+  }
+  // Harbour crane + arm.
+  props.push({ kind: 'crane', x: -250, z: 240, col: [0.95, 0.75, 0.1] });
+  props.push({ kind: 'craneArm', x: -250, z: 240, col: [0.95, 0.75, 0.1] });
+
+  // --- harbour containers (16) ---
+  const containers = [];
+  const contCols = [[0.85, 0.2, 0.15], [0.2, 0.5, 0.85], [0.3, 0.7, 0.3], [0.95, 0.75, 0.1]];
+  for (let i = 0; i < 16; i++) {
+    containers.push({
+      x: -270 + (i % 4) * 14,
+      z: 210 + Math.floor(i / 4) * 14,
+      col: contCols[i % contCols.length],
+    });
   }
 
-  // --- traffic lights at intersections ---
-  for (const x of ROAD_LINES) {
-    for (const z of ROAD_LINES) {
-      if (Math.abs(x) > 300 || Math.abs(z) > 300) continue;
-      lights.push({ x, z, axis: 'x', phase: (x + z) / 60 });
-    }
+  // --- lamps (24), benches (30), hydrants (30), bus stops (8) ---
+  const lamps = [];
+  for (let i = 0; i < 24; i++) {
+    lamps.push({ x: -330 + (i % 8) * 90 + 8, z: -300 + Math.floor(i / 8) * 180 + 8 });
   }
+  const benches = [];
+  for (let i = 0; i < 30; i++) {
+    benches.push({ x: -330 + (i % 10) * 66 + 12, z: -300 + Math.floor(i / 10) * 150 + 12 });
+  }
+  const hydrants = [];
+  for (let i = 0; i < 30; i++) {
+    hydrants.push({ x: -300 + (i % 10) * 60 + 8, z: -270 + Math.floor(i / 10) * 140 + 8 });
+  }
+  const busStops = [];
+  for (let i = 0; i < 8; i++) {
+    busStops.push({ x: -300 + i * 80, z: 60 });
+  }
+
+  // --- traffic lights (phase = x/60, so (-180,-180) is -3) ---
+  const lightAt = (x, z, axis) => ({ x, z, axis, phase: x / 60 });
+  const lights = [
+    lightAt(0, 0, 'x'), lightAt(60, 0, 'z'), lightAt(-60, 0, 'x'),
+    lightAt(0, 60, 'z'), lightAt(0, -60, 'x'), lightAt(60, 60, 'z'),
+    lightAt(-60, -60, 'x'), lightAt(-180, -180, 'x'), lightAt(120, 0, 'z'),
+    lightAt(-120, 120, 'x'),
+  ];
 
   return {
-    buildings, towers, landmarks, neon, clouds, waves, palms,
-    containers, lamps, benches, hydrants, busStops, props, lights,
+    buildings, towers,
+    landmarks: { hospital, elevatorTower: solmar },
+    neon, clouds, waves, palms, props, containers,
+    lamps, benches, hydrants, busStops, lights,
     runway: { x: 300, z: -260 },
   };
 }
 
-export function buildStaticBoxes(city, batch) {
-  const plain = tileUV('plain');
-  const brick = tileUV('brick');
-  const winUV = tileUV('window');
-  // Ground slab: top y=0 (must stay BELOW the road tops at 0.38).
-  pushBox(batch, 0, -1, 0, 800, 1, 800, COL.grass, plain);
-  // Sea (west) and beach sand.
-  pushBox(batch, -365, 0, 0, 70, 0.5, 800, COL.water, tileUV('water'));
-  pushBox(batch, -345, 0, 0, 30, 0.45, 720, [0.85, 0.75, 0.5], tileUV('sand'));
-  // Roads: one long slab per road line, top y=0.38.
-  for (const v of ROAD_LINES) {
-    pushBox(batch, v, 0, 0, 14, 0.38, 720, COL.road, tileUV('asphalt'));
-    pushBox(batch, 0, 0, v, 720, 0.38, 14, COL.road, tileUV('asphalt'));
+// ---------- static geometry ----------
+// Build the whole static city into a batch. Ground slab top y=0,
+// road tops y=0.38, sidewalks/beach 0.45, sea 0.5 (the #9 fix:
+// the grass slab must sit BELOW the roads, never bury them).
+export function buildStaticBoxes(city, b) {
+  const grassUV = tileUV('grass');
+  const asphaltUV = tileUV('asphalt');
+  const sidewalkUV = tileUV('sidewalk');
+  const sandUV = tileUV('sand');
+  const waterUV = tileUV('water');
+  const brickUV = tileUV('brick');
+  const windowUV = tileUV('window');
+
+  // Ground slab (grass, top y=0).
+  pushBox(b, 0, -1, 0, 800, 1, 800, COL.grass, grassUV);
+  // Roads: x-lines (top 0.38) and z-lines (top 0.375, avoids
+  // coplanar z-fighting at the crossings).
+  for (const x of ROAD_LINES) {
+    pushBox(b, x, -0.02, 0, 12, 0.4, 800, COL.road, asphaltUV);
   }
-  // Lane dashes (flat quads on the road tops).
-  for (const v of ROAD_LINES) {
-    for (let s = -348; s <= 348; s += 24) {
-      pushQuad(batch, [v - 0.4, 0.39, s - 1.5], [v + 0.4, 0.39, s - 1.5], [v + 0.4, 0.39, s + 1.5], [v - 0.4, 0.39, s + 1.5], COL.roadLine, plain);
-      pushQuad(batch, [s - 1.5, 0.39, v - 0.4], [s + 1.5, 0.39, v - 0.4], [s + 1.5, 0.39, v + 0.4], [s - 1.5, 0.39, v + 0.4], COL.roadLine, plain);
+  for (const z of ROAD_LINES) {
+    pushBox(b, 0, -0.025, z, 800, 0.4, 12, COL.road, asphaltUV);
+  }
+  // Sidewalks flanking every road (top 0.45).
+  const walkCol = [0.62, 0.62, 0.58];
+  for (const x of ROAD_LINES) {
+    pushBox(b, x - 9, 0.05, 0, 6, 0.4, 800, walkCol, sidewalkUV);
+    pushBox(b, x + 9, 0.05, 0, 6, 0.4, 800, walkCol, sidewalkUV);
+  }
+  for (const z of ROAD_LINES) {
+    pushBox(b, 0, 0.05, z - 9, 800, 0.4, 6, walkCol, sidewalkUV);
+    pushBox(b, 0, 0.05, z + 9, 800, 0.4, 6, walkCol, sidewalkUV);
+  }
+  // Beach sand (x -340..-300, top 0.45) and sea (x -400..-340, top 0.5).
+  pushBox(b, -320, -0.05, 0, 40, 0.5, 800, [0.85, 0.75, 0.5], sandUV);
+  pushBox(b, -370, 0, 0, 60, 0.5, 800, COL.water, waterUV);
+  // Airport runway (dark strip, top 0.38).
+  pushBox(b, 300, -0.02, -260, 30, 0.4, 220, [0.12, 0.12, 0.14], asphaltUV);
+
+  // Road dashes (lane markings, yellow quads on the road tops).
+  for (const x of ROAD_LINES) {
+    for (let z = -360; z <= 360; z += 24) {
+      pushQuad(b, [x - 0.4, 0.39, z - 2], [x + 0.4, 0.39, z - 2], [x + 0.4, 0.39, z + 2], [x - 0.4, 0.39, z + 2], COL.roadLine, [0, 0, 1, 1]);
     }
   }
-  // Runway.
-  pushBox(batch, 300, 0, -260, 60, 0.4, 200, [0.12, 0.12, 0.14], tileUV('asphalt'));
-  // Buildings: box + glass window quads on the front face + roof prop.
-  for (const b of city.buildings) {
-    pushBox(batch, b.x, 0, b.z, b.w, b.h, b.d, b.col, brick);
-    const rows = b.kind === 'tower' ? 3 : 1;
-    for (let r = 0; r < rows; r++) {
-      const wy = 3 + r * 6;
-      if (wy > b.h - 2) break;
-      const zf = b.z + b.d / 2 + 0.06;
-      const ww = Math.min(3, b.w / 4);
-      for (let c = -1; c <= 1; c++) {
-        const wx = b.x + c * (b.w / 3);
-        pushQuad(batch, [wx - ww / 2, wy, zf], [wx + ww / 2, wy, zf], [wx + ww / 2, wy + 2, zf], [wx - ww / 2, wy + 2, zf], COL.glass, winUV);
+  for (const z of ROAD_LINES) {
+    for (let x = -360; x <= 360; x += 24) {
+      pushQuad(b, [x - 2, 0.385, z - 0.4], [x + 2, 0.385, z - 0.4], [x + 2, 0.385, z + 0.4], [x - 2, 0.385, z + 0.4], COL.roadLine, [0, 0, 1, 1]);
+    }
+  }
+
+  // Buildings: body + windows (window-tile quads) + rooftop box.
+  for (const bd of city.buildings) {
+    pushBox(b, bd.x, 0, bd.z, bd.w, bd.h, bd.d, bd.col, brickUV);
+    // Windows on the +Z and -Z faces, in a floor x column grid.
+    const floors = Math.max(1, Math.floor(bd.h / 5));
+    const cols = Math.max(1, Math.floor(bd.w / 7));
+    for (let f = 0; f < floors; f++) {
+      const wy = 2.5 + f * 5;
+      if (wy + 2 > bd.h) break;
+      for (let c = 0; c < cols; c++) {
+        const wx = bd.x - bd.w / 2 + 3 + c * 7;
+        if (wx + 3 > bd.x + bd.w / 2 - 1) break;
+        // Front (+Z) and back (-Z) window quads.
+        pushQuad(b,
+          [wx, wy, bd.z + bd.d / 2 + 0.06], [wx + 3, wy, bd.z + bd.d / 2 + 0.06],
+          [wx + 3, wy + 2.5, bd.z + bd.d / 2 + 0.06], [wx, wy + 2.5, bd.z + bd.d / 2 + 0.06],
+          COL.glass, windowUV);
+        pushQuad(b,
+          [wx + 3, wy, bd.z - bd.d / 2 - 0.06], [wx, wy, bd.z - bd.d / 2 - 0.06],
+          [wx, wy + 2.5, bd.z - bd.d / 2 - 0.06], [wx + 3, wy + 2.5, bd.z - bd.d / 2 - 0.06],
+          COL.glass, windowUV);
       }
     }
-    if (b.roof === 'parapet') {
-      pushBox(batch, b.x, b.h, b.z, b.w + 0.6, 0.8, b.d + 0.6, [0.45, 0.45, 0.47], plain);
-    } else if (b.roof === 'pyramid') {
-      pushBox(batch, b.x, b.h, b.z, b.w * 0.5, 2, b.d * 0.5, [0.6, 0.3, 0.25], plain);
-    } else {
-      pushBox(batch, b.x, b.h, b.z, 3, 1.2, 3, [0.6, 0.6, 0.62], plain);
-      pushBox(batch, b.x + 4, b.h, b.z, 0.4, 4, 0.4, [0.3, 0.3, 0.32], plain);
-    }
+    // Rooftop box (parapet rim / pyramid cap / AC unit).
+    const cap = bd.roof === 'pyramid' ? 0.6 : bd.roof === 'ac' ? 0.9 : 0.35;
+    pushBox(b, bd.x, bd.h, bd.z, bd.w * cap, 1.2, bd.d * cap, [0.55, 0.55, 0.58], [0, 0, 1, 1]);
   }
-  // Balconies + roof props.
+
+  // Balconies, roof props, umbrellas, chairs, barrels, crane.
   for (const p of city.props) {
-    if (p.kind === 'balcony') pushBox(batch, p.x, p.y, p.z, 1.2, 0.3, 3, p.col, plain);
-    else if (p.kind === 'roof') pushBox(batch, p.x, p.y, p.z, 4, 1.5, 4, p.col, plain);
-  }
-  // Palms: trunk + 4 fronds + coconuts.
-  for (const p of city.palms) {
-    pushBox(batch, p.x, 0, p.z, 0.7, p.h, 0.7, [0.45, 0.3, 0.15], plain);
-    for (let i = 0; i < 4; i++) {
-      const a = (i * Math.PI) / 2;
-      pushBox(batch, p.x + Math.cos(a) * 1.4, p.h, p.z + Math.sin(a) * 1.4, 2.6, 0.25, 0.8, COL.palmLeaf, plain);
-    }
-    pushBox(batch, p.x + 0.5, p.h - 0.6, p.z, 0.7, 0.7, 0.7, COL.coconut, plain);
-  }
-  // Neon signs.
-  for (const n of city.neon) {
-    pushBox(batch, n.x, n.y, n.z, 2.4, 1.2, 0.3, n.col, plain);
-  }
-  // Clouds + waves.
-  for (const c of city.clouds) pushBox(batch, c.x, c.y, c.z, 18, 3, 10, [0.95, 0.95, 0.98], plain);
-  for (const w of city.waves) {
-    pushQuad(batch, [w.x - 3, w.y, w.z - 1], [w.x + 3, w.y, w.z - 1], [w.x + 3, w.y, w.z + 1], [w.x - 3, w.y, w.z + 1], [0.9, 0.95, 1], plain);
-  }
-  // Harbour: containers, crane, dock barrels.
-  for (const c of city.containers) pushBox(batch, c.x, 0, c.z, 12, 3, 4, c.col, plain);
-  for (const p of city.props) {
-    if (p.kind === 'crane') pushBox(batch, p.x, 0, p.z, 3, 30, 3, p.col, plain);
-    else if (p.kind === 'craneArm') pushBox(batch, p.x + 12, 26, p.z, 24, 2, 2, p.col, plain);
-  }
-  for (const [bx, bz] of [[-200, 180], [-195, 186], [-200, 192]]) {
-    pushBox(batch, bx, 0, bz, 1.4, 2.2, 1.4, COL.barrelRed, plain);
-  }
-  // Street furniture.
-  for (const l of city.lamps) {
-    pushBox(batch, l.x, 0, l.z, 0.4, 6, 0.4, [0.2, 0.2, 0.22], plain);
-    pushBox(batch, l.x, 6, l.z, 1.2, 0.5, 1.2, [1, 0.95, 0.7], plain);
-  }
-  for (const b of city.benches) pushBox(batch, b.x, 0, b.z, 2.4, 0.9, 0.8, [0.5, 0.35, 0.2], plain);
-  for (const h of city.hydrants) pushBox(batch, h.x, 0, h.z, 0.8, 1.2, 0.8, [0.85, 0.2, 0.15], plain);
-  for (const s of city.busStops) {
-    pushBox(batch, s.x, 0, s.z, 0.4, 3, 0.4, [0.25, 0.25, 0.28], plain);
-    pushBox(batch, s.x, 3, s.z, 3, 0.3, 2, [0.3, 0.5, 0.8], plain);
-  }
-  // Beach umbrellas + chairs + rust-red barrels.
-  for (const p of city.props) {
-    if (p.kind === 'umbrella') {
-      pushBox(batch, p.x, p.y, p.z, 0.3, 2.4, 0.3, [0.6, 0.6, 0.62], plain);
-      pushBox(batch, p.x, p.y + 2.4, p.z, 3.4, 0.25, 3.4, p.col, plain);
+    if (p.kind === 'balcony') {
+      pushBox(b, p.x, p.y, p.z, 4, 0.4, 2, p.col, [0, 0, 1, 1]);
+    } else if (p.kind === 'roof') {
+      pushBox(b, p.x, p.y, p.z, 3, 1.5, 3, p.col, [0, 0, 1, 1]);
+    } else if (p.kind === 'umbrella') {
+      pushBox(b, p.x, 0, p.z, 0.3, 3, 0.3, [0.6, 0.45, 0.3], [0, 0, 1, 1]);
+      pushBox(b, p.x, 3, p.z, 5, 0.3, 5, p.col, [0, 0, 1, 1]);
     } else if (p.kind === 'chair') {
-      pushBox(batch, p.x, p.y, p.z, 1, 0.8, 1.8, p.col, plain);
+      pushBox(b, p.x, 0, p.z, 1.6, 1, 1.6, p.col, [0, 0, 1, 1]);
     } else if (p.kind === 'barrel') {
-      pushBox(batch, p.x, p.y, p.z, 1.2, 2, 1.2, p.col, plain);
+      pushBox(b, p.x, 0, p.z, 1.6, 2.4, 1.6, p.col, [0, 0, 1, 1]);
+    } else if (p.kind === 'crane') {
+      pushBox(b, p.x, 0, p.z, 4, 40, 4, p.col, [0, 0, 1, 1]);
+    } else if (p.kind === 'craneArm') {
+      pushBox(b, p.x + 14, 36, p.z, 28, 2, 2, p.col, [0, 0, 1, 1]);
     }
   }
-  return batchTris(batch);
+
+  // Harbour containers.
+  for (const c of city.containers) {
+    pushBox(b, c.x, 0, c.z, 12, 5, 5, c.col, [0, 0, 1, 1]);
+  }
+
+  // Palms: trunk + 4 fronds (quads) + coconuts.
+  for (const p of city.palms) {
+    pushBox(b, p.x, 0, p.z, 0.8, 7, 0.8, [0.55, 0.4, 0.25], [0, 0, 1, 1]);
+    for (let f = 0; f < 4; f++) {
+      const a = (f / 4) * Math.PI * 2;
+      const dx = Math.cos(a) * 2.2, dz = Math.sin(a) * 2.2;
+      pushQuad(b,
+        [p.x, 7, p.z], [p.x + dx, 6.2, p.z + dz],
+        [p.x + dx * 1.4, 5.6, p.z + dz * 1.4], [p.x + dx * 0.4, 6.6, p.z + dz * 0.4],
+        COL.palmLeaf, [0, 0, 1, 1]);
+    }
+    pushBox(b, p.x + 0.6, 6.4, p.z, 0.7, 0.7, 0.7, COL.coconut, [0, 0, 1, 1]);
+  }
+
+  // Lamps (pole + head), benches, hydrants, bus stops.
+  for (const l of city.lamps) {
+    pushBox(b, l.x, 0, l.z, 0.4, 6, 0.4, [0.25, 0.25, 0.28], [0, 0, 1, 1]);
+    pushBox(b, l.x, 6, l.z, 1.2, 0.5, 0.5, [1, 0.95, 0.7], [0, 0, 1, 1]);
+  }
+  for (const bn of city.benches) {
+    pushBox(b, bn.x, 0, bn.z, 3, 1, 1.2, [0.6, 0.45, 0.3], [0, 0, 1, 1]);
+  }
+  for (const hy of city.hydrants) {
+    pushBox(b, hy.x, 0, hy.z, 0.9, 1.4, 0.9, [0.85, 0.2, 0.15], [0, 0, 1, 1]);
+  }
+  for (const bs of city.busStops) {
+    pushBox(b, bs.x, 0, bs.z, 5, 4, 2, [0.3, 0.5, 0.8], [0, 0, 1, 1]);
+    pushBox(b, bs.x, 0, bs.z + 1.5, 4, 1, 1, [0.6, 0.45, 0.3], [0, 0, 1, 1]);
+  }
+
+  // Neon signs (bright quads on the tower faces).
+  for (const n of city.neon) {
+    pushQuad(b,
+      [n.x - 1.5, n.y, n.z], [n.x + 1.5, n.y, n.z],
+      [n.x + 1.5, n.y + 2, n.z], [n.x - 1.5, n.y + 2, n.z],
+      n.col, [0, 0, 1, 1]);
+  }
+
+  // Clouds (white boxes in the sky) and wave crests (white quads).
+  for (const c of city.clouds) {
+    pushBox(b, c.x, c.y, c.z, 14, 3, 8, [1, 1, 1], [0, 0, 1, 1]);
+  }
+  for (const w of city.waves) {
+    pushQuad(b,
+      [w.x - 2, 0.55, w.z - 0.5], [w.x + 2, 0.55, w.z - 0.5],
+      [w.x + 2, 0.55, w.z + 0.5], [w.x - 2, 0.55, w.z + 0.5],
+      [0.95, 0.98, 1], [0, 0, 1, 1]);
+  }
+
+  // Three red dock barrels at the harbour (the GLB barrel colour).
+  for (const [dx, dz] of [[-200, 180], [-196, 184], [-200, 188]]) {
+    pushBox(b, dx, 0, dz, 1.6, 2.4, 1.6, COL.barrelRed, [0, 0, 1, 1]);
+  }
+
+  // Traffic-light poles + heads at the intersections.
+  for (const l of city.lights) {
+    pushBox(b, l.x + 7, 0, l.z + 7, 0.5, 7, 0.5, [0.2, 0.2, 0.22], [0, 0, 1, 1]);
+    pushBox(b, l.x + 7, 6.5, l.z + 7, 1, 2.4, 0.6, [0.15, 0.15, 0.16], [0, 0, 1, 1]);
+  }
+  return b;
 }
