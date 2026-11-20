@@ -1,76 +1,74 @@
-// Solmar Bay — save/load.
+// Solmar Bay — save / load.
 //
-// One localStorage slot per save slot. Every call is try/catch
-// guarded: a save must NEVER throw and kill the game loop (the
-// pause handler calls saveGame, and a throw there would freeze
-// the game with no visible error).
+// One slot per key ('solmar-bay-save-1'). Only progress is saved —
+// chapter, cash, respect, completion and the owned cars. The player
+// position is deliberately NOT saved: loading always restarts the
+// player at the spawn. In Node (no localStorage) every call is a
+// safe no-op returning false / null.
 
-const KEY = 'solmar-bay-save-';
+const KEY = 'solmar-bay-save-1';
 
-export function saveGame(game, slot) {
+function storage() {
   try {
-    if (typeof localStorage === 'undefined') return false;
-    const data = {
-      cash: game.cash,
-      bank: game.bank,
-      chapter: game.chapter,
-      chapterDone: game.chapterDone,
-      completion: game.completion,
-      respect: game.respect,
-      day: game.day,
-      clock: game.clock,
-      ownedCars: game.ownedCars,
-      unlocks: game.unlocks,
-      outfit: game.player.outfit,
-      stats: game.stats,
-      savedAt: Date.now(),
-    };
-    localStorage.setItem(KEY + (slot || game.saveSlot || 1), JSON.stringify(data));
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-export function loadGame(game, slot) {
-  try {
-    if (typeof localStorage === 'undefined') return null;
-    const raw = localStorage.getItem(KEY + (slot || game.saveSlot || 1));
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    game.cash = data.cash;
-    game.bank = data.bank;
-    game.chapter = data.chapter;
-    game.chapterDone = data.chapterDone;
-    game.completion = data.completion;
-    game.respect = data.respect;
-    game.day = data.day;
-    game.clock = data.clock;
-    game.ownedCars = data.ownedCars || [];
-    game.unlocks = data.unlocks || game.unlocks;
-    game.player.outfit = data.outfit || game.player.outfit;
-    game.stats = data.stats || game.stats;
-    return data;
-  } catch (e) {
+    return typeof globalThis !== 'undefined' && globalThis.localStorage ? globalThis.localStorage : null;
+  } catch {
     return null;
   }
 }
 
-export function hasSave(slot) {
+export function saveGame(g, slot = 1) {
+  const store = storage();
+  if (!store) return false;
   try {
-    if (typeof localStorage === 'undefined') return false;
-    return localStorage.getItem(KEY + (slot || 1)) !== null;
-  } catch (e) {
+    const data = {
+      chapter: g.chapter || 1,
+      cash: g.cash || 0,
+      respect: g.respect || 0,
+      completion: g.completion || 0,
+      ownedCars: g.ownedCars || [],
+    };
+    store.setItem(KEY, JSON.stringify(data));
+    return true;
+  } catch {
     return false;
   }
 }
 
-export function clearSave(slot) {
+export function loadGame(g, slot = 1) {
+  const store = storage();
+  if (!store) return null;
   try {
-    if (typeof localStorage === 'undefined') return false;
-    localStorage.removeItem(KEY + (slot || 1));
+    const raw = store.getItem(KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (data.chapter !== undefined) g.chapter = data.chapter;
+    if (data.cash !== undefined) g.cash = data.cash;
+    if (data.respect !== undefined) g.respect = data.respect;
+    if (data.completion !== undefined) g.completion = data.completion;
+    if (data.ownedCars !== undefined) g.ownedCars = data.ownedCars;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export function hasSave(slot = 1) {
+  const store = storage();
+  if (!store) return false;
+  try {
+    return store.getItem(KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+export function clearSave(slot = 1) {
+  const store = storage();
+  if (!store) return false;
+  try {
+    store.removeItem(KEY);
     return true;
-  } catch (e) {
+  } catch {
     return false;
   }
 }

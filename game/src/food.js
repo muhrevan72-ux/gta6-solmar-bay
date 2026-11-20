@@ -1,68 +1,51 @@
 // Solmar Bay — food shops.
 //
-// Five food shops (Pizza Palace, Burger Barn, Clucky's Chicken,
-// Donut Dock, Taco Tide). Stand at a shop front (within 5 m) and
-// press E to open the menu: Snack $5 (+10 HP), Meal $10 (+25 HP),
-// Feast $15 (+100 HP, +25 armour). The shop points sit at the
-// shop FRONTS — just outside the building, on standable ground,
-// never inside a collider — and 5 m south of the interior doors
-// so the food radius and the door radius do not overlap.
+// Five storefronts. Standing at a front opens the menu; buying
+// charges the FOOD_MENU price and applies its effect. The shop
+// signs are drawn as five boxes in the dynamic batch.
 
-import { FOOD_MENU, FOOD_SHOPS, TUNE } from './config.js';
+import { FOOD_SHOPS, FOOD_MENU } from './config.js';
 import { pushBox } from './render.js';
-import { tileUV } from './texture.js';
-import { dist } from './config.js';
-import { showToast } from './state.js';
 
-export function nearestFoodShop(game) {
-  const p = game.player;
+export function nearestFoodShop(g) {
   let best = null;
   let bestD = 5;
-  for (const s of FOOD_SHOPS) {
-    const d = dist(s.x, s.z, p.x, p.z);
-    if (d < bestD) {
-      best = s;
-      bestD = d;
-    }
+  for (const shop of FOOD_SHOPS) {
+    const d = Math.hypot(g.player.x - shop.x, g.player.z - shop.z);
+    if (d < bestD) { bestD = d; best = shop; }
   }
   return best;
 }
 
-export function tryFoodShop(game) {
-  const shop = nearestFoodShop(game);
+export function tryFoodShop(g) {
+  const shop = nearestFoodShop(g);
   if (!shop) return false;
-  const lines = FOOD_MENU.map((m, i) => `${i + 1}. ${m.name} — $${m.price} (+${m.heal} HP${m.armour ? `, +${m.armour} armour` : ''})`).join('\n');
-  game.modal = {
+  g.modal = {
     kind: 'food',
     title: shop.name,
-    lines: [lines, '', 'Press 1-3 to order, Esc to leave.'],
+    lines: FOOD_MENU.map((m, i) => `${i + 1}. ${m.name} — $${m.price} (+${m.hp} HP)`),
   };
-  game._foodShop = shop;
   return true;
 }
 
-export function buyFood(game, idx) {
-  const m = FOOD_MENU[idx];
-  if (!m) return false;
-  if (game.cash < m.price) {
-    showToast(game, 'Not enough cash for that.');
-    return false;
-  }
-  game.cash -= m.price;
-  game.health = Math.min(100, game.health + m.heal);
-  game.armour = Math.min(100, game.armour + m.armour);
-  showToast(game, `${m.name} — HP ${game.health}, armour ${game.armour}`);
-  if (game.audio) game.audio.sfx('pickup');
-  game.modal = null;
-  game._foodShop = null;
+export function buyFood(g, idx) {
+  const item = FOOD_MENU[idx];
+  if (!item) return false;
+  if ((g.cash || 0) < item.price) return false;
+  g.cash -= item.price;
+  g.health = Math.min(100, (g.health || 0) + (item.heal || 0));
+  if (item.armour) g.armour = (g.armour || 0) + item.armour;
+  if (g.player) g.player.health = g.health;
+  g.modal = null;
   return true;
 }
 
-// Food-shop signs: a coloured sign box above each shop front.
-export function foodSignBoxes(game, b, cam) {
-  const uv = tileUV('plain');
-  for (const s of FOOD_SHOPS) {
-    pushBox(b, s.x, 6, s.z - 6, 6, 1.5, 0.5, s.colour, uv);
+// One sign box per shop.
+export function foodSignBoxes(g, b, camera) {
+  let n = 0;
+  for (const shop of FOOD_SHOPS) {
+    pushBox(b, shop.x, 3, shop.z + 2, 4, 1.2, 0.3, [0.95, 0.8, 0.2]);
+    n++;
   }
-  return FOOD_SHOPS.length;
+  return n;
 }

@@ -1,74 +1,67 @@
-// Solmar Bay — dating.
+// Solmar Bay — dating Maya.
 //
-// Maya lives near the beach house. Raise the relationship by
-// taking her on dates (beach, restaurant, movie): each date
-// costs $30 and adds +25 relationship. At 75+ she calls the
-// player with tips (mission markers). The date itself is a short
-// walk together, then a card.
+// Maya lives by the beach house (-300, 60). A date costs $30 and
+// lasts 20 s; afterwards the relationship rises by 25 (capped at
+// 100), and at 75+ she shares a tip. She calls the player once the
+// relationship is warm enough.
 
 import { SPAWNS } from './config.js';
 import { pushBox } from './render.js';
-import { tileUV } from './texture.js';
-import { dist } from './config.js';
-import { showToast, showDialogue } from './state.js';
 
-export function mayaPos(game) {
-  return { x: -300, z: 60 };
+export function mayaPos(g) {
+  return { x: (g.maya && g.maya.x) || -300, z: (g.maya && g.maya.z) || 60 };
 }
 
-export function tryDate(game) {
-  const p = game.player;
-  const m = mayaPos(game);
-  if (dist(p.x, p.z, m.x, m.z) > 6) return false;
-  if (game.maya.onDate) return false;
-  if (game.cash < 30) {
-    showToast(game, 'A date costs $30 — you cannot afford it.');
-    return false;
-  }
-  game.cash -= 30;
-  game.maya.onDate = true;
-  game.maya.stage = 0;
-  showDialogue(game, 'Maya', 'Date', 'A walk on the beach? I like that. Let us go.');
+export function tryDate(g) {
+  const m = mayaPos(g);
+  if (Math.hypot(g.player.x - m.x, g.player.z - m.z) > 4) return false;
+  if ((g.cash || 0) < 30) return false;
+  g.cash -= 30;
+  g.maya.onDate = true;
+  g.maya.dateT = 0;
   return true;
 }
 
-export function dateAte(game, dt) {
-  if (!game.maya.onDate) return;
-  game.maya.stage += dt;
-  if (game.maya.stage > 20) {
-    game.maya.onDate = false;
-    game.maya.rel = Math.min(100, game.maya.rel + 25);
-    showToast(game, `Date over — Maya likes you more (rel ${game.maya.rel})`);
-    if (game.maya.rel >= 75) {
-      showDialogue(game, 'Maya', 'Tip', 'I heard the Sharks are moving goods through the harbour tonight. Be careful out there.');
-    }
+export function dateAte(g, dt) {
+  if (!g.maya.onDate) return;
+  g.maya.dateT = (g.maya.dateT || 0) + dt;
+  if (g.maya.dateT < 20) return;
+  g.maya.onDate = false;
+  g.maya.dateT = 0;
+  g.maya.rel = Math.min(100, (g.maya.rel || 0) + 25);
+  if (g.maya.rel >= 75) {
+    g.dialogue = {
+      name: 'Maya',
+      role: 'Beach House',
+      text: 'The Sharks run the harbour at night — stay clear of the docks after dark.',
+      t: 10,
+    };
   }
 }
 
-// Maya sometimes calls with a tip.
-export function maybeMayaCall(game, rng) {
-  if (game.maya.rel < 50) return false;
-  if (Math.random() < 0.001) {
-    game.messages.push({ from: 'Maya', text: 'The Kings are throwing a party downtown tonight. Free food if you show up!', t: game.time });
-    game.unread += 1;
-    return true;
-  }
-  return false;
+export function maybeMayaCall(g) {
+  if ((g.maya.rel || 0) < 50) return false;
+  if ((g._mayaCallCd || 0) > 0) return false;
+  g._mayaCallCd = 300;
+  g.messages = g.messages || [];
+  g.messages.push({ from: 'Maya', text: 'Hey, come by the beach house when you are free.', t: g.time || 0 });
+  g.unread = (g.unread || 0) + 1;
+  return true;
 }
 
-export function mayaBoxes(game, b, cam) {
-  const uv = tileUV('plain');
-  const m = mayaPos(game);
-  const p = game.player;
-  // Maya walks beside the player during a date.
-  const x = game.maya.onDate ? p.x + 1.5 : m.x;
-  const z = game.maya.onDate ? p.z + 1 : m.z;
-  pushBox(b, x - 0.15, 0, z, 0.28, 0.85, 0.28, [0.2, 0.25, 0.4], uv);
-  pushBox(b, x + 0.15, 0, z, 0.28, 0.85, 0.28, [0.2, 0.25, 0.4], uv);
-  pushBox(b, x, 0.85, z, 0.75, 0.7, 0.4, [1, 0.25, 0.6], uv);
-  pushBox(b, x - 0.5, 0.9, z, 0.22, 0.65, 0.22, [0.95, 0.8, 0.65], uv);
-  pushBox(b, x + 0.5, 0.9, z, 0.22, 0.65, 0.22, [0.95, 0.8, 0.65], uv);
-  pushBox(b, x, 1.55, z, 0.45, 0.45, 0.45, [0.95, 0.8, 0.65], uv);
-  pushBox(b, x, 1.9, z, 0.48, 0.2, 0.48, [0.25, 0.18, 0.1], uv);
-  return 7;
+// Maya: dress, hair, head, 2 arms, 2 legs — 7 boxes.
+export function mayaBoxes(g, b, camera) {
+  const m = mayaPos(g);
+  const skin = [0.85, 0.65, 0.5];
+  const dress = [0.9, 0.4, 0.6];
+  let n = 0;
+  const put = (x, y, z, w, h, d, col) => { pushBox(b, x, y, z, w, h, d, col); n++; };
+  put(m.x, 0.7, m.z, 0.55, 1.0, 0.35, dress); // dress
+  put(m.x, 1.5, m.z, 0.4, 0.4, 0.4, skin); // head
+  put(m.x, 1.88, m.z, 0.44, 0.18, 0.44, [0.3, 0.2, 0.1]); // hair
+  put(m.x - 0.36, 0.9, m.z, 0.18, 0.55, 0.18, skin); // left arm
+  put(m.x + 0.36, 0.9, m.z, 0.18, 0.55, 0.18, skin); // right arm
+  put(m.x - 0.14, 0.15, m.z, 0.22, 0.3, 0.22, skin); // left leg
+  put(m.x + 0.14, 0.15, m.z, 0.22, 0.3, 0.22, skin); // right leg
+  return n;
 }

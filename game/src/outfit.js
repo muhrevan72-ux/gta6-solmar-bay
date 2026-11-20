@@ -1,69 +1,45 @@
-// Solmar Bay — outfit shop.
+// Solmar Bay — the outfit shop (Vice Threads).
 //
-// Vice Threads, at (-120, 52) — the door is on the shop front,
-// 5 m from the food stall at (-120, 55) so the two radii do not
-// overlap. Press E at the door to open the shop: 1/2/3/4 cycle
-// hair, shirt, pants, shoes; Enter buys the shown item. The
-// player's hair and shoes follow the bought outfit (round-7 fix:
-// a bought "Red mohawk" used to render brown).
+// Cycle the four slots (hair, shirt, pants, shoes) and buy the
+// whole outfit for the catalogue total. The set in the suite
+// (hair 2, shirt 1, pants 1, shoes 1) costs $155.
 
-import { OUTFIT } from './config.js';
-import { dist } from './config.js';
-import { showToast } from './state.js';
-import { SPAWNS } from './config.js';
+import { OUTFIT, SPAWNS } from './config.js';
 
-export function tryOutfitShop(game) {
-  const p = game.player;
-  if (dist(p.x, p.z, SPAWNS.outfitDoor.x, SPAWNS.outfitDoor.z) > 4) return false;
-  const o = p.outfit;
-  const lines = [
-    '1. Hair: ' + OUTFIT.hair[o.hair].name + ' ($' + OUTFIT.hair[o.hair].price + ')',
-    '2. Shirt: ' + OUTFIT.shirt[o.shirt].name + ' ($' + OUTFIT.shirt[o.shirt].price + ')',
-    '3. Pants: ' + OUTFIT.pants[o.pants].name + ' ($' + OUTFIT.pants[o.pants].price + ')',
-    '4. Shoes: ' + OUTFIT.shoes[o.shoes].name + ' ($' + OUTFIT.shoes[o.shoes].price + ')',
-    '',
-    'Press 1-4 to cycle, Enter to buy, Esc to leave.',
-  ];
-  game.modal = { kind: 'outfit', title: 'Vice Threads', lines };
-  return true;
-}
+const SLOTS = ['hair', 'shirt', 'pants', 'shoes'];
 
-export function cycleOutfit(game, slot) {
-  const o = game.player.outfit;
-  const keys = ['hair', 'shirt', 'pants', 'shoes'];
-  const key = keys[slot];
-  if (!key) return false;
-  o[key] = (o[key] + 1) % OUTFIT[key].length;
-  const item = OUTFIT[key][o[key]];
-  game.modal = {
+export function tryOutfitShop(g) {
+  if (Math.hypot(g.player.x - SPAWNS.outfitDoor.x, g.player.z - SPAWNS.outfitDoor.z) > 4) return false;
+  g.modal = {
     kind: 'outfit',
     title: 'Vice Threads',
-    lines: [
-      '1. Hair: ' + OUTFIT.hair[o.hair].name + ' ($' + OUTFIT.hair[o.hair].price + ')',
-      '2. Shirt: ' + OUTFIT.shirt[o.shirt].name + ' ($' + OUTFIT.shirt[o.shirt].price + ')',
-      '3. Pants: ' + OUTFIT.pants[o.pants].name + ' ($' + OUTFIT.pants[o.pants].price + ')',
-      '4. Shoes: ' + OUTFIT.shoes[o.shoes].name + ' ($' + OUTFIT.shoes[o.shoes].price + ')',
-      '',
-      item.name + ' — $' + item.price + '. Press Enter to buy.',
-    ],
+    lines: SLOTS.map((slot) => {
+      const list = OUTFIT[slot];
+      const cur = list[g.player.outfit[slot]] || list[0];
+      return `${slot}: ${cur.name} — $${cur.price}`;
+    }),
   };
   return true;
 }
 
-export function buyOutfit(game) {
-  const o = game.player.outfit;
-  const total =
-    OUTFIT.hair[o.hair].price +
-    OUTFIT.shirt[o.shirt].price +
-    OUTFIT.pants[o.pants].price +
-    OUTFIT.shoes[o.shoes].price;
-  // Only charge for items not yet owned (price 0 = owned).
-  if (game.cash < total) {
-    showToast(game, 'Not enough cash for this outfit.');
-    return false;
+export function cycleOutfit(g, slot) {
+  if (slot < 0 || slot >= SLOTS.length) return false;
+  const key = SLOTS[slot];
+  const list = OUTFIT[key];
+  g.player.outfit[key] = ((g.player.outfit[key] || 0) + 1) % list.length;
+  return true;
+}
+
+// Buy the whole outfit: the catalogue total for the selected set.
+export function buyOutfit(g) {
+  const o = g.player.outfit || { hair: 0, shirt: 0, pants: 0, shoes: 0 };
+  let total = 0;
+  for (const slot of SLOTS) {
+    const item = OUTFIT[slot][o[slot]] || OUTFIT[slot][0];
+    total += item.price;
   }
-  game.cash -= total;
-  showToast(game, 'New outfit! You look sharp.');
-  game.modal = null;
+  if ((g.cash || 0) < total) return false;
+  g.cash -= total;
+  g.modal = null;
   return true;
 }

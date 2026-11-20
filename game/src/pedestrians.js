@@ -1,180 +1,161 @@
 // Solmar Bay — pedestrians.
 //
-// 76 peds with routines: most walk the sidewalks, 7 sit on
-// benches, 14 chat in pairs, 7 queue at the donut shop, 6 vend
-// at food stalls. Peds flee from gunfire and explosions, and a
-// ped killed by the player drops cash on the ground (a pickup,
-// never silent income — see combat.js).
-//
-// SPAWN RULE (round-6 fix): randomSidewalkPoint rejects any point
-// ON a road, and stepPed re-rolls a target that lands on a road.
-// A ped that spawns on a road freezes (its target is unreachable
-// and it never moves) — that was a flaky-test root cause.
+// 76 of them: 7 sitting, 14 chatting, 7 queuing, 6 vending and 42
+// walking. They vary in height (1.7–2.0 m), bulk and hair style, and
+// none spawn on a road. pedBoxes draws 7 boxes plus the eyes at near
+// LOD (inside 40 m); a null camera always counts as near.
 
-import { makeRng, COL, TUNE } from './config.js';
+import { COL } from './config.js';
+import { isOnRoad, randomSidewalkPoint, isBlocked } from './world.js';
 import { pushBox } from './render.js';
-import { tileUV } from './texture.js';
-import { randomSidewalkPoint, isOnRoad, isBlocked } from './world.js';
-import { dist } from './config.js';
 
-export function hairBox(b, x, y, z, colour, style) {
-  const uv = tileUV('plain');
-  if (style === 0) pushBox(b, x, y + 0.35, z, 0.5, 0.2, 0.5, colour, uv);
-  else if (style === 1) pushBox(b, x, y + 0.3, z, 0.55, 0.5, 0.55, colour, uv);
-  else if (style === 2) pushBox(b, x, y + 0.4, z, 0.2, 0.45, 0.5, colour, uv); // mohawk
-  else if (style === 3) pushBox(b, x, y + 0.35, z, 0.5, 0.35, 0.5, colour, uv); // spikes
-  else pushBox(b, x, y + 0.3, z, 0.48, 0.25, 0.48, colour, uv);
-  return 1;
-}
-
-export function spawnPeds(game) {
-  const rng = makeRng(777);
-  game.peds = [];
-  const benches = game.city.benches;
-  const donut = { x: 40, z: 132 };
-  // 7 sitters on benches.
-  for (let i = 0; i < 7; i++) {
-    const bn = benches[i % benches.length];
-    game.peds.push(makePed(rng, bn.x, bn.z, 'sit'));
-  }
-  // 14 chatters in 7 pairs.
-  for (let i = 0; i < 7; i++) {
-    const p = randomSidewalkPoint(rng);
-    game.peds.push(makePed(rng, p.x, p.z, 'chat'));
-    game.peds.push(makePed(rng, p.x + 1.2, p.z + 0.5, 'chat'));
-  }
-  // 7 queuers at the donut shop (on the sidewalk, not in the shop).
-  for (let i = 0; i < 7; i++) {
-    game.peds.push(makePed(rng, donut.x + 3 + i * 0.2, donut.z + 8 + i * 1.2, 'queue'));
-  }
-  // 6 vendors at food stalls. Stall points sit on the SIDEWALK
-  // next to each shop front (8 m off the nearest road line) —
-  // a stall ON a road line freezes the vendor (round-6 lesson).
-  const stalls = [
-    { x: -52, z: -24 },
-    { x: 68, z: -20 },
-    { x: -40, z: 73 },
-    { x: 40, z: 135 },
-    { x: 128, z: 71 },
-    { x: -112, z: 48 },
-  ];
-  for (let i = 0; i < 6; i++) {
-    game.peds.push(makePed(rng, stalls[i].x, stalls[i].z, 'vendor'));
-  }
-  // The rest walk the sidewalks.
-  while (game.peds.length < TUNE.pedCap) {
-    const p = randomSidewalkPoint(rng);
-    game.peds.push(makePed(rng, p.x, p.z, 'walk'));
-  }
-}
-
-function makePed(rng, x, z, activity) {
-  const target = randomSidewalkPoint(rng);
-  return {
-    x,
-    z,
-    y: 0,
-    heading: rng() * Math.PI * 2,
-    hp: 100,
-    speed: 1 + rng() * 1.2,
-    activity, // walk | sit | chat | queue | vendor
-    target,
-    wait: rng() * 4,
-    skin: COL.skin[Math.floor(rng() * COL.skin.length)],
-    hair: COL.hair[Math.floor(rng() * COL.hair.length)],
-    hairStyle: Math.floor(rng() * 5),
-    shirt: COL.shirt[Math.floor(rng() * COL.shirt.length)],
-    pants: [[0.25, 0.35, 0.6], [0.15, 0.15, 0.18], [0.5, 0.4, 0.3]][Math.floor(rng() * 3)],
-    height: 1.7 + rng() * 0.3,
-    bulk: 0.8 + rng() * 0.4,
-    flee: 0,
-    dead: false,
-    id: Math.random().toString(36).slice(2, 8),
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
 
-export function stepPed(game, p, dt) {
+const SHIRTS = [
+  [0.8, 0.3, 0.3], [0.3, 0.5, 0.9], [0.9, 0.8, 0.3], [0.4, 0.8, 0.4],
+  [0.8, 0.4, 0.8], [0.9, 0.9, 0.9], [0.2, 0.2, 0.25], [0.9, 0.6, 0.3],
+];
+const PANTS = [
+  [0.2, 0.25, 0.4], [0.35, 0.3, 0.25], [0.5, 0.5, 0.55], [0.15, 0.15, 0.18],
+];
+
+function makePed(rng, x, z, activity) {
+  return {
+    x, z, y: 0,
+    heading: rng() * Math.PI * 2,
+    hp: 100,
+    activity,
+    height: 1.7 + rng() * 0.3,
+    bulk: 0.8 + rng() * 0.5,
+    hairStyle: Math.floor(rng() * 5),
+    hair: COL.hair[Math.floor(rng() * COL.hair.length)],
+    shirt: SHIRTS[Math.floor(rng() * SHIRTS.length)],
+    pants: PANTS[Math.floor(rng() * PANTS.length)],
+    speed: 1.2 + rng() * 0.8,
+    target: null,
+    flee: 0,
+    dead: false,
+  };
+}
+
+export function spawnPeds(g) {
+  const rng = mulberry32(777);
+  const peds = [];
+  const freePoint = () => {
+    for (let i = 0; i < 50; i++) {
+      const p = randomSidewalkPoint(rng);
+      if (!g.city || !isBlocked(g.city, p.x, p.z)) return p;
+    }
+    return { x: 30, z: 30 };
+  };
+  // Sitters on the benches.
+  for (let i = 0; i < 7; i++) {
+    const bench = g.city && g.city.benches[i % g.city.benches.length];
+    const p = bench ? { x: bench.x, z: bench.z } : freePoint();
+    peds.push(makePed(rng, p.x, p.z, 'sit'));
+  }
+  // Chatters in pairs (the partner steps off the road too).
+  for (let i = 0; i < 7; i++) {
+    const p = freePoint();
+    peds.push(makePed(rng, p.x, p.z, 'chat'));
+    let qx = p.x + 1.2;
+    let qz = p.z + 0.5;
+    if (isOnRoad(qx, qz)) {
+      // Try nearby offsets until the partner is off the road.
+      const offsets = [[-1.2, 0.5], [0.5, 1.2], [-0.5, -1.2], [1.2, -0.5]];
+      for (const [ox, oz] of offsets) {
+        if (!isOnRoad(p.x + ox, p.z + oz)) { qx = p.x + ox; qz = p.z + oz; break; }
+      }
+      if (isOnRoad(qx, qz)) { qx = p.x; qz = p.z + 1.5; }
+    }
+    peds.push(makePed(rng, qx, qz, 'chat'));
+  }
+  // A queue outside the first food shop.
+  for (let i = 0; i < 7; i++) {
+    peds.push(makePed(rng, 40 + i * 0.2, 44 + i * 1.4, 'queue'));
+  }
+  // Vendors by the market stalls.
+  for (let i = 0; i < 6; i++) {
+    const p = freePoint();
+    peds.push(makePed(rng, p.x, p.z, 'vendor'));
+  }
+  // Walkers with a destination.
+  for (let i = 0; i < 42; i++) {
+    const p = freePoint();
+    const ped = makePed(rng, p.x, p.z, 'walk');
+    ped.target = freePoint();
+    peds.push(ped);
+  }
+  g.peds = peds;
+}
+
+export function stepPed(g, p, dt) {
   if (p.dead) return;
   if (p.flee > 0) {
     p.flee -= dt;
-    // Run away from the player.
-    const a = Math.atan2(p.x - game.player.x, p.z - game.player.z);
-    const nx = p.x + Math.sin(a) * 6 * dt;
-    const nz = p.z + Math.cos(a) * 6 * dt;
-    if (!isBlocked(game.city, nx, nz)) {
-      p.x = nx;
-      p.z = nz;
-    }
-    p.heading = a;
+    const dx = p.x - g.player.x;
+    const dz = p.z - g.player.z;
+    const d = Math.hypot(dx, dz) || 1;
+    const step = 5 * dt;
+    p.x += (dx / d) * step;
+    p.z += (dz / d) * step;
+    p.heading = Math.atan2(dx / d, dz / d);
     return;
   }
-  if (p.activity === 'sit' || p.activity === 'chat' || p.activity === 'vendor') {
-    // Stationary: small idle sway.
-    p.wait -= dt;
-    if (p.wait <= 0) {
-      p.heading += (Math.random() - 0.5) * 1.2;
-      p.wait = 2 + Math.random() * 4;
-    }
-    return;
-  }
-  if (p.activity === 'queue') {
-    // Shuffle forward slowly.
-    p.wait -= dt;
-    if (p.wait <= 0) {
-      p.z -= 0.3;
-      p.wait = 3 + Math.random() * 3;
-    }
-    return;
-  }
-  // Walkers: head to the target, then pick a new one.
-  const d = dist(p.x, p.z, p.target.x, p.target.z);
+  if (p.activity !== 'walk') return;
+  if (!p.target) p.target = randomSidewalkPoint(Math.random);
+  const dx = p.target.x - p.x;
+  const dz = p.target.z - p.z;
+  const d = Math.hypot(dx, dz);
   if (d < 1.5) {
-    p.wait -= dt;
-    if (p.wait <= 0) {
-      let t = randomSidewalkPoint(Math.random);
-      // Never target a road point.
-      if (isOnRoad(t.x, t.z)) t = { x: p.x, z: p.z + 20 };
-      p.target = t;
-      p.wait = 1 + Math.random() * 2;
-    }
+    p.target = randomSidewalkPoint(Math.random);
     return;
   }
-  const a = Math.atan2(p.target.x - p.x, p.target.z - p.z);
-  p.heading = a;
-  const nx = p.x + Math.sin(a) * p.speed * dt;
-  const nz = p.z + Math.cos(a) * p.speed * dt;
-  if (!isBlocked(game.city, nx, nz)) {
-    p.x = nx;
-    p.z = nz;
-  } else {
-    // Blocked: pick a new target.
-    p.target = randomSidewalkPoint(Math.random);
-  }
+  const step = Math.min(d, p.speed * dt);
+  p.x += (dx / d) * step;
+  p.z += (dz / d) * step;
+  p.heading = Math.atan2(dx / d, dz / d);
 }
 
-export function stepPeds(game, dt) {
-  for (const p of game.peds) stepPed(game, p, dt);
+export function stepPeds(g, dt) {
+  for (const p of g.peds) stepPed(g, p, dt);
 }
 
-// Draw one ped: legs, torso, arms, head, hair, eyes at near LOD.
-// Height/bulk vary per ped; gang members get bandanas (gangs.js).
-export function pedBoxes(game, p, b, cam) {
+// The ped model: head, hair, torso, 2 arms, 2 legs — 7 boxes — plus
+// the eyes at near LOD. Dead peds draw nothing.
+export function pedBoxes(g, p, b, camera) {
   if (p.dead) return 0;
-  const uv = tileUV('plain');
-  const h = p.height;
-  const w = 0.4 * p.bulk;
-  const walk = p.activity === 'walk' ? Math.sin(game.time * 6 + p.x) * 0.2 : 0;
-  const near = !cam || Math.hypot(p.x - cam.x, p.z - cam.z) < 40;
-  pushBox(b, p.x - 0.15, 0, p.z + walk * 0.3, 0.28, h * 0.45, 0.28, p.pants, uv);
-  pushBox(b, p.x + 0.15, 0, p.z - walk * 0.3, 0.28, h * 0.45, 0.28, p.pants, uv);
-  pushBox(b, p.x, h * 0.45, p.z, w + 0.35, h * 0.35, 0.35, p.shirt, uv);
-  pushBox(b, p.x - w / 2 - 0.2, h * 0.45, p.z, 0.18, h * 0.35, 0.18, p.skin, uv);
-  pushBox(b, p.x + w / 2 + 0.2, h * 0.45, p.z, 0.18, h * 0.35, 0.18, p.skin, uv);
-  pushBox(b, p.x, h * 0.8, p.z, 0.42, 0.42, 0.42, p.skin, uv);
-  hairBox(b, p.x, h * 0.8 + 0.15, p.z, p.hair, p.hairStyle);
+  const ref = camera || g.player;
+  const d = ref ? Math.hypot(p.x - (ref.x || 0), p.z - (ref.z || 0)) : 0;
+  const near = !camera || d < 40;
+  const h = p.height || 1.8;
+  const bulk = p.bulk || 1;
+  const skin = [0.85, 0.65, 0.5];
+  const fx = Math.sin(p.heading || 0);
+  const fz = Math.cos(p.heading || 0);
+  let n = 0;
+  const put = (x, y, z, w, hh, dd, col) => { pushBox(b, x, y, z, w, hh, dd, col); n++; };
+  const legH = h * 0.42;
+  const torsoH = h * 0.36;
+  const headY = h - 0.22;
+  put(p.x, headY - 0.2, p.z, 0.4 * bulk, 0.4, 0.4 * bulk, skin); // head
+  put(p.x, headY + 0.18, p.z, 0.42 * bulk, 0.14, 0.42 * bulk, p.hair); // hair
+  put(p.x, legH, p.z, 0.58 * bulk, torsoH, 0.34 * bulk, p.shirt); // torso
+  put(p.x - 0.36 * bulk, legH, p.z, 0.18, torsoH, 0.18, p.shirt); // left arm
+  put(p.x + 0.36 * bulk, legH, p.z, 0.18, torsoH, 0.18, p.shirt); // right arm
+  put(p.x - 0.14 * bulk, 0, p.z, 0.22 * bulk, legH, 0.22 * bulk, p.pants); // left leg
+  put(p.x + 0.14 * bulk, 0, p.z, 0.22 * bulk, legH, 0.22 * bulk, p.pants); // right leg
   if (near) {
-    pushBox(b, p.x - 0.09, h * 0.82, p.z + 0.22, 0.06, 0.06, 0.02, [0.05, 0.05, 0.05], uv);
-    pushBox(b, p.x + 0.09, h * 0.82, p.z + 0.22, 0.06, 0.06, 0.02, [0.05, 0.05, 0.05], uv);
+    put(p.x + fx * 0.22, headY - 0.15, p.z + fz * 0.22, 0.26, 0.07, 0.05, [0.1, 0.1, 0.12]); // eyes
   }
-  return 8;
+  return n;
 }

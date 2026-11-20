@@ -1,86 +1,65 @@
-// Solmar Bay — side activities.
+// Solmar Bay — small activities.
 //
-// Fishing at the pier (hold E at the water, wait 3 s, catch a
-// fish for $5-15), vending machines (Snack $3, +15 HP), and ATMs
-// (deposit/withdraw cash to the bank). All three are small, safe
-// income — no crime, no wanted.
+// Fishing at the pier (3 s, then $5–15 and a catch counted), vending
+// machines ($3 for +15 HP) and ATMs (deposit / withdraw $50).
 
-import { SPAWNS, TUNE } from './config.js';
-import { pushBox } from './render.js';
-import { tileUV } from './texture.js';
-import { dist } from './config.js';
-import { addCash, showToast } from './state.js';
+import { SPAWNS } from './config.js';
 
-export function spawnActivities(game) {
-  game._fishing = { active: false, t: 0 };
-  game.vending = [
-    { x: -60, z: -26 },
-    { x: 60, z: -22 },
-    { x: 120, z: 72 },
-    { x: -120, z: 56 },
+export function spawnActivities(g) {
+  g.vending = [
+    { x: 20, z: 44 },
+    { x: -80, z: -24 },
+    { x: -30, z: 76 },
+    { x: 140, z: 96 },
   ];
-  game.atms = [
-    { x: 30, z: 60 },
-    { x: -30, z: -60 },
-    { x: 150, z: 30 },
+  g.atms = [
+    { x: 10, z: 30 },
+    { x: -100, z: 40 },
+    { x: 120, z: 80 },
   ];
 }
 
-export function tryFish(game) {
-  const p = game.player;
-  if (dist(p.x, p.z, SPAWNS.fishing.x, SPAWNS.fishing.z) > 6) return false;
-  if (game._fishing.active) return false;
-  game._fishing.active = true;
-  game._fishing.t = 0;
-  showToast(game, 'Fishing… wait for a bite.');
+export function tryFish(g) {
+  if (Math.hypot(g.player.x - SPAWNS.fishing.x, g.player.z - SPAWNS.fishing.z) > 6) return false;
+  g._fishing.active = true;
+  g._fishing.t = 0;
   return true;
 }
 
-export function stepActivities(game, dt) {
-  if (game._fishing.active) {
-    game._fishing.t += dt;
-    if (game._fishing.t >= TUNE.fishTime) {
-      game._fishing.active = false;
-      const amount = TUNE.fishMin + Math.floor(Math.random() * (TUNE.fishMax - TUNE.fishMin));
-      game.stats.fishCaught += 1;
-      addCash(game, amount, '— fish sold');
-      showToast(game, `Caught a fish! +$${amount}`);
+export function stepActivities(g, dt) {
+  if (g._fishing.active) {
+    g._fishing.t += dt;
+    if (g._fishing.t >= 3) {
+      g._fishing.active = false;
+      g.stats.fishCaught = (g.stats.fishCaught || 0) + 1;
+      const amount = 5 + Math.floor(Math.random() * 11);
+      g.cash = (g.cash || 0) + amount;
+      g.toast = `+$${amount} fish sold`;
+      g.toastTimer = 3;
     }
   }
 }
 
-export function tryVending(game) {
-  const p = game.player;
-  for (const v of game.vending) {
-    if (dist(p.x, p.z, v.x, v.z) < 3) {
-      if (game.cash < TUNE.snackPrice) {
-        showToast(game, 'Not enough cash for a snack.');
-        return false;
-      }
-      game.cash -= TUNE.snackPrice;
-      game.health = Math.min(100, game.health + TUNE.snackHeal);
-      showToast(game, `Snack — HP ${game.health}`);
+export function tryVending(g) {
+  for (const v of g.vending || []) {
+    if (Math.hypot(g.player.x - v.x, g.player.z - v.z) < 3) {
+      if ((g.cash || 0) < 3) return false;
+      g.cash -= 3;
+      g.health = Math.min(100, (g.health || 0) + 15);
+      if (g.player) g.player.health = g.health;
       return true;
     }
   }
   return false;
 }
 
-export function tryAtm(game) {
-  const p = game.player;
-  for (const a of game.atms) {
-    if (dist(p.x, p.z, a.x, a.z) < 3) {
-      game.modal = {
+export function tryAtm(g) {
+  for (const a of g.atms || []) {
+    if (Math.hypot(g.player.x - a.x, g.player.z - a.z) < 3) {
+      g.modal = {
         kind: 'atm',
         title: 'ATM',
-        lines: [
-          `Cash $${game.cash} · Bank $${game.bank}`,
-          '',
-          '1. Deposit $50',
-          '2. Withdraw $50',
-          '',
-          'Press 1-2, Esc to leave.',
-        ],
+        lines: [`Cash: $${g.cash || 0}`, `Bank: $${g.bank || 0}`, '1. Deposit $50', '2. Withdraw $50'],
       };
       return true;
     }
@@ -88,35 +67,19 @@ export function tryAtm(game) {
   return false;
 }
 
-export function atmAction(game, idx) {
-  if (idx === 0) {
-    if (game.cash < 50) {
-      showToast(game, 'Not enough cash to deposit.');
-      return false;
-    }
-    game.cash -= 50;
-    game.bank += 50;
-    showToast(game, 'Deposited $50.');
-  } else if (idx === 1) {
-    if (game.bank < 50) {
-      showToast(game, 'Not enough in the bank.');
-      return false;
-    }
-    game.bank -= 50;
-    game.cash += 50;
-    showToast(game, 'Withdrew $50.');
+// 0 = deposit $50, 1 = withdraw $50.
+export function atmAction(g, action) {
+  if (action === 0) {
+    if ((g.cash || 0) < 50) return false;
+    g.cash -= 50;
+    g.bank = (g.bank || 0) + 50;
+    return true;
   }
-  game.modal = null;
-  return true;
-}
-
-export function activityBoxes(game, b, cam) {
-  const uv = tileUV('plain');
-  for (const v of game.vending) {
-    pushBox(b, v.x, 0, v.z, 1.2, 2, 0.8, [0.8, 0.2, 0.2], uv);
+  if (action === 1) {
+    if ((g.bank || 0) < 50) return false;
+    g.bank -= 50;
+    g.cash = (g.cash || 0) + 50;
+    return true;
   }
-  for (const a of game.atms) {
-    pushBox(b, a.x, 0, a.z, 1.2, 2, 0.8, [0.2, 0.4, 0.8], uv);
-  }
-  return game.vending.length + game.atms.length;
+  return false;
 }

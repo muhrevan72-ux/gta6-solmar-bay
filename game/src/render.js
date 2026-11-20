@@ -1,105 +1,93 @@
-// Solmar Bay — WebGL1 renderer.
+// Solmar Bay — the WebGL renderer.
 //
-// One batching renderer: BoxBatch accumulates triangles into CPU
-// arrays, then uploads them once per frame with bufferData and
-// draws with TRIANGLES. (WebGL1 has no four-vertex primitive —
-// a draw with one silently draws nothing; there is a test for that.)
-// Faces are pushed with CCW winding so backface culling works,
-// and a one-pass boxVisible check keeps far boxes out of the
-// batch entirely.
-//
-// FOG — DISTANCE-BASED (round-9 fix, after play-test #7):
-// the old shader computed fog from NDC depth (p.z/p.w), which is
-// 0.98..1.0 for ALL scene geometry with near=0.1/far=1200 — so at
-// golden hour (fogFar 0.9 in NDC units) EVERYTHING fogged to 1.0
-// and the whole city vanished into flat orange sky, while at night
-// (fogFar 0.5 < edge0 0.55) smoothstep with edge0>edge1 is
-// undefined GLSL behaviour and the fog silently disappeared.
-// Fog is now a true function of camera distance in METRES:
-//   vDist = length(aPos - uCamPos)
-//   vFog  = smoothstep(uFogRange.x, uFogRange.y, vDist)
-// with fogNear=60 m and fogFar in metres per time of day (see
-// weather.js KEYS: day 420, golden 300, sunset 260, night 180).
-// Nothing can be fully fogged before 260+ m — the city at 10-100 m
-// always stays visible.
+// One shader, three vertex buffers (position, colour, UV) and three
+// batches per frame: the static city, the dynamic entities and the GLB
+// props. Every draw is gl.TRIANGLES — WebGL1 has no four-vertex
+// primitive. Boxes carry per-face shading (top 1.0, sides 0.85,
+// bottom 0.7) so the city reads in daylight without a light pass.
 
-import { createAtlasTexture } from './texture.js';
+import { cameraView, perspective, matMul } from './shots.js';
 
-export const BATCH_STRIDE = 8; // pos(3) + colour(3) + uv(2)
-
-// A batch of triangles ready for one buffer upload.
+// ---------- batches ----------
 export function BoxBatch() {
-  return { pos: [], col: [], uv: [], tri: 0 };
+  return { pos: [], col: [], uv: [] };
 }
 
 export function batchReset(b) {
   b.pos.length = 0;
   b.col.length = 0;
   b.uv.length = 0;
-  b.tri = 0;
 }
 
 export function batchTris(b) {
-  return b.tri;
+  return b.pos.length / 9;
 }
 
-// Push one triangle (aPos/aCol/aUv are arrays of 3 vertices).
-export function pushTri(b, aPos, aCol, aUv) {
-  for (let i = 0; i < 3; i++) {
-    b.pos.push(aPos[i][0], aPos[i][1], aPos[i][2]);
-    b.col.push(aCol[i][0], aCol[i][1], aCol[i][2]);
-    b.uv.push(aUv[i][0], aUv[i][1]);
+// One triangle, colour and UV as given (no shading — the caller chose
+// the exact colour, e.g. a GLB vertex or a window quad).
+export function pushTri(b, ax, ay, az, bx, by, bz, cx, cy, cz, color, uv) {
+  const c = color || [1, 1, 1];
+  const t = uv || [0, 0, 1, 1];
+  b.pos.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+  for (let i = 0; i < 3; i++) b.col.push(c[0], c[1], c[2]);
+  b.uv.push(t[0], t[1], t[2], t[1], t[2], t[3]);
+}
+
+function pushFace(b, verts, shade, color, uv) {
+  // verts: 6 corners (two triangles). Shade multiplies the colour.
+  const c = color || [1, 1, 1];
+  const t = uv || [0, 0, 1, 1];
+  const r = c[0] * shade;
+  const g = c[1] * shade;
+  const bl = c[2] * shade;
+  for (let i = 0; i < 6; i++) {
+    b.pos.push(verts[i][0], verts[i][1], verts[i][2]);
+    b.col.push(r, g, bl);
   }
-  b.tri++;
+  // UVs follow the face: (u0,v0) (u0,v1) (u1,v1) (u0,v0) (u1,v1) (u1,v0).
+  b.uv.push(t[0], t[1], t[0], t[3], t[2], t[3], t[0], t[1], t[2], t[3], t[2], t[1]);
 }
 
-// Push a quad as two triangles. Winding is CCW from outside:
-// a-b-c, a-c-d. (A quad pushed as a-b-c-d in one draw is NOT a
-// thing in WebGL1 — that is why this helper exists.)
-export function pushQuad(b, a, c, d, e, col, uvRect) {
-  const [u0, v0, u1, v1] = uvRect;
-  const uvA = [u0, v0];
-  const uvB = [u1, v0];
-  const uvC = [u1, v1];
-  const uvD = [u0, v1];
-  pushTri(b, [a, c, d], [col, col, col], [uvA, uvB, uvC]);
-  pushTri(b, [a, d, e], [col, col, col], [uvA, uvC, uvD]);
-}
-
-// Push a solid box (6 faces, 12 triangles). The top and bottom
-// faces are tinted differently so the city reads from any angle.
-// shadeTop = 1.0, shadeSide = 0.85, shadeBot = 0.7.
-export function pushBox(b, x, y, z, w, h, d, col, uvRect) {
+// A box centred on (x, z) and sitting on y (y is the BOTTOM face).
+// Faces are emitted top, bottom, +Z, -Z, +X, -X, each counter-clockwise
+// from outside so every normal points outward.
+export function pushBox(b, x, y, z, w, h, d, color, uv) {
   const x0 = x - w / 2;
   const x1 = x + w / 2;
   const y0 = y;
   const y1 = y + h;
   const z0 = z - d / 2;
   const z1 = z + d / 2;
-  const top = [col[0] * 1.0, col[1] * 1.0, col[2] * 1.0];
-  const side = [col[0] * 0.85, col[1] * 0.85, col[2] * 0.85];
-  const bot = [col[0] * 0.7, col[1] * 0.7, col[2] * 0.7];
-  const [u0, v0, u1, v1] = uvRect;
-  const uv = [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
-  // Top (+Y): a(x0,y1,z1) b(x1,y1,z1) c(x1,y1,z0) d(x0,y1,z0)
-  pushQuad(b, [x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0], top, [u0, v0, u1, v1]);
-  // Bottom (-Y)
-  pushQuad(b, [x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1], bot, [u0, v0, u1, v1]);
-  // Front (+Z)
-  pushQuad(b, [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], side, [u0, v0, u1, v1]);
-  // Back (-Z)
-  pushQuad(b, [x1, y0, z0], [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], side, [u0, v0, u1, v1]);
-  // Right (+X)
-  pushQuad(b, [x1, y0, z1], [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], side, [u0, v0, u1, v1]);
-  // Left (-X)
-  pushQuad(b, [x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], side, [u0, v0, u1, v1]);
-  return uv;
+  pushFace(b, [
+    [x0, y1, z0], [x0, y1, z1], [x1, y1, z1],
+    [x0, y1, z0], [x1, y1, z1], [x1, y1, z0],
+  ], 1.0, color, uv); // top
+  pushFace(b, [
+    [x0, y0, z0], [x1, y0, z0], [x1, y0, z1],
+    [x0, y0, z0], [x1, y0, z1], [x0, y0, z1],
+  ], 0.7, color, uv); // bottom
+  pushFace(b, [
+    [x0, y0, z1], [x1, y0, z1], [x1, y1, z1],
+    [x0, y0, z1], [x1, y1, z1], [x0, y1, z1],
+  ], 0.85, color, uv); // +Z
+  pushFace(b, [
+    [x0, y0, z0], [x0, y1, z0], [x1, y1, z0],
+    [x0, y0, z0], [x1, y1, z0], [x1, y0, z0],
+  ], 0.85, color, uv); // -Z
+  pushFace(b, [
+    [x1, y0, z0], [x1, y1, z0], [x1, y1, z1],
+    [x1, y0, z0], [x1, y1, z1], [x1, y0, z1],
+  ], 0.85, color, uv); // +X
+  pushFace(b, [
+    [x0, y0, z0], [x0, y0, z1], [x0, y1, z1],
+    [x0, y0, z0], [x0, y1, z1], [x0, y1, z0],
+  ], 0.85, color, uv); // -X
 }
 
-// A box rotated around Y (for the train and slalom gates).
-export function pushBoxRot(b, x, y, z, w, h, d, yaw, col, uvRect) {
-  const c = Math.cos(yaw);
-  const s = Math.sin(yaw);
+// A box rotated around the Y axis by rotY (radians), same faces.
+export function pushBoxRot(b, x, y, z, w, h, d, rotY, color, uv) {
+  const c = Math.cos(rotY || 0);
+  const s = Math.sin(rotY || 0);
   const rot = (px, pz) => [x + px * c - pz * s, z + px * s + pz * c];
   const x0 = -w / 2;
   const x1 = w / 2;
@@ -107,243 +95,199 @@ export function pushBoxRot(b, x, y, z, w, h, d, yaw, col, uvRect) {
   const z1 = d / 2;
   const y0 = y;
   const y1 = y + h;
-  const [u0, v0, u1, v1] = uvRect;
-  const side = [col[0] * 0.85, col[1] * 0.85, col[2] * 0.85];
-  const top = col;
-  const p = (px, py, pz) => {
+  const P = (px, py, pz) => {
     const [rx, rz] = rot(px, pz);
     return [rx, py, rz];
   };
-  pushQuad(b, p(x0, y1, z1), p(x1, y1, z1), p(x1, y1, z0), p(x0, y1, z0), top, [u0, v0, u1, v1]);
-  pushQuad(b, p(x0, y0, z0), p(x1, y0, z0), p(x1, y0, z1), p(x0, y0, z1), side, [u0, v0, u1, v1]);
-  pushQuad(b, p(x0, y0, z1), p(x1, y0, z1), p(x1, y1, z1), p(x0, y1, z1), side, [u0, v0, u1, v1]);
-  pushQuad(b, p(x1, y0, z0), p(x0, y0, z0), p(x0, y1, z0), p(x1, y1, z0), side, [u0, v0, u1, v1]);
-  pushQuad(b, p(x1, y0, z1), p(x1, y0, z0), p(x1, y1, z0), p(x1, y1, z1), side, [u0, v0, u1, v1]);
-  pushQuad(b, p(x0, y0, z0), p(x0, y0, z1), p(x0, y1, z1), p(x0, y1, z0), side, [u0, v0, u1, v1]);
+  pushFace(b, [
+    P(x0, y1, z0), P(x0, y1, z1), P(x1, y1, z1),
+    P(x0, y1, z0), P(x1, y1, z1), P(x1, y1, z0),
+  ], 1.0, color, uv);
+  pushFace(b, [
+    P(x0, y0, z0), P(x1, y0, z0), P(x1, y0, z1),
+    P(x0, y0, z0), P(x1, y0, z1), P(x0, y0, z1),
+  ], 0.7, color, uv);
+  pushFace(b, [
+    P(x0, y0, z1), P(x1, y0, z1), P(x1, y1, z1),
+    P(x0, y0, z1), P(x1, y1, z1), P(x0, y1, z1),
+  ], 0.85, color, uv);
+  pushFace(b, [
+    P(x0, y0, z0), P(x0, y1, z0), P(x1, y1, z0),
+    P(x0, y0, z0), P(x1, y1, z0), P(x1, y0, z0),
+  ], 0.85, color, uv);
+  pushFace(b, [
+    P(x1, y0, z0), P(x1, y1, z0), P(x1, y1, z1),
+    P(x1, y0, z0), P(x1, y1, z1), P(x1, y0, z1),
+  ], 0.85, color, uv);
+  pushFace(b, [
+    P(x0, y0, z0), P(x0, y0, z1), P(x0, y1, z1),
+    P(x0, y0, z0), P(x0, y1, z1), P(x0, y1, z0),
+  ], 0.85, color, uv);
 }
 
-// Frustum + distance culling. A box is visible when its centre is
-// in front of the camera and its corner is inside the horizontal
-// field of view. Near boxes always pass the far-plane test.
-export function boxVisible(cam, x, y, z, r) {
+// A flat quad (two triangles), colour exactly as given. Used for
+// windows, road surfaces, ground tiles and signs.
+export function pushQuad(b, p0, p1, p2, p3, color, uv) {
+  const c = color || [1, 1, 1];
+  const t = uv || [0, 0, 1, 1];
+  const pts = [p0, p1, p2, p0, p2, p3];
+  const uvs = [[t[0], t[1]], [t[2], t[1]], [t[2], t[3]], [t[0], t[1]], [t[2], t[3]], [t[0], t[3]]];
+  for (let i = 0; i < 6; i++) {
+    b.pos.push(pts[i][0], pts[i][1], pts[i][2]);
+    b.col.push(c[0], c[1], c[2]);
+    b.uv.push(uvs[i][0], uvs[i][1]);
+  }
+}
+
+// Cheap frustum test: is a box (centre x,y,z, rough size) in front of
+// the camera and inside the 700 m far plane? Only the distance along
+// the view direction matters — lateral culling is the rasterizer's job.
+export function boxVisible(cam, x, y, z, size) {
   const dx = x - cam.x;
   const dy = y - cam.y;
   const dz = z - cam.z;
-  const d2 = dx * dx + dy * dy + dz * dz;
-  if (d2 > 700 * 700) return false; // beyond the far plane
   const fx = cam.tx - cam.x;
-  const fy = cam.ty - cam.y;
+  const fy = (cam.ty || 0) - (cam.y || 0);
   const fz = cam.tz - cam.z;
   const fl = Math.hypot(fx, fy, fz) || 1;
-  const dot = (dx * fx + dy * fy + dz * fz) / (Math.sqrt(d2 || 1) * fl);
-  const cosHalf = Math.cos((60 * Math.PI) / 180 / 2) - 0.15;
-  if (dot < cosHalf && d2 > 100 * 100) return false;
-  return true;
+  const along = (dx * fx + dy * fy + dz * fz) / fl;
+  return along > -size && along < 700 + size;
 }
 
-// View-projection = projection * view (both column-major).
+// View-projection for a camera and a viewport.
 export function computeViewProj(cam, w, h) {
-  const f = 1 / Math.tan((60 * Math.PI) / 180 / 2);
-  const aspect = w / h;
-  const near = 0.1;
-  const far = 1200;
-  const nf = 1 / (near - far);
-  const proj = [
-    f / aspect, 0, 0, 0,
-    0, f, 0, 0,
-    0, 0, (far + near) * nf, -1,
-    0, 0, 2 * far * near * nf, 0,
-  ];
-  // LookAt view matrix.
-  const ex = cam.x;
-  const ey = cam.y;
-  const ez = cam.z;
-  let fx = cam.tx - ex;
-  let fy = cam.ty - ey;
-  let fz = cam.tz - ez;
-  const fl = Math.hypot(fx, fy, fz) || 1;
-  fx /= fl;
-  fy /= fl;
-  fz /= fl;
-  let rx = -fz;
-  let ry = 0;
-  let rz = fx;
-  const rl = Math.hypot(rx, ry, rz) || 1;
-  rx /= rl;
-  ry /= rl;
-  rz /= rl;
-  const ux = ry * fz - rz * fy;
-  const uy = rz * fx - rx * fz;
-  const uz = rx * fy - ry * fx;
-  const view = [
-    rx, ux, -fx, 0,
-    ry, uy, -fy, 0,
-    rz, uz, -fz, 0,
-    -(rx * ex + ry * ey + rz * ez),
-    -(ux * ex + uy * ey + uz * ez),
-    fx * ex + fy * ey + fz * ez,
-    1,
-  ];
-  // out = proj * view
-  const out = new Array(16).fill(0);
-  for (let c = 0; c < 4; c++) {
-    for (let r = 0; r < 4; r++) {
-      let s = 0;
-      for (let k = 0; k < 4; k++) s += proj[k * 4 + r] * view[c * 4 + k];
-      out[c * 4 + r] = s;
-    }
-  }
-  return out;
+  const proj = perspective((60 * Math.PI) / 180, w / h, 0.1, 1200);
+  return matMul(proj, cameraView(cam));
 }
 
-// ---------- shaders ----------
-// Vertex shader: world-space position -> clip, plus the camera
-// distance of the vertex for distance-based fog (see header).
-const VERT_SHADER = `
+// ---------- renderer ----------
+const VERT_SRC = `
 attribute vec3 aPos;
 attribute vec3 aCol;
 attribute vec2 aUv;
 uniform mat4 uVP;
 uniform vec3 uCamPos;
+uniform vec2 uFogRange;
 varying vec3 vCol;
 varying vec2 vUv;
-varying float vDist;
+varying float vFog;
 void main() {
   gl_Position = uVP * vec4(aPos, 1.0);
   vCol = aCol;
   vUv = aUv;
-  vDist = length(aPos - uCamPos);
-}
-`;
+  float d = distance(aPos, uCamPos);
+  vFog = smoothstep(uFogRange.x, uFogRange.y, d);
+}`;
 
-const FRAG_SHADER = `
+const FRAG_SRC = `
 precision mediump float;
-varying vec3 vCol;
-varying vec2 vUv;
-varying float vDist;
 uniform sampler2D uTex;
 uniform vec3 uFogColor;
-uniform vec2 uFogRange; // metres: [near, far]
+varying vec3 vCol;
+varying vec2 vUv;
+varying float vFog;
 void main() {
-  vec4 tex = texture2D(uTex, vUv);
-  vec3 col = vCol * tex.rgb;
-  float f = smoothstep(uFogRange.x, uFogRange.y, vDist);
-  gl_FragColor = vec4(mix(col, uFogColor, f), 1.0);
-}
-`;
+  vec3 c = vCol * texture2D(uTex, vUv).rgb;
+  gl_FragColor = vec4(mix(c, uFogColor, vFog), 1.0);
+}`;
 
-function compileShader(gl, type, src) {
+function compile(gl, type, src) {
   const sh = gl.createShader(type);
   gl.shaderSource(sh, src);
   gl.compileShader(sh);
-  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-    const log = gl.getShaderInfoLog(sh);
-    throw new Error('Shader compile failed: ' + log);
-  }
   return sh;
 }
 
-export function createRenderer(canvas, atlasTex) {
-  const gl = canvas.getContext('webgl', { antialias: true, alpha: false });
-  if (!gl) throw new Error('WebGL is not available');
-  const vs = compileShader(gl, gl.VERTEX_SHADER, VERT_SHADER);
-  const fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAG_SHADER);
+export function createRenderer(canvas, atlas) {
+  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
   const prog = gl.createProgram();
-  gl.attachShader(prog, vs);
-  gl.attachShader(prog, fs);
+  gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, VERT_SRC));
+  gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, FRAG_SRC));
   gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
-    throw new Error('Program link failed: ' + gl.getProgramInfoLog(prog));
-  }
   gl.useProgram(prog);
-  const loc = {
-    vp: gl.getUniformLocation(prog, 'uVP'),
-    camPos: gl.getUniformLocation(prog, 'uCamPos'),
-    fogColor: gl.getUniformLocation(prog, 'uFogColor'),
-    fogRange: gl.getUniformLocation(prog, 'uFogRange'),
-    tex: gl.getUniformLocation(prog, 'uTex'),
-    aPos: gl.getAttribLocation(prog, 'aPos'),
-    aCol: gl.getAttribLocation(prog, 'aCol'),
-    aUv: gl.getAttribLocation(prog, 'aUv'),
-  };
-  // Texture: the atlas, or a 1x1 white fallback (colours still show).
-  // The atlas is created from THIS context — a texture belongs to
-  // the context that created it, so a fresh renderer (after a
-  // resize) gets a fresh atlas (round-9 fix, part of the resize
-  // repair: the old code passed a stale texture). In Node there
-  // is no document, so createAtlasTexture returns null and the
-  // white fallback is used.
-  let tex = atlasTex || null;
-  if (!tex) tex = createAtlasTexture(gl);
-  if (!tex) {
-    tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
-  }
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.uniform1i(loc.tex, 0);
   gl.enable(gl.DEPTH_TEST);
   gl.enable(gl.CULL_FACE);
   gl.cullFace(gl.BACK);
-  const posBuf = gl.createBuffer();
-  const colBuf = gl.createBuffer();
-  const uvBuf = gl.createBuffer();
+  gl.viewport(0, 0, canvas.width, canvas.height);
 
-  const r = {
+  const loc = (name) => gl.getAttribLocation(prog, name);
+  const uni = (name) => gl.getUniformLocation(prog, name);
+  const bufs = {
+    pos: gl.createBuffer(),
+    col: gl.createBuffer(),
+    uv: gl.createBuffer(),
+  };
+  const attrs = { pos: loc('aPos'), col: loc('aCol'), uv: loc('aUv') };
+  const unis = {
+    vp: uni('uVP'),
+    camPos: uni('uCamPos'),
+    fogRange: uni('uFogRange'),
+    fogColor: uni('uFogColor'),
+    tex: uni('uTex'),
+  };
+
+  // The texture: the atlas when one was built, else a 1x1 white pixel
+  // so every colour still renders (the atlas is a browser-only thing).
+  let texture = atlas || null;
+  if (!texture) {
+    texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  }
+
+  const renderer = {
     gl,
     canvas,
-    prog,
-    loc,
-    posBuf,
-    colBuf,
-    uvBuf,
-    texture: tex,
+    program: prog,
+    texture,
     staticBatch: BoxBatch(),
     glbBatch: BoxBatch(),
-    viewProj: null,
-  };
+    vp: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    camPos: [0, 0, 0],
+    fogNear: 60,
+    fogFar: 420,
+    fogColor: [0.5, 0.7, 0.9],
 
-  // Set the camera + fog uniforms for this frame. fogNear/fogFar
-  // are METRES (round-9 fix); camPos is the camera position.
-  r.setCamera = function (viewProj, fogColor, fogNear, fogFar, camPos) {
-    r.viewProj = viewProj;
-    gl.uniformMatrix4fv(loc.vp, false, new Float32Array(viewProj));
-    gl.uniform3f(loc.fogColor, fogColor[0], fogColor[1], fogColor[2]);
-    gl.uniform2f(loc.fogRange, fogNear, fogFar);
-    if (camPos) gl.uniform3f(loc.camPos, camPos[0], camPos[1], camPos[2]);
-  };
+    setView(vp, camPos, fogNear, fogFar, fogColor) {
+      this.vp = vp;
+      this.camPos = camPos;
+      this.fogNear = fogNear;
+      this.fogFar = fogFar;
+      if (fogColor) this.fogColor = fogColor;
+    },
 
-  // Begin a frame: clear colour + depth. This is the ONLY gl.clear
-  // in the game — calling clear inside draw() wipes the frame.
-  r.beginFrame = function (sky) {
-    gl.clearColor(sky[0], sky[1], sky[2], 1);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-  };
+    // The only clear in a frame: one call, then the batches draw.
+    beginFrame(sky) {
+      gl.clearColor(sky[0], sky[1], sky[2], 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    },
 
-  // Upload one batch and draw it. TRIANGLES only — never the
-  // four-vertex primitive.
-  r.drawBatch = function (b) {
-    if (!b || b.tri === 0) return;
-    const n = b.tri * 3;
-    gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(b.pos), gl.DYNAMIC_DRAW);
-    gl.enableVertexAttribArray(loc.aPos);
-    gl.vertexAttribPointer(loc.aPos, 3, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, colBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(b.col), gl.DYNAMIC_DRAW);
-    gl.enableVertexAttribArray(loc.aCol);
-    gl.vertexAttribPointer(loc.aCol, 3, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, uvBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(b.uv), gl.DYNAMIC_DRAW);
-    gl.enableVertexAttribArray(loc.aUv);
-    gl.vertexAttribPointer(loc.aUv, 2, gl.FLOAT, false, 0, 0);
-    gl.drawArrays(gl.TRIANGLES, 0, n);
+    drawBatch(batch, vp, camPos, fog, fogColor) {
+      const useVp = vp || this.vp;
+      const useCam = camPos || this.camPos;
+      const useFog = fog || [this.fogNear, this.fogFar];
+      const useFogColor = fogColor || this.fogColor;
+      const n = batch.pos.length / 3;
+      const upload = (buf, attr, data, size) => {
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.DYNAMIC_DRAW);
+        gl.enableVertexAttribArray(attr);
+        gl.vertexAttribPointer(attr, size, gl.FLOAT, false, 0, 0);
+      };
+      upload(bufs.pos, attrs.pos, batch.pos, 3);
+      upload(bufs.col, attrs.col, batch.col, 3);
+      upload(bufs.uv, attrs.uv, batch.uv, 2);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.uniform1i(unis.tex, 0);
+      gl.uniformMatrix4fv(unis.vp, false, new Float32Array(useVp));
+      gl.uniform3f(unis.camPos, useCam[0], useCam[1], useCam[2]);
+      gl.uniform2f(unis.fogRange, useFog[0], useFog[1]);
+      gl.uniform3f(unis.fogColor, useFogColor[0], useFogColor[1], useFogColor[2]);
+      gl.drawArrays(gl.TRIANGLES, 0, n);
+    },
   };
-
-  r.setViewport = function (w, h) {
-    gl.viewport(0, 0, w, h);
-  };
-
-  return r;
+  return renderer;
 }

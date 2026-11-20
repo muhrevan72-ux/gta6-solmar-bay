@@ -1,26 +1,24 @@
 // Solmar Bay — game state.
 //
-// One plain object holds everything the systems mutate. createGame
-// builds a fresh game; newGame/continueGame reset the parts that
-// must not leak between sessions (cooldowns to 0, wanted to 0).
-// Nothing here touches the DOM or WebGL, so headless tests can
-// drive the whole game through this state.
+// createGame builds the whole state object (no rendering, no DOM) so
+// the logic suites can drive it headlessly. newGame resets a run.
+// Toasts and dialogues are timed text the HUD reads each frame.
 
-import { TUNE, SPAWNS, CHAPTERS } from './config.js';
+import { CHAPTERS } from './config.js';
 
 export function defaultOutfit() {
   return { hair: 0, shirt: 0, pants: 0, shoes: 0 };
 }
 
 export function createGame() {
-  const g = {
-    // Mode machine: 'menu' | 'card' | 'play' | 'pause' | 'phone' |
-    // 'busted' | 'wasted' | 'passed' | 'interior'.
-    mode: 'menu',
-    prevMode: 'menu',
-    time: 0, // seconds since boot (real time)
-    paused: false,
-    // Player economy + status.
+  return {
+    // Run state.
+    mode: 'menu', // menu | card | play | pause | passed | phone | busted | wasted
+    menu: null, // which menu overlay is open ('pause' while paused)
+    chapter: 1,
+    chapterDone: 0,
+    chapterStage: 0,
+    completion: 0,
     cash: 150,
     bank: 0,
     health: 100,
@@ -28,107 +26,101 @@ export function createGame() {
     wanted: 0,
     wantedTimer: 0,
     respect: 0,
-    bombs: 3,
-    // Story progress.
-    chapter: 1,
-    chapterStage: 0,
-    chapterDone: 0, // chapters completed
-    completion: 0, // percent
-    missionTimer: 0,
-    missionMarker: null, // {x, z, label}
-    sideJob: null,
-    // World + time.
+    clock: 8, // game hour, 0..24
     day: 1,
-    clock: 8, // hours, 0..24 — the game starts at 08:00
-    weather: 'clear', // clear | rain | fog
-    weatherTimer: 120,
-    rain: 0, // 0..1 rain intensity
-    // The player.
+    time: 0, // real seconds since boot; keeps ticking in pause
+    weather: 'clear',
+    rain: 0, // 0..1, eases toward the weather's target
+    // Player.
     player: {
-      x: SPAWNS.player.x,
-      z: SPAWNS.player.z,
-      y: 0,
-      heading: 0,
-      vx: 0,
-      vz: 0,
+      x: 0, z: 20, y: 0,
+      heading: 0, // radians, 0 = facing +z
       speed: 0,
-      inCar: null, // vehicle object or null
-      swimming: false,
+      health: 100,
+      weapon: 0, // 0 pistol, 1 SMG, 2 shotgun
+      ammo: [Infinity, 120, 24],
+      inCar: null,
+      onTrain: false,
+      inside: null, // room id while indoors
       carryingCat: null,
       petting: 0,
-      weapon: 0, // 0 pistol, 1 smg, 2 shotgun
-      ammo: [Infinity, 0, 0],
-      eCooldown: 0,
+      outfit: defaultOutfit(),
+      shootCooldown: 0,
       punchCooldown: 0,
       bombCooldown: 0,
-      shootCooldown: 0,
-      inside: null, // interior id when inside a shop room
-      onTrain: false,
-      onElevator: false,
-      outfit: defaultOutfit(),
+      eCooldown: 0,
     },
-    // Collections the systems fill in.
-    city: null, // built by world.js
+    bombs: 3,
+    ownedCars: [],
+    unlocks: { smgUnlocked: false, shotgunUnlocked: false, sportsCarSpawned: false },
+    // World (filled in by the spawners).
+    city: null,
+    camera: null,
+    input: null,
+    audio: null,
+    hud: null,
+    renderer: null,
+    weatherObj: null,
     vehicles: [],
     traffic: [],
+    copCars: [],
+    roadblocks: [],
+    heli: null,
+    cops: [],
     peds: [],
     gangMembers: [],
-    cops: [],
-    copCars: [],
-    heli: null,
-    roadblocks: [],
-    pickups: [], // cash/health/armour/repair drops on the ground
-    fires: [],
-    cats: [],
     dogs: [],
     birds: [],
     fish: [],
     train: null,
     elevator: null,
-    // Owned cars (garage) + unlocks.
-    ownedCars: [],
-    unlocks: { smgUnlocked: false, shotgunUnlocked: false, sportsCarSpawned: false },
-    // Radio + audio state.
-    station: 0,
-    song: 0,
-    songStep: 0,
-    muted: false,
+    cats: [],
+    vending: [],
+    atms: [],
+    fires: [],
+    // Missions and jobs.
+    card: null, // {title, text} shown on the chapter/passed card
+    missionMarker: null, // {x, z, label}
+    missionTimer: 0,
+    sideJob: null,
+    modal: null, // {kind, title, lines}
     // Phone.
     phoneOpen: false,
     phoneTab: 'contacts',
     messages: [],
     unread: 0,
-    // Dating.
-    maya: { rel: 0, onDate: false, stage: 0 },
-    // Events.
-    event: null, // {id, label, x, z, t}
-    eventTimer: 180,
-    // Training scores.
-    training: { rangeScore: 0, rangeBest: 0, swimBest: 0, slalomBest: 0 },
-    // Stats + save.
-    stats: { kills: 0, stolen: 0, fares: 0, firesOut: 0, fishCaught: 0 },
-    saveSlot: 1,
-    // HUD bits the renderer/DOM read.
+    maya: { x: -300, z: 60, rel: 0, onDate: false, dateT: 0 },
+    // Radio.
+    station: 0,
+    song: 0,
+    songStep: 0,
+    muted: false,
+    // Timers and flags the systems own.
     toast: '',
     toastTimer: 0,
     dialogue: null, // {name, role, text, t}
-    card: null, // chapter intro card {title, text}
-    modal: null, // {title, lines[], kind}
-    menu: null, // pause menu selection
-    bustedBy: '',
-    // Renderer (set by main.js boot).
-    renderer: null,
-    camera: null,
-    input: null,
-    audio: null,
-    hud: null,
-    // Flags for tests / debugging.
-    flags: {},
+    pickups: [],
+    stats: { kills: 0, fishCaught: 0, fares: 0, firesOut: 0 },
+    event: null,
+    eventTimer: 240,
+    _phase: 'day',
+    _songT: 0,
+    _taxiRequested: false,
+    _taxiCab: null,
+    _taxiState: null,
+    _taxiWait: 0,
+    _fireTimer: 120,
+    _fishing: { active: false, t: 0 },
+    _range: { active: false, targets: [], hits: 0, t: 0 },
+    _swim: { active: false, reached: false },
+    _slalom: { active: false, gates: 0 },
+    _mayaCallCd: 0,
+    _lastDynTris: 0,
   };
-  return g;
 }
 
-// Fresh start: cash, health, chapter 1, clean slate.
+// A fresh run: money, health, wanted and chapter back to the start.
+// The world itself is rebuilt by the caller (boot / spawners).
 export function newGame(g) {
   g.cash = 150;
   g.bank = 0;
@@ -137,68 +129,58 @@ export function newGame(g) {
   g.wanted = 0;
   g.wantedTimer = 0;
   g.respect = 0;
-  g.bombs = 3;
   g.chapter = 1;
-  g.chapterStage = 0;
   g.chapterDone = 0;
+  g.chapterStage = 0;
   g.completion = 0;
-  g.missionTimer = 0;
-  g.missionMarker = null;
-  g.sideJob = null;
-  g.day = 1;
   g.clock = 8;
-  g.weather = 'clear';
-  g.weatherTimer = 120;
-  g.rain = 0;
-  g.player.x = SPAWNS.player.x;
-  g.player.z = SPAWNS.player.z;
-  g.player.y = 0;
-  g.player.heading = 0;
-  g.player.vx = 0;
-  g.player.vz = 0;
-  g.player.inCar = null;
-  g.player.swimming = false;
-  g.player.carryingCat = null;
-  g.player.weapon = 0;
-  g.player.ammo = [Infinity, 0, 0];
-  g.player.eCooldown = 0;
-  g.player.punchCooldown = 0;
-  g.player.bombCooldown = 0;
-  g.player.shootCooldown = 0;
-  g.player.inside = null;
-  g.player.onTrain = false;
-  g.player.onElevator = false;
-  g.player.outfit = defaultOutfit();
-  g.pickups = [];
-  g.fires = [];
+  g.day = 1;
+  g.bombs = 3;
   g.ownedCars = [];
   g.unlocks = { smgUnlocked: false, shotgunUnlocked: false, sportsCarSpawned: false };
+  g.player.x = 0;
+  g.player.z = 20;
+  g.player.y = 0;
+  g.player.heading = 0;
+  g.player.speed = 0;
+  g.player.weapon = 0;
+  g.player.ammo = [Infinity, 120, 24];
+  g.player.inCar = null;
+  g.player.onTrain = false;
+  g.player.inside = null;
+  g.player.carryingCat = null;
+  g.player.outfit = defaultOutfit();
+  g.player.shootCooldown = 0;
+  g.player.punchCooldown = 0;
+  g.player.bombCooldown = 0;
+  g.player.eCooldown = 0;
+  g.maya = { x: -300, z: 60, rel: 0, onDate: false, dateT: 0 };
+  g.messages = [];
+  g.unread = 0;
+  g.pickups = [];
+  g.stats = { kills: 0, fishCaught: 0, fares: 0, firesOut: 0 };
+  g.missionMarker = null;
+  g.missionTimer = 0;
+  g.sideJob = null;
+  g.modal = null;
+  g.card = null;
   g.station = 0;
   g.song = 0;
   g.songStep = 0;
-  g.phoneOpen = false;
-  g.messages = [];
-  g.unread = 0;
-  g.maya = { rel: 0, onDate: false, stage: 0 };
-  g.event = null;
-  g.eventTimer = 180;
-  g.training = { rangeScore: 0, rangeBest: 0, swimBest: 0, slalomBest: 0 };
-  g.stats = { kills: 0, stolen: 0, fares: 0, firesOut: 0, fishCaught: 0 };
-  g.toast = '';
-  g.toastTimer = 0;
-  g.dialogue = null;
-  g.card = null;
-  g.modal = null;
-  g.menu = null;
-  g.flags = {};
+  g._taxiRequested = false;
+  g._taxiCab = null;
+  g._taxiState = null;
+  g._taxiWait = 0;
 }
 
-// Add cash and always tell the player where it came from. Every
-// income path in the game must go through here (or show its own
-// toast) — silent income was a real bug in round 4.
-export function addCash(g, amount, why) {
+// Earn (or spend) cash. A gain always toasts its reason so the player
+// can audit where money came from; a spend stays quiet.
+export function addCash(g, amount, reason) {
   g.cash += amount;
-  if (why) showToast(g, `+$${amount} ${why}`);
+  if (amount >= 0) {
+    const why = reason ? ` ${reason}` : '';
+    showToast(g, `+$${amount}${why}`);
+  }
   return g.cash;
 }
 
@@ -216,11 +198,8 @@ export function chapterTitle(g) {
   return c ? c.title : 'Free Roam';
 }
 
+// 16% per finished chapter (80% after all five; the last 20% is the
+// free-roam life: dates, cats, fires, fares and the rest).
 export function completionPercent(g) {
-  // 5 chapters + side content: chapters are 80%, the rest is free.
-  const base = (g.chapterDone / CHAPTERS.length) * 80;
-  const extra = Math.min(20, g.stats.fares * 2 + g.stats.firesOut * 2 + g.stats.fishCaught);
-  return Math.min(100, Math.round(base + extra));
+  return Math.min(100, g.chapterDone * 16);
 }
-
-export { TUNE };

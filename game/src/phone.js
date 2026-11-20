@@ -1,88 +1,77 @@
-// Solmar Bay — smartphone.
+// Solmar Bay — the phone.
 //
-// Tab opens the phone: Contacts, Messages, Map. Contacts: Rico
-// (missions), Maya (dating), Taxi (call a cab), Mechanic (repair
-// the car for $30). Calling the taxi dispatches a cab that drives
-// to the player; get in with E. Messages arrive from the story
-// and from Maya.
-
-import { showToast } from './state.js';
-import { dist } from './config.js';
+// Contacts, messages and calls. Rico gives chapter tips, Maya's
+// advice depends on the relationship, the taxi dispatches a cab and
+// the mechanic repairs the car the player is sitting in.
 
 export const CONTACTS = [
   { id: 'rico', name: 'Rico', role: 'Boss' },
-  { id: 'maya', name: 'Maya', role: 'Date' },
+  { id: 'maya', name: 'Maya', role: 'Beach House' },
   { id: 'taxi', name: 'Solmar Cab', role: 'Taxi' },
   { id: 'mechanic', name: 'Manny', role: 'Mechanic' },
 ];
 
-export function togglePhone(game) {
-  if (game.mode === 'phone') {
-    game.mode = 'play';
-    game.phoneOpen = false;
+// Open the phone (mode 'phone'), or close it back to 'play'.
+// Nothing happens from the title screen.
+export function togglePhone(g) {
+  if (g.mode === 'menu') return false;
+  if (g.mode === 'phone' || g.phoneOpen) {
+    g.phoneOpen = false;
+    g.mode = 'play';
     return false;
   }
-  if (game.mode === 'play') {
-    game.mode = 'phone';
-    game.phoneOpen = true;
-    game.phoneTab = 'contacts';
-    return true;
-  }
-  return false;
+  g.phoneOpen = true;
+  g.mode = 'phone';
+  return true;
 }
 
-export function phoneTab(game, tab) {
-  game.phoneTab = tab;
-  if (tab === 'messages') game.unread = 0;
+export function phoneTab(g, tab) {
+  g.phoneTab = tab;
+  if (tab === 'messages') g.unread = 0;
+  return tab;
 }
 
-export function callContact(game, id) {
+export function notifyMessage(g, from, text) {
+  g.messages = g.messages || [];
+  g.messages.push({ from, text, t: g.time || 0 });
+  g.unread = (g.unread || 0) + 1;
+  return g.messages[g.messages.length - 1];
+}
+
+export function callContact(g, id) {
   if (id === 'rico') {
-    const c = game.chapter;
     const tips = [
-      'Steal a car and bring it to the garage on Bay Street.',
-      'Pick up the package at the harbour. Timer is running.',
-      'Lose the heat. Hide, outrun, outsmart.',
-      'Three passengers tonight. Be nice, get tips.',
-      'The harbour vault. Grab the cash, lose four stars, reach the safehouse.',
+      'First wheels: steal any car and bring it to the garage at the east side, near (150, -126).',
+      'The package is at the harbour docks. Pick it up and deliver it to the hideout.',
+      'Lose the cops: break line of sight and stay hidden for 14 seconds per star.',
+      'Taxi nights: pick up three passengers around the city for good money.',
+      'The big one: grab the vault cash, then reach the safehouse with no stars on you.',
     ];
-    game.messages.push({ from: 'Rico', text: tips[c - 1] || 'Free roam, kid. Make money.', t: game.time });
+    const tip = tips[Math.min((g.chapter || 1) - 1, tips.length - 1)];
+    notifyMessage(g, 'Rico', tip);
     return true;
   }
   if (id === 'maya') {
-    if (game.maya.rel >= 75) {
-      game.messages.push({ from: 'Maya', text: 'I heard the Sharks are moving goods through the harbour tonight.', t: game.time });
+    if ((g.maya.rel || 0) >= 75) {
+      notifyMessage(g, 'Maya', 'Careful near the harbour — the Sharks are watching the docks tonight.');
     } else {
-      game.messages.push({ from: 'Maya', text: 'Come find me at the beach house when you have time.', t: game.time });
+      notifyMessage(g, 'Maya', 'Come find me at the beach house on the west beach. Bring food and we can talk.');
     }
     return true;
   }
   if (id === 'taxi') {
-    // Dispatch a cab (taxi.js does the driving).
-    game._taxiRequested = true;
-    showToast(game, 'Taxi called — a cab is on its way.');
+    g._taxiRequested = true;
+    notifyMessage(g, 'Solmar Cab', 'Cab dispatched. Wait for it to reach you.');
     return true;
   }
   if (id === 'mechanic') {
-    const p = game.player;
-    if (!p.inCar) {
-      showToast(game, 'Manny: bring a car to me first.');
-      return false;
-    }
-    if (game.cash < 30) {
-      showToast(game, 'Manny charges $30 for a repair.');
-      return false;
-    }
-    game.cash -= 30;
-    p.inCar.condition = 100;
-    showToast(game, 'Manny: good as new. $30.');
+    const v = g.player.inCar;
+    if (!v) return false;
+    if ((g.cash || 0) < 30) return false;
+    g.cash -= 30;
+    v.condition = 100;
+    notifyMessage(g, 'Manny', 'Fixed up like new. That will be $30.');
     return true;
   }
   return false;
-}
-
-export function notifyMessage(game, from, text) {
-  game.messages.push({ from, text, t: game.time });
-  game.unread += 1;
-  if (game.audio) game.audio.sfx('phone');
 }
