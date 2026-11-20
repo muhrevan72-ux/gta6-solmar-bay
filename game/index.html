@@ -39,6 +39,22 @@
   #hud-card-title { font-size: 30px; color: #ffd23c; margin-bottom: 10px; }
   #hud-card-text { font-size: 16px; line-height: 1.5; color: #fff; }
   #hud-card .hint { margin-top: 14px; font-size: 13px; color: #9fc3ff; }
+  /* Pause overlay (round-9 fix): Escape used to pause the game
+     with NO visible change, so play-test #7 reported "Escape does
+     not open pause". The overlay is a dedicated panel with a
+     clickable Resume button. */
+  #hud-pause {
+    position: fixed; inset: 0; z-index: 19; display: none;
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; background: rgba(8,8,20,0.7); text-align: center;
+  }
+  #hud-pause h2 { font-size: 48px; letter-spacing: 6px; color: #ffd23c; text-shadow: 0 4px 16px rgba(0,0,0,0.7); }
+  #hud-pause p { font-size: 15px; color: #cfe8ff; }
+  #hud-pause button {
+    font-size: 20px; padding: 12px 34px; border: none; border-radius: 8px;
+    background: #ffd23c; color: #222; font-weight: 700; cursor: pointer;
+  }
+  #hud-pause button:hover { background: #ffe066; }
   /* Modal (food / outfit / garage / busted / wasted). */
   #hud-modal {
     position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
@@ -68,6 +84,13 @@
   #hud-weapon { color: #ffe9a8; }
   #hud-car { color: #bfe3ff; }
   #hud-radio { color: #ffb3e6; }
+  #btn-pause {
+    position: absolute; bottom: 12px; right: 12px; z-index: 11;
+    pointer-events: auto; font-size: 14px; padding: 8px 16px;
+    border: 1px solid rgba(255,255,255,0.4); border-radius: 8px;
+    background: rgba(0,0,0,0.55); color: #fff; cursor: pointer;
+  }
+  #btn-pause:hover { background: rgba(0,0,0,0.8); }
   #hud-dialogue {
     position: absolute; bottom: 90px; left: 50%; transform: translateX(-50%);
     background: rgba(0,0,0,0.65); padding: 10px 18px; border-radius: 8px;
@@ -120,6 +143,13 @@
   </div>
 </div>
 
+<!-- Pause overlay (round-9 fix). -->
+<div id="hud-pause">
+  <h2>PAUSED</h2>
+  <p>Press Enter or Esc to resume — or click Resume.</p>
+  <button id="btn-resume">Resume</button>
+</div>
+
 <!-- Modal: food / outfit / garage / busted / wasted. -->
 <div id="hud-modal">
   <div id="hud-modal-title"></div>
@@ -149,6 +179,7 @@
     <div id="hud-car">On foot</div>
     <div id="hud-radio">BAY FM 94.7 — Golden Hour Drive</div>
   </div>
+  <button id="btn-pause">II Pause (Esc)</button>
   <div id="hud-dialogue"></div>
   <div id="hud-toast"></div>
 </div>
