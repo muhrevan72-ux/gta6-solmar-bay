@@ -110,6 +110,10 @@ const dossier = {
     'gangs (Bay Kings vs Harbour Sharks)',
     'fire, taxi, dating, outfit, training, events, cats, train, elevator',
     'boot-order fix: canvas sized before createRenderer, resize re-creates the renderer',
+    'resize fix: static + glb batches re-baked after every renderer re-creation',
+    'distance fog in metres: golden hour and sunset keep the city visible',
+    'pause overlay: Escape shows PAUSED + a clickable Resume button',
+    'combat feedback: a hit that connects reports assault (1 star)',
   ],
   controls: 'WASD move, Shift run, E interact/enter car, F punch, G bomb, click shoot, 1/2/3 weapons, Space handbrake/parachute, Esc pause, M mute, Tab phone, R radio',
 };
