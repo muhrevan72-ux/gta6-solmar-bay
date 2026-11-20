@@ -6,10 +6,11 @@
 // main.js, never here. Collision uses the city's bbox collider —
 // the player is a circle of radius TUNE.playerRadius.
 
-import { TUNE, COL } from './config.js';
+import { TUNE, COL, OUTFIT } from './config.js';
 import { isDown } from './input.js';
 import { isWaterAt } from './world.js';
 import { addCash, showToast } from './state.js';
+import { hairBox } from './pedestrians.js';
 
 export function createPlayer(spawn) {
   return {
@@ -124,15 +125,28 @@ export function playerBoxes(game, out) {
   const shirt = COL.shirt[s.outfit.shirt % COL.shirt.length];
   const pants = COL.pants[s.outfit.pants % COL.pants.length];
   const skin = COL.skin[0];
-  const hair = COL.hair[s.outfit.hair % COL.hair.length];
+  // Hair: the OUTFIT table's own colour (the old code read
+  // COL.hair by the same index, so a bought "Red mohawk" rendered
+  // brown). The style follows the outfit name: crop/buzz are a buzz
+  // cut, mohawk/spikes are a ridge.
+  const hairEntry = OUTFIT.hair[s.outfit.hair % OUTFIT.hair.length];
+  const hair = hairEntry.colour;
+  const hairStyle = ['buzz', 'buzz', 'mohawk', 'mohawk'][s.outfit.hair % 4];
   const legSwing = swing * 0.35;
   out.pushBoxRot(p.x - 0.11, 0.45 + y0, p.z, 0.18, 0.9, 0.18, pants, p.heading + legSwing * 0.3);
   out.pushBoxRot(p.x + 0.11, 0.45 + y0, p.z, 0.18, 0.9, 0.18, pants, p.heading - legSwing * 0.3);
+  // Shoes (the outfit shop's colour): two small boxes at the feet,
+  // swinging with the legs.
+  const shoes = OUTFIT.shoes[s.outfit.shoes % OUTFIT.shoes.length].colour;
+  out.pushBoxRot(p.x - 0.11, 0.08 + y0, p.z + 0.05, 0.2, 0.16, 0.34, shoes, p.heading + legSwing * 0.3);
+  out.pushBoxRot(p.x + 0.11, 0.08 + y0, p.z + 0.05, 0.2, 0.16, 0.34, shoes, p.heading - legSwing * 0.3);
   out.pushBoxRot(p.x, 1.25 + y0, p.z, 0.5, 0.7, 0.28, shirt, p.heading);
   out.pushBoxRot(p.x - 0.32, 1.25 + y0, p.z, 0.14, 0.65, 0.14, skin, p.heading + swing * 0.4);
   out.pushBoxRot(p.x + 0.32, 1.25 + y0, p.z, 0.14, 0.65, 0.14, skin, p.heading - swing * 0.4);
   out.pushBoxRot(p.x, 1.82 + y0, p.z, 0.34, 0.36, 0.32, skin, p.heading);
-  out.pushBoxRot(p.x, 2.02 + y0, p.z, 0.36, 0.12, 0.34, hair, p.heading);
+  // Hair by outfit style (shared helper with the peds): buzz for
+  // crop/buzz, a ridge for mohawk/spikes.
+  hairBox(out, { x: p.x, z: p.z, hairStyle, hair }, 2.02 + y0, p.heading);
   // Eyes (near LOD only — the dynamic batch is culled at range anyway).
   out.pushBoxRot(p.x - 0.08, 1.84 + y0, p.z + 0.17, 0.05, 0.05, 0.02, [0.1, 0.1, 0.1], p.heading);
   out.pushBoxRot(p.x + 0.08, 1.84 + y0, p.z + 0.17, 0.05, 0.05, 0.02, [0.1, 0.1, 0.1], p.heading);

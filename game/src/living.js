@@ -11,6 +11,7 @@
 // - Clouds drift; trees sway gently.
 
 import { showToast } from './state.js';
+import { weatherSample } from './weather.js';
 
 export function createLiving(city) {
   return {
@@ -162,5 +163,19 @@ export function livingBoxes(game, out) {
   // Fish (small blue boxes under the water surface).
   for (const f of L.fish) {
     out.pushBox(f.x, -0.3, f.z, 0.5, 0.15, 0.2, [0.3, 0.5, 0.8]);
+  }
+  // Clouds (restored in B7 — the A7 rebuild kept the drift timer
+  // but dropped the draw call, so the sky was a flat colour). Two
+  // boxes per cloud; x drifts with L.cloudDrift and wraps over the
+  // city. The tint follows the sky colour (white by day, warm at
+  // golden hour, dark blue-grey at night) so they never glow white
+  // against a night sky.
+  const sky = weatherSample(game.weather).sky;
+  const cc = [0.55 + 0.45 * sky[0], 0.55 + 0.45 * sky[1], 0.55 + 0.45 * sky[2]];
+  for (const cl of game.city.clouds) {
+    let cx = cl.x + L.cloudDrift;
+    cx = ((cx + 400) % 800 + 800) % 800 - 400;
+    out.pushBox(cx, cl.y, cl.z, cl.s * 2, 1.2, cl.s, cc);
+    out.pushBox(cx + cl.s * 0.4, cl.y + 1, cl.z, cl.s, 1, cl.s * 0.7, cc);
   }
 }

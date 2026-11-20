@@ -16,7 +16,7 @@ import { newGameState, showToast, showMenu, hideMenu, addCash, stepToasts } from
 import { createInput, attachInput, pressedKey, endFrame } from './input.js';
 import { createAudio, createRadio, nextStation, advanceRadio, engineHum, setMuted, playJingle } from './audio.js';
 import { createWeather, weatherSample, stepWeather, rainBoxes } from './weather.js';
-import { createRenderer, BoxBatch } from './render.js';
+import { createRenderer, BoxBatch, boxVisible } from './render.js';
 import { generateCity } from './world.js';
 import { createCamera, followCamera } from './shots.js';
 import { createPlayer, stepPlayer, playerBoxes, collectPickups } from './player.js';
@@ -350,6 +350,33 @@ export function collectDynamicBoxes(game, out) {
   outfitBoxes(game, out);
   interiorBoxes(game, out);
   rainBoxes(game, out);
+  // Neon signs, ocean waves, sun glints (restored in B7 — the A7
+  // rebuild dropped these draw calls, so the city lost its night
+  // glow and the sea its movement, while the weather module's neon
+  // boost had no consumer at all). Neon is culled at 220 m and its
+  // colour is multiplied by the time-of-day boost (1.0 day, 1.6
+  // sunset, 1.9 night) and clamped at 1.4, so the signs glow after
+  // dark. Waves drift and bob with the game time; glints drift over
+  // the western water as a cheap specular stand-in (no PBR
+  // pipeline). None of this touches the frame rule: beginFrame is
+  // still the only clear, and these batches are drawn, not cleared.
+  const wSample = weatherSample(game.weather);
+  const neonBoost = wSample.neon;
+  for (const n of game.city.neon) {
+    if (!boxVisible(n.x, n.z, game.camera, 220)) continue;
+    const c = [Math.min(1.4, n.c[0] * neonBoost), Math.min(1.4, n.c[1] * neonBoost), Math.min(1.4, n.c[2] * neonBoost)];
+    out.pushBox(n.x, n.y, n.z, n.sx, n.sy, n.sz, c);
+  }
+  for (const wv of game.city.waves) {
+    const x = wv.x + Math.sin(game.time * 0.3 + wv.phase) * 4;
+    const y = 0.2 + Math.sin(game.time * 0.8 + wv.phase) * 0.3;
+    out.pushBox(x, y, wv.z, 6, 0.4, 1.5, [0.6, 0.8, 0.95]);
+  }
+  for (let i = 0; i < 4; i++) {
+    const gx = -385 + ((game.time * 6 + i * 47) % 40); // stays over the water (x < -340)
+    const gz = -260 + i * 130;
+    out.pushFlat(gx, 0.15, gz, 14, 1.2, [1.0, 0.9, 0.6]);
+  }
 }
 
 export function renderFrame(game) {

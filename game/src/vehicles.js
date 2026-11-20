@@ -338,6 +338,13 @@ export function vehicleBoxes(game, out, near) {
       if (c.kind === 'taxi' || c.calledTaxi) {
         out.pushBoxRot(c.x, 1.65 + y0, c.z - 0.3, 0.7, 0.2, 0.3, [1, 0.85, 0.1], h);
       }
+      if (c.name === 'Solmar Comet' || c.name === 'Palm GT') {
+        // Rear spoiler on the two sports cars: a wing on two struts
+        // at the back (local -z), above the body.
+        out.pushBoxRot(c.x, 1.35 + y0, c.z - 2.0, 1.6, 0.12, 0.5, [0.12, 0.12, 0.14], h);
+        out.pushBoxRot(c.x - 0.6, 1.2 + y0, c.z - 2.0, 0.1, 0.3, 0.1, [0.12, 0.12, 0.14], h);
+        out.pushBoxRot(c.x + 0.6, 1.2 + y0, c.z - 2.0, 0.1, 0.3, 0.1, [0.12, 0.12, 0.14], h);
+      }
     }
     // Blob shadow under the car.
     out.pushFlat(c.x, 0.06, c.z, 2.2, 4.6, [0, 0, 0], h);

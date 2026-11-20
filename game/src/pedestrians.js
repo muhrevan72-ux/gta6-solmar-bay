@@ -230,6 +230,13 @@ export function pedBoxes(game, out, near) {
         out.pushBoxRot(ped.x - 0.08, 1.84 * ped.height, ped.z + 0.17, 0.05, 0.05, 0.02, [0.1, 0.1, 0.1], ped.heading);
         out.pushBoxRot(ped.x + 0.08, 1.84 * ped.height, ped.z + 0.17, 0.05, 0.05, 0.02, [0.1, 0.1, 0.1], ped.heading);
       }
+      if (near && d <= 40) {
+        // Shoes (near LOD only): dark boxes at the feet, swinging
+        // with the legs. Seated peds have no shoes here — their legs
+        // are forward, so the feet are not under them.
+        out.pushBoxRot(ped.x - 0.11, 0.06, ped.z + 0.04, 0.2, 0.12, 0.3, [0.12, 0.1, 0.1], ped.heading + legSwing * 0.3);
+        out.pushBoxRot(ped.x + 0.11, 0.06, ped.z + 0.04, 0.2, 0.12, 0.3, [0.12, 0.1, 0.1], ped.heading - legSwing * 0.3);
+      }
       if (ped.gang) {
         // Gang bandana.
         out.pushBoxRot(ped.x, 1.78 * ped.height, ped.z, 0.36, 0.08, 0.34, ped.gang === 'kings' ? COL.gangKings : COL.gangSharks, ped.heading);
@@ -240,7 +247,7 @@ export function pedBoxes(game, out, near) {
   }
 }
 
-function hairBox(out, ped, y, heading) {
+export function hairBox(out, ped, y, heading) {
   const style = ped.hairStyle;
   if (style === 'cap') {
     out.pushBoxRot(ped.x, y, ped.z, 0.38, 0.1, 0.36, [0.2, 0.2, 0.2], heading);
