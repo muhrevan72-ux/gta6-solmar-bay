@@ -1,4 +1,9 @@
 <!DOCTYPE html>
+<!-- Solmar Bay — rebuild #15. The HUD below is the live game UI:
+     cash/health/wanted/clock/respect, the minimap, the phone panel
+     (#hud-phone, shown by hud.js when Tab opens it), the pause
+     overlay (#hud-pause, whose buttons opt back into pointer
+     events so Resume is clickable), and the chapter card. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -38,7 +43,7 @@
   #hud-pause button { font-size: 18px; padding: 10px 24px; border: 0; border-radius: 8px; background: #ffd23f; color: #111; font-weight: 700; cursor: pointer; pointer-events: auto; }
   #hud-menu { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px; background: rgba(5, 8, 18, 0.72); z-index: 10; }
   #hud-police { position: absolute; top: 90px; left: 14px; color: #ffb3b3; text-shadow: 0 1px 3px #000; }
-  #hud-phone { position: absolute; right: 14px; top: 80px; width: 220px; background: rgba(10, 16, 32, 0.9); border: 1px solid #445; border-radius: 12px; padding: 12px; display: none; z-index: 12; }
+  #hud-phone { position: absolute; right: 14px; top: 80px; width: 300px; background: rgba(10, 16, 32, 0.95); border: 2px solid #ffd23f; border-radius: 12px; padding: 12px 14px; display: none; z-index: 12; font-size: 14px; line-height: 1.6; color: #fff; white-space: pre-line; text-shadow: 0 1px 2px #000; }
 </style>
 </head>
 <body>
