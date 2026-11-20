@@ -1,70 +1,71 @@
-// Solmar Bay — save/load via localStorage (slot 1). The player's
-// position is NOT saved; chapter, cash, respect, owned cars and
-// completion are. Without localStorage every call is a safe no-op.
+// Solmar Bay — save / load (rebuild #13).
+// Slot key 'solmar-bay-save-1'. Safe no-ops when localStorage
+// does not exist (Node / headless tests).
+const KEY = 'solmar-bay-save-1';
 
-const KEY = (slot) => `solmar-bay-save-${slot || 1}`;
-
-export function saveGame(g, slot) {
-  if (typeof localStorage === 'undefined') return false;
+function storage() {
   try {
-    const data = {
+    return typeof localStorage !== 'undefined' ? localStorage : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+export function saveGame(g, slot = 1) {
+  const s = storage();
+  if (!s) return false;
+  try {
+    s.setItem(KEY, JSON.stringify({
       chapter: g.chapter,
-      chapterDone: g.chapterDone || 0,
       cash: g.cash,
-      respect: g.respect || 0,
-      // The garage cars, as full car objects (name/colour/condition/kind).
-      ownedCars: (g.ownedCars || []).map(c => ({ name: c.name, colour: c.colour, condition: c.condition, kind: c.kind })),
-      completion: g.completion || 0,
-      bank: g.bank || 0,
-      day: g.day,
-      clock: g.clock,
-    };
-    localStorage.setItem(KEY(slot), JSON.stringify(data));
+      respect: g.respect,
+      ownedCars: g.ownedCars,
+      completion: g.completion,
+    }));
     return true;
   } catch (e) {
     return false;
   }
 }
 
-export function loadGame(g, slot) {
-  if (typeof localStorage === 'undefined') return null;
+export function loadGame(g, slot = 1) {
+  const s = storage();
+  if (!s) return null;
+  let raw = null;
   try {
-    const raw = localStorage.getItem(KEY(slot));
-    if (!raw) return null;
+    raw = s.getItem(KEY);
+  } catch (e) {
+    return null;
+  }
+  if (!raw) return null;
+  try {
     const data = JSON.parse(raw);
-    g.chapter = data.chapter || 1;
-    g.chapterDone = data.chapterDone || 0;
-    g.cash = data.cash ?? 150;
-    g.respect = data.respect || 0;
+    g.chapter = data.chapter;
+    g.cash = data.cash;
+    g.respect = data.respect;
+    g.ownedCars = data.ownedCars || [];
     g.completion = data.completion || 0;
-    g.bank = data.bank || 0;
-    g.day = data.day || 1;
-    g.clock = data.clock ?? 8;
-    if (data.ownedCars) {
-      g.ownedCars = data.ownedCars.map(c => ({ name: c.name, colour: c.colour, condition: c.condition, kind: c.kind }));
-      for (const v of g.vehicles || []) {
-        if (data.ownedCars.some(c => c.name === v.name)) v.owned = true;
-      }
-    }
     return data;
   } catch (e) {
     return null;
   }
 }
 
-export function hasSave(slot) {
-  if (typeof localStorage === 'undefined') return false;
+export function hasSave(slot = 1) {
+  const s = storage();
+  if (!s) return false;
   try {
-    return localStorage.getItem(KEY(slot)) !== null;
+    return s.getItem(KEY) !== null;
   } catch (e) {
     return false;
   }
 }
 
-export function clearSave(slot) {
-  if (typeof localStorage === 'undefined') return false;
+export function clearSave(slot = 1) {
+  const s = storage();
+  if (!s) return false;
   try {
-    localStorage.removeItem(KEY(slot));
+    s.removeItem(KEY);
     return true;
   } catch (e) {
     return false;

@@ -1,68 +1,50 @@
-// Solmar Bay — the garage: store cars, take them out, repaint.
-// The garage holds at most 6 cars. The door is at (150,-128).
-
+// Solmar Bay — garage (rebuild #13).
 import { SPAWNS } from './config.js';
+import { showToast } from './state.js';
+import { makeVehicle } from './vehicles.js';
 
-export function nearGarageDoor(g) {
-  const d = Math.hypot(g.player.x - SPAWNS.garageDoor.x, g.player.z - SPAWNS.garageDoor.z);
-  return d < 6;
-}
+const GARAGE_MAX = 6;
 
-// E at the garage door: on foot opens the garage modal; driving a
-// car stores it. Returns true when the garage handled the key,
-// false when the garage is full or the player is far away.
 export function tryGarage(g) {
-  if (!nearGarageDoor(g)) return false;
+  const d = Math.hypot(g.player.x - SPAWNS.garageDoor.x, g.player.z - SPAWNS.garageDoor.z);
+  if (d > 10) return false;
   if (g.player.inCar) {
-    const car = g.player.inCar;
-    if (!g.ownedCars) g.ownedCars = [];
-    if (g.ownedCars.length >= 6) {
-      g.toast = 'Garage is full (6 cars)';
-      g.toastTimer = 3;
-      return false;
-    }
-    car.owned = true;
-    car.driver = null;
-    g.ownedCars.push(car);
-    g.vehicles = g.vehicles.filter(v => v !== car);
+    if (g.ownedCars.length >= GARAGE_MAX) return false;
+    const v = g.player.inCar;
+    v.owned = true;
+    g.ownedCars.push({ name: v.name, colour: v.colour, condition: v.condition, kind: v.kind });
+    const idx = g.vehicles.indexOf(v);
+    if (idx >= 0) g.vehicles.splice(idx, 1);
     g.player.inCar = null;
-    g.player.x = SPAWNS.garageDoor.x;
-    g.player.z = SPAWNS.garageDoor.z;
-    g.toast = `${car.name} stored in the garage`;
-    g.toastTimer = 3;
+    showToast(g, `${v.name} stored in the garage`);
     return true;
   }
-  g.modal = { kind: 'garage', title: 'Solmar Garage', lines: (g.ownedCars || []).map(c => c.name) };
+  g.modal = {
+    kind: 'garage',
+    title: 'Garage',
+    lines: g.ownedCars.length === 0
+      ? ['The garage is empty. Drive a car here and press E to store it.']
+      : g.ownedCars.map((c, i) => `${i + 1}. ${c.name} — Condition ${Math.round(c.condition)}%`),
+  };
   return true;
 }
 
-// Take a stored car back out onto the street.
 export function takeOutCar(g, i) {
-  if (!g.ownedCars || i < 0 || i >= g.ownedCars.length) return false;
-  const car = g.ownedCars.splice(i, 1)[0];
-  car.x = SPAWNS.garageDoor.x;
-  car.z = SPAWNS.garageDoor.z + 4;
-  car.heading = 0;
-  car.driver = null;
-  g.vehicles.push(car);
-  g.modal = null;
+  if (i < 0 || i >= g.ownedCars.length) return false;
+  const c = g.ownedCars.splice(i, 1)[0];
+  const v = makeVehicle(c.kind || 'car', SPAWNS.garageDoor.x + 6, SPAWNS.garageDoor.z, 0, c.colour, c.name);
+  v.condition = c.condition;
+  v.owned = true;
+  g.vehicles.push(v);
   return true;
 }
 
-// Repaint the player's current car for $50.
 export function repaintCar(g) {
-  const car = g.player.inCar;
-  if (!car) return false;
-  if (g.cash < 50) {
-    g.toast = 'Repaint costs $50';
-    g.toastTimer = 3;
-    return false;
-  }
+  const v = g.player.inCar;
+  if (!v) return false;
+  if (g.cash < 50) return false;
   g.cash -= 50;
-  const palette = [[0.9, 0.2, 0.2], [0.2, 0.5, 0.9], [0.95, 0.75, 0.1], [0.2, 0.8, 0.4], [0.7, 0.3, 0.9]];
-  let idx = palette.findIndex(c => c[0] === car.colour[0] && c[1] === car.colour[1] && c[2] === car.colour[2]);
-  car.colour = palette[(idx + 1) % palette.length];
-  g.toast = 'Car repainted — $50';
-  g.toastTimer = 3;
+  v.colour = [Math.random(), Math.random(), Math.random()];
+  showToast(g, `${v.name} repainted — $50`);
   return true;
 }

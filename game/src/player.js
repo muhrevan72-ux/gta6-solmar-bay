@@ -1,144 +1,109 @@
-// Solmar Bay — the player: on-foot movement, entering/exiting cars,
-// the player model (11 boxes) and outfit colours.
-
-import { TUNE, OUTFIT } from './config.js';
+// Solmar Bay — on-foot player (rebuild #13).
 import { isBlocked } from './world.js';
+import { axis } from './input.js';
 import { pushBox } from './render.js';
-import { stepPlayerCar } from './vehicles.js';
+import { TUNE, OUTFIT } from './config.js';
 
-export function outfitColours(game) {
-  const o = (game.player && game.player.outfit) || { hair: 0, shirt: 0, pants: 0, shoes: 0 };
-  const hair = OUTFIT.hair[o.hair] || OUTFIT.hair[0];
-  const shirt = OUTFIT.shirt[o.shirt] || OUTFIT.shirt[0];
-  const pants = OUTFIT.pants[o.pants] || OUTFIT.pants[0];
-  const shoes = OUTFIT.shoes[o.shoes] || OUTFIT.shoes[0];
-  return { hair: hair.color, shirt: shirt.color, pants: pants.color, shoes: shoes.color };
+export function outfitColours(g) {
+  const o = g.player.outfit;
+  return {
+    hair: OUTFIT.hair[o.hair].colour,
+    shirt: OUTFIT.shirt[o.shirt].colour,
+    pants: OUTFIT.pants[o.pants].colour,
+    shoes: OUTFIT.shoes[o.shoes].colour,
+  };
 }
 
 export function stepPlayer(g, dt, input) {
   const p = g.player;
-  // Cooldowns decay FIRST — before the in-car early return — or
-  // they freeze forever while the player is driving (round-8 bug).
-  // Cooldowns live on the PLAYER, not the game.
-  if (p.eCooldown > 0) p.eCooldown = Math.max(0, p.eCooldown - dt);
-  if (p.shootCooldown > 0) p.shootCooldown = Math.max(0, p.shootCooldown - dt);
-  if (p.punchCooldown > 0) p.punchCooldown = Math.max(0, p.punchCooldown - dt);
-  if (p.bombCooldown > 0) p.bombCooldown = Math.max(0, p.bombCooldown - dt);
-  if (p.inCar) {
-    stepPlayerCar(g, dt, input);
+  // Cooldowns decay BEFORE the in-car early return.
+  p.eCooldown = Math.max(0, p.eCooldown - dt);
+  p.shootCooldown = Math.max(0, p.shootCooldown - dt);
+  p.punchCooldown = Math.max(0, p.punchCooldown - dt);
+  p.bombCooldown = Math.max(0, p.bombCooldown - dt);
+  if (p.inCar) return;
+  if (p.onTrain && g.train) {
+    p.x = 300 * Math.sin(g.train.a);
+    p.z = 300 * Math.cos(g.train.a);
     return;
   }
-  const running = input.downKey('ShiftLeft') || input.downKey('ShiftRight');
+  const yaw = g.camera ? g.camera.yaw : p.heading;
+  p.heading = yaw;
+  const fwd = -axis(input, 'KeyW', 'KeyS'); // W = +1 forward
+  const strafe = axis(input, 'KeyA', 'KeyD'); // D = +1 right
+  const running = input.down.has('ShiftLeft') || input.down.has('ShiftRight');
   const speed = running ? TUNE.runSpeed : TUNE.walkSpeed;
-  let fwd = 0;
-  let strafe = 0;
-  if (input.downKey('KeyW')) fwd += 1;
-  if (input.downKey('KeyS')) fwd -= 1;
-  if (input.downKey('KeyA')) strafe -= 1;
-  if (input.downKey('KeyD')) strafe += 1;
-  if (fwd === 0 && strafe === 0) {
-    p.speed = 0;
-    return;
-  }
-  const len = Math.hypot(fwd, strafe) || 1;
-  fwd /= len;
-  strafe /= len;
-  // Forward follows the CAMERA yaw when there is a camera, else the
-  // player's heading. Strafe is perpendicular to forward.
-  const yaw = (g.camera && typeof g.camera.yaw === 'number') ? g.camera.yaw : p.heading;
-  const fx = Math.sin(yaw);
-  const fz = Math.cos(yaw);
-  const sx = Math.cos(yaw);
-  const sz = -Math.sin(yaw);
-  const dx = (fx * fwd + sx * strafe) * speed * dt;
-  const dz = (fz * fwd + sz * strafe) * speed * dt;
+  const mx = Math.sin(yaw) * fwd + Math.cos(yaw) * strafe;
+  const mz = Math.cos(yaw) * fwd - Math.sin(yaw) * strafe;
+  const dx = mx * speed * dt;
+  const dz = mz * speed * dt;
   const nx = p.x + dx;
   const nz = p.z + dz;
-  // A building blocks movement: never end inside one.
-  if (!isBlocked(g.city, nx, nz)) {
+  if (g.city) {
+    if (!isBlocked(g.city, nx, p.z)) p.x = nx;
+    if (!isBlocked(g.city, p.x, nz)) p.z = nz;
+  } else {
     p.x = nx;
     p.z = nz;
-    p.speed = speed;
-  } else {
-    // Try sliding along one axis.
-    if (!isBlocked(g.city, nx, p.z)) {
-      p.x = nx;
-      p.speed = speed;
-    } else if (!isBlocked(g.city, p.x, nz)) {
-      p.z = nz;
-      p.speed = speed;
-    } else {
-      p.speed = 0;
-    }
   }
-  if (fwd > 0) p.heading = Math.atan2(dx, dz);
+  p.speed = Math.hypot(dx, dz) / Math.max(dt, 1e-6);
 }
 
-// Enter the nearest car within 4 m. Returns the car or null.
-// inCar IS the vehicle (never a boolean).
 export function tryEnterVehicle(g) {
   const p = g.player;
+  if (p.inCar) return null;
   let best = null;
-  let bestD = 4;
+  let bestD = 4.5;
   for (const v of g.vehicles) {
     if (v.driver) continue;
     const d = Math.hypot(v.x - p.x, v.z - p.z);
-    if (d < bestD) {
-      bestD = d;
-      best = v;
-    }
+    if (d < bestD) { bestD = d; best = v; }
   }
   if (!best) return null;
-  best.driver = 'player';
   p.inCar = best;
+  best.driver = 'player';
   p.x = best.x;
   p.z = best.z;
-  p.heading = best.heading;
   return best;
 }
 
-// Get out of the car onto a free spot next to it.
 export function exitVehicle(g) {
   const p = g.player;
-  const car = p.inCar;
-  if (!car) return false;
-  car.driver = null;
+  const v = p.inCar;
+  if (!v) return;
+  v.driver = null;
   p.inCar = null;
-  // Step out to the side of the car, on open ground.
-  const offsets = [[3, 0], [-3, 0], [0, 3], [0, -3], [4, 0], [-4, 0]];
-  for (const [ox, oz] of offsets) {
-    const nx = car.x + ox;
-    const nz = car.z + oz;
-    if (!isBlocked(g.city, nx, nz)) {
+  const spots = [[2.5, 0], [-2.5, 0], [0, 2.5], [0, -2.5], [3.5, 0], [0, 3.5]];
+  for (const [dx, dz] of spots) {
+    const nx = v.x + dx, nz = v.z + dz;
+    if (!g.city || !isBlocked(g.city, nx, nz)) {
       p.x = nx;
       p.z = nz;
-      return true;
+      return;
     }
   }
-  p.x = car.x + 3;
-  p.z = car.z;
-  return true;
+  p.x = v.x + 2.5;
+  p.z = v.z;
 }
 
-// The player model: 11 boxes — legs 2, torso, arms 2, head, hair,
-// shoes 2, weapon, backpack. Colours follow the outfit.
-export function playerBoxes(g, batch, cam) {
+// 11 boxes: shoes 2, legs 2, torso, arms 2, head, hair, weapon, pack.
+export function playerBoxes(g, b, cam) {
   const p = g.player;
   const cols = outfitColours(g);
-  const y = p.y || 0;
-  const h = 1.8;
+  const plain = [0, 0, 1, 1];
+  const s = 1;
   let n = 0;
-  const box = (x, yy, z, w, hh, d, col) => { pushBox(batch, x, yy, z, w, hh, d, col); n++; };
-  box(p.x - 0.18, y, p.z, 0.32, 0.8, 0.32, cols.pants); // left leg
-  box(p.x + 0.18, y, p.z, 0.32, 0.8, 0.32, cols.pants); // right leg
-  box(p.x, y + 0.8, p.z, 0.7, 0.6, 0.4, cols.shirt); // torso
-  box(p.x - 0.5, y + 0.85, p.z, 0.22, 0.55, 0.22, cols.shirt); // left arm
-  box(p.x + 0.5, y + 0.85, p.z, 0.22, 0.55, 0.22, cols.shirt); // right arm
-  box(p.x, y + 1.4, p.z, 0.45, 0.4, 0.4, [0.9, 0.75, 0.6]); // head
-  box(p.x, y + 1.75, p.z, 0.48, 0.15, 0.42, cols.hair); // hair
-  box(p.x - 0.18, y, p.z + 0.1, 0.34, 0.12, 0.5, cols.shoes); // left shoe
-  box(p.x + 0.18, y, p.z + 0.1, 0.34, 0.12, 0.5, cols.shoes); // right shoe
-  box(p.x + 0.55, y + 1.0, p.z, 0.12, 0.3, 0.12, [0.2, 0.2, 0.2]); // weapon in hand
-  box(p.x, y + 0.9, p.z - 0.28, 0.5, 0.45, 0.15, [0.4, 0.3, 0.2]); // backpack
+  const box = (x, y, z, w, h, d, col) => { pushBox(b, x, y, z, w, h, d, col, plain); n++; };
+  box(p.x - 0.18, 0.25 * s, p.z, 0.22, 0.6 * s, 0.22, cols.shoes);
+  box(p.x + 0.18, 0.25 * s, p.z, 0.22, 0.6 * s, 0.22, cols.shoes);
+  box(p.x - 0.16, 0.25 * s, p.z, 0.3, 0.75 * s, 0.3, cols.pants);
+  box(p.x + 0.16, 0.25 * s, p.z, 0.3, 0.75 * s, 0.3, cols.pants);
+  box(p.x, 0.85 * s, p.z, 0.85, 0.6 * s, 0.45, cols.shirt);
+  box(p.x - 0.55, 0.85 * s, p.z, 0.22, 0.6 * s, 0.22, cols.shirt);
+  box(p.x + 0.55, 0.85 * s, p.z, 0.22, 0.6 * s, 0.22, cols.shirt);
+  box(p.x, 1.45 * s, p.z, 0.42, 0.42 * s, 0.42, [0.85, 0.65, 0.5]);
+  box(p.x, 1.8 * s, p.z, 0.44, 0.18 * s, 0.44, cols.hair);
+  box(p.x + 0.55, 1.0 * s, p.z + 0.25, 0.12, 0.12, 0.5, [0.15, 0.15, 0.15]);
+  box(p.x, 1.0 * s, p.z - 0.3, 0.6, 0.5 * s, 0.15, [0.3, 0.25, 0.2]);
   return n;
 }

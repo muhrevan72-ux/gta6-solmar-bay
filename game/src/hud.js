@@ -1,141 +1,139 @@
-// Solmar Bay — HUD: all on-screen readouts + the minimap.
-// The HUD is plain DOM updated by updateHud(); text is set through
-// textContent only, never through markup strings (round-5 rule).
-
-import { RESPECT, respectLevel } from './config.js';
-import { completionPercent, chapterTitle } from './state.js';
-import { stationLabel } from './audio.js';
-import { WEAPONS } from './combat.js';
-import { policeList } from './police.js';
-import { missionObjective } from './missions.js';
+// Solmar Bay — dense HUD + minimap (rebuild #13).
+import { chapterTitle } from './state.js';
 import { districtAt } from './world.js';
+import { policeList } from './police.js';
+import { stationLabel } from './audio.js';
+import { respectLevel, CHAPTERS } from './config.js';
+import { phaseAt } from './weather.js';
+import { WEAPONS } from './combat.js';
 
-const HUD_IDS = [
-  'hud', 'hud-menu', 'hud-cash', 'hud-health', 'hud-wanted', 'hud-clock',
-  'hud-respect', 'hud-completion', 'hud-mission', 'hud-police',
+const IDS = [
+  'hud', 'hud-menu', 'hud-cash', 'hud-health', 'hud-armour', 'hud-wanted',
+  'hud-clock', 'hud-respect', 'hud-completion', 'hud-mission', 'hud-police',
   'hud-district', 'hud-speed', 'hud-weapon', 'hud-car', 'hud-radio',
-  'hud-toast', 'hud-dialogue', 'hud-armour', 'hud-card', 'hud-card-title',
-  'hud-modal', 'hud-modal-title', 'hud-pause', 'hud-minimap',
+  'hud-toast', 'hud-dialogue', 'hud-card', 'hud-card-title', 'hud-card-text',
+  'hud-modal', 'hud-modal-title', 'hud-modal-lines', 'hud-pause', 'hud-minimap',
+  'btn-new', 'btn-continue', 'btn-resume', 'btn-pause',
 ];
-
-// Short aliases so game code can write hud.el.cash instead of
-// hud.el['hud-cash']. Both point at the same element.
-const ALIASES = {
-  cash: 'hud-cash', health: 'hud-health', wanted: 'hud-wanted',
-  clock: 'hud-clock', respect: 'hud-respect', completion: 'hud-completion',
-  mission: 'hud-mission', police: 'hud-police', district: 'hud-district',
-  speed: 'hud-speed', weapon: 'hud-weapon', car: 'hud-car',
-  radio: 'hud-radio', toast: 'hud-toast', dialogue: 'hud-dialogue',
-  armour: 'hud-armour', card: 'hud-card', cardTitle: 'hud-card-title',
-  modal: 'hud-modal', modalTitle: 'hud-modal-title', pause: 'hud-pause',
-  menu: 'hud-menu', minimap: 'hud-minimap',
-};
 
 export function createHud(doc) {
   const el = {};
-  for (const id of HUD_IDS) {
+  for (const id of IDS) {
     el[id] = doc ? doc.getElementById(id) : null;
+    // Short alias (hud-cash -> cash) so logic can read hud.el.cash.
+    if (id.startsWith('hud-')) el[id.slice(4)] = el[id];
   }
-  for (const [short, id] of Object.entries(ALIASES)) {
-    el[short] = el[id];
-  }
-  return { el };
+  return { el, doc };
 }
 
-function setText(el, text) {
-  if (el && typeof el === 'object') el.textContent = text;
+function setText(el, id, text) {
+  if (el[id]) el[id].textContent = text;
 }
-function setDisplay(el, d) {
-  if (el && el.style) el.style.display = d;
+function setDisplay(el, id, disp) {
+  if (el[id]) el[id].style.display = disp;
 }
 
 export function updateHud(game, hud) {
+  if (!hud || !hud.el) return;
   const el = hud.el;
-  const hours = Math.floor(game.clock);
-  const minutes = Math.floor((game.clock - hours) * 60);
-  const clockStr = `Day ${game.day} · ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')} · ${game._phase || 'day'} · ${game.weather || 'clear'}`;
-  setText(el['hud-cash'], `$${game.cash}`);
-  setText(el['hud-health'], `${Math.max(0, Math.round(game.health))}`);
-  setText(el['hud-wanted'], '★'.repeat(game.wanted) + '☆'.repeat(5 - game.wanted));
-  setText(el['hud-clock'], clockStr);
-  const rep = game.respect || 0;
-  const level = respectLevel(rep);
-  setText(el['hud-respect'], `Respect ${rep} · ${level.name} · next ${level.next}`);
-  setText(el['hud-completion'], `${completionPercent(game)}%`);
-  if (game.chapter > 5 || (game.chapterDone || 0) >= 5) {
-    setText(el['hud-mission'], 'Free Roam');
+  const p = game.player;
+  setText(el, 'hud-cash', `$${game.cash}`);
+  setText(el, 'hud-health', `${game.health}`);
+  setText(el, 'hud-armour', game.armour > 0 ? `Armour ${game.armour}` : '');
+  const stars = '★'.repeat(game.wanted) + '☆'.repeat(5 - game.wanted);
+  setText(el, 'hud-wanted', stars);
+  const hh = Math.floor(game.clock);
+  const mm = Math.floor((game.clock - hh) * 60);
+  const phase = game._phase || phaseAt(game.clock);
+  setText(el, 'hud-clock', `Day ${game.day} · ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${phase} · ${game.weather}`);
+  const rl = respectLevel(game.respect);
+  setText(el, 'hud-respect', `Respect ${game.respect} · ${rl.name}${rl.next ? ` → ${rl.next}` : ''}`);
+  setText(el, 'hud-completion', `${game.completion}%`);
+  if (game.chapter > 5) {
+    setText(el, 'hud-mission', 'Free Roam');
   } else {
-    setText(el['hud-mission'], `${chapterTitle(game)} — ${missionObjective(game)}`);
+    const ch = CHAPTERS[game.chapter - 1];
+    setText(el, 'hud-mission', `${chapterTitle(game)} · ${ch.objective}`);
   }
-  setText(el['hud-police'], policeList(game).join(' · '));
-  setText(el['hud-district'], districtAt(game.player.x, game.player.z));
-  setText(el['hud-speed'], `${Math.round(game.player.speed || 0)} km/h`);
-  const w = WEAPONS[game.player.weapon] || WEAPONS[0];
-  const ammo = game.player.ammo && game.player.ammo[game.player.weapon] === Infinity ? '∞' : (game.player.ammo ? game.player.ammo[game.player.weapon] : '∞');
-  setText(el['hud-weapon'], `[${w.name} ${ammo}]`);
-  const car = game.player.inCar;
-  if (car) {
-    setText(el['hud-car'], `${car.name} · Condition ${Math.round(car.condition)}%`);
+  setText(el, 'hud-police', policeList(game).join(' · '));
+  setText(el, 'hud-district', districtAt(p.x, p.z));
+  const speed = p.inCar ? Math.round(Math.abs(p.inCar.speed) * 3.6) : Math.round(p.speed || 0);
+  setText(el, 'hud-speed', `${speed} km/h`);
+  const w = WEAPONS[p.weapon];
+  const ammo = p.ammo[p.weapon] === Infinity ? '∞' : p.ammo[p.weapon];
+  setText(el, 'hud-weapon', `[${w.name} ${ammo}]`);
+  if (p.inCar) {
+    setText(el, 'hud-car', `${p.inCar.name} · Condition ${Math.round(p.inCar.condition)}%`);
   } else {
-    setText(el['hud-car'], 'On foot');
+    setText(el, 'hud-car', 'On foot');
   }
-  setText(el['hud-radio'], stationLabel(game.station || 0, game.song || 0));
-  if (game.toastTimer > 0) {
-    setText(el['hud-toast'], game.toast || '');
-    setDisplay(el['hud-toast'], 'block');
-  } else {
-    setText(el['hud-toast'], '');
-    setDisplay(el['hud-toast'], 'none');
-  }
+  setText(el, 'hud-radio', stationLabel(game.station, game.song));
+  setText(el, 'hud-toast', game.toastTimer > 0 ? game.toast : '');
   if (game.dialogue && game.dialogue.t > 0) {
-    setText(el['hud-dialogue'], `${game.dialogue.name} (${game.dialogue.role}): ${game.dialogue.text}`);
-    setDisplay(el['hud-dialogue'], 'block');
+    setText(el, 'hud-dialogue', `${game.dialogue.name} (${game.dialogue.role}): ${game.dialogue.text}`);
+    setDisplay(el, 'hud-dialogue', 'block');
   } else {
-    setDisplay(el['hud-dialogue'], 'none');
+    setText(el, 'hud-dialogue', '');
+    setDisplay(el, 'hud-dialogue', 'none');
   }
-  setText(el['hud-armour'], game.armour > 0 ? `Armour ${game.armour}` : '');
-  setDisplay(el['hud-card'], (game.mode === 'card' || game.mode === 'passed') ? 'flex' : 'none');
-  setText(el['hud-card-title'], game.card ? game.card.title : '');
-  setDisplay(el['hud-modal'], game.modal ? 'block' : 'none');
-  setText(el['hud-modal-title'], game.modal ? game.modal.title : '');
-  setDisplay(el['hud-pause'], game.mode === 'pause' ? 'flex' : 'none');
-  setDisplay(el['hud'], game.mode === 'menu' ? 'none' : 'block');
-  setDisplay(el['hud-menu'], game.mode === 'menu' ? 'flex' : 'none');
+  // Screens.
+  setDisplay(el, 'hud', game.mode === 'menu' ? 'none' : 'block');
+  setDisplay(el, 'hud-menu', game.mode === 'menu' ? 'flex' : 'none');
+  const cardModes = ['card', 'passed', 'wasted', 'busted'];
+  setDisplay(el, 'hud-card', cardModes.includes(game.mode) ? 'flex' : 'none');
+  if (game.card) {
+    setText(el, 'hud-card-title', game.card.title);
+    setText(el, 'hud-card-text', game.card.text || '');
+  }
+  setDisplay(el, 'hud-pause', game.mode === 'pause' ? 'flex' : 'none');
+  if (game.modal) {
+    setDisplay(el, 'hud-modal', 'block');
+    setText(el, 'hud-modal-title', game.modal.title || '');
+    setText(el, 'hud-modal-lines', (game.modal.lines || []).join('\n'));
+  } else {
+    setDisplay(el, 'hud-modal', 'none');
+  }
 }
 
-// The minimap: a round canvas showing the road grid, the player and
-// the taxi cab. The 2d context is a no-op in headless tests.
 export function drawMinimap(game, hud) {
-  const canvas = hud.el['hud-minimap'];
+  if (!hud || !hud.doc) return;
+  const canvas = hud.doc.getElementById('hud-minimap');
   if (!canvas) return;
-  const ctx = canvas.getContext ? canvas.getContext('2d') : null;
+  const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  const S = canvas.width || 160;
-  const scale = S / 800;
+  const W = canvas.width || 200;
+  const H = canvas.height || 200;
+  const scale = W / 800;
   const toX = (x) => (x + 400) * scale;
   const toZ = (z) => (z + 400) * scale;
-  try {
-    ctx.fillStyle = '#0d1b2a';
-    ctx.fillRect(0, 0, S, S);
-    ctx.strokeStyle = '#3a3a3a';
-    ctx.lineWidth = 2;
-    for (const l of [-300, -240, -180, -120, -60, 0, 60, 120, 180, 240, 300]) {
-      ctx.beginPath(); ctx.moveTo(toX(l), 0); ctx.lineTo(toX(l), S); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, toZ(l)); ctx.lineTo(S, toZ(l)); ctx.stroke();
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#1a2a1a';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#2f6fb8';
+  ctx.fillRect(0, 0, 70 * scale, H);
+  ctx.strokeStyle = '#444';
+  for (let v = -360; v <= 360; v += 60) {
+    ctx.beginPath(); ctx.moveTo(toX(v), 0); ctx.lineTo(toX(v), H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, toZ(v)); ctx.lineTo(W, toZ(v)); ctx.stroke();
+  }
+  if (game.city) {
+    ctx.fillStyle = '#888';
+    for (const b of game.city.buildings) {
+      ctx.fillRect(toX(b.x - b.w / 2), toZ(b.z - b.d / 2), b.w * scale, b.d * scale);
     }
-    // Sea.
-    ctx.fillStyle = '#1a5a8a';
-    ctx.fillRect(0, 0, toX(-300), S);
-    // Taxi cab (yellow) when one exists.
-    const cab = game._taxiCab || (game.vehicles || []).find(v => v.kind === 'taxi');
-    if (cab) {
-      ctx.fillStyle = '#ffd23f';
-      ctx.fillRect(toX(cab.x) - 3, toZ(cab.z) - 3, 6, 6);
-    }
-    // Player (white dot).
-    ctx.fillStyle = '#ffffff';
+  }
+  if (game.missionMarker) {
+    ctx.fillStyle = '#ffd23f';
     ctx.beginPath();
-    ctx.arc(toX(game.player.x), toZ(game.player.z), 4, 0, Math.PI * 2);
+    ctx.arc(toX(game.missionMarker.x), toZ(game.missionMarker.z), 5, 0, Math.PI * 2);
     ctx.fill();
-  } catch (e) { /* minimap is best-effort */ }
+  }
+  if (game._taxiCab) {
+    ctx.fillStyle = '#ffe14d';
+    ctx.fillRect(toX(game._taxiCab.x) - 3, toZ(game._taxiCab.z) - 3, 6, 6);
+  }
+  ctx.fillStyle = '#ff4444';
+  ctx.beginPath();
+  ctx.arc(toX(game.player.x), toZ(game.player.z), 4, 0, Math.PI * 2);
+  ctx.fill();
 }

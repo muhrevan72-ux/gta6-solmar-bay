@@ -1,97 +1,87 @@
-// Solmar Bay — two rival gangs: the Bay Kings (gold, downtown) and
-// the Harbour Sharks (teal, harbour). Members attack the player on
-// sight inside their turf.
-
-import { GANGS } from './config.js';
+// Solmar Bay — rival gangs (rebuild #13).
+// Bay Kings own Downtown; Harbour Sharks own the Harbour.
+// Members attack the player inside their turf — but never during
+// the 5-second spawn grace period after (re)spawning.
 import { pushBox } from './render.js';
-
-function mulberry32(seed) {
-  let a = seed;
-  return function () {
-    a |= 0;
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+import { damagePlayer } from './combat.js';
+import { COL } from './config.js';
 
 export function gangInTurf(gang, x, z) {
-  const def = GANGS[gang];
-  if (!def) return false;
-  return x >= def.turf.x0 && x <= def.turf.x1 && z >= def.turf.z0 && z <= def.turf.z1;
+  if (gang === 'kings') return x >= -180 && x <= 180 && z >= -180 && z <= 120;
+  if (gang === 'sharks') return x >= -300 && x <= -120 && z >= 120 && z <= 300;
+  return false;
 }
 
 export function spawnGangs(g) {
-  const rng = mulberry32(777);
-  g.gangMembers = [];
-  for (const [key, def] of Object.entries(GANGS)) {
-    const count = key === 'kings' ? 13 : 12;
-    for (let i = 0; i < count; i++) {
-      const x = def.turf.x0 + rng() * (def.turf.x1 - def.turf.x0);
-      const z = def.turf.z0 + rng() * (def.turf.z1 - def.turf.z0);
-      g.gangMembers.push({
-        gang: key, x, z, heading: rng() * Math.PI * 2,
-        hp: 100, dead: false, colour: def.colour, bandana: def.colour,
-        speed: 2 + rng(),
-        home: { x, z },
-      });
-    }
+  // No gang member spawns within 40 m of the player spawn (0, 20):
+  // the player must be able to boot in and look around before anyone
+  // can reach them, and a member standing on the spawn would make the
+  // opening seconds (and a bomb thrown at the spawn) a coin flip.
+  // The clear zone is far outside every gang's chase radius (18 m),
+  // so a member still has to patrol in before it can attack.
+  const clear = (x, z) => Math.hypot(x - 0, z - 20) >= 40;
+  const members = [];
+  for (let i = 0; i < 13; i++) {
+    let x, z;
+    do {
+      x = -150 + Math.random() * 300;
+      z = -150 + Math.random() * 240;
+    } while (!clear(x, z));
+    members.push({
+      gang: 'kings',
+      x, z,
+      hp: 100, dead: false, heading: Math.random() * Math.PI * 2, speed: 3.5, _assaulted: false,
+    });
   }
+  for (let i = 0; i < 12; i++) {
+    let x, z;
+    do {
+      x = -290 + Math.random() * 160;
+      z = 130 + Math.random() * 150;
+    } while (!clear(x, z));
+    members.push({
+      gang: 'sharks',
+      x, z,
+      hp: 100, dead: false, heading: Math.random() * Math.PI * 2, speed: 3.5, _assaulted: false,
+    });
+  }
+  g.gangMembers = members;
 }
 
-// Gang members patrol their turf; inside their turf they attack the
-// player on sight. Outside turf they drift back toward home.
 export function stepGangs(g, dt) {
   for (const m of g.gangMembers) {
     if (m.dead) continue;
-    const dx = g.player.x - m.x;
-    const dz = g.player.z - m.z;
-    const d = Math.hypot(dx, dz) || 1;
-    if (gangInTurf(m.gang, g.player.x, g.player.z) && d < 25) {
-      // Attack: close in and hit the player (5 HP/s at close range).
-      m.x += (dx / d) * m.speed * 1.5 * dt;
-      m.z += (dz / d) * m.speed * 1.5 * dt;
-      m.heading = Math.atan2(dx, dz);
-      if (d < 1.5) {
-        g.health -= 5 * dt;
-        if (g.health <= 0) {
-          g.health = 0;
-          g.mode = 'wasted';
-        }
+    const d = Math.hypot(g.player.x - m.x, g.player.z - m.z);
+    const inTurf = gangInTurf(m.gang, g.player.x, g.player.z);
+    if (inTurf && d < 18 && g._spawnGrace <= 0) {
+      // Chase and attack.
+      if (d > 0.01) {
+        m.x += ((g.player.x - m.x) / d) * m.speed * dt;
+        m.z += ((g.player.z - m.z) / d) * m.speed * dt;
       }
+      if (d < 2.5) damagePlayer(g, 4 * dt);
     } else {
-      // Patrol: drift toward home, then wander.
-      const hx = m.home.x - m.x;
-      const hz = m.home.z - m.z;
-      const hd = Math.hypot(hx, hz);
-      if (hd > 5) {
-        m.x += (hx / hd) * m.speed * 0.5 * dt;
-        m.z += (hz / hd) * m.speed * 0.5 * dt;
-        m.heading = Math.atan2(hx, hz);
-      } else {
-        m.x += Math.sin(m.heading) * m.speed * 0.3 * dt;
-        m.z += Math.cos(m.heading) * m.speed * 0.3 * dt;
-        if (Math.random() < 0.01) m.heading += (Math.random() - 0.5) * 2;
-      }
+      // Patrol: wander.
+      m.heading += (Math.random() - 0.5) * dt * 2;
+      m.x += Math.sin(m.heading) * 1.2 * dt;
+      m.z += Math.cos(m.heading) * 1.2 * dt;
     }
   }
 }
 
-// A gang member is 7 boxes; the last one (the bandana) is drawn in
-// the gang colour.
-export function gangBoxes(g, member, batch, cam) {
-  if (member.dead) return 0;
-  const h = 1.85;
+// 7 boxes: legs 2, torso, arms 2, head, bandana (LAST, gang colour).
+export function gangBoxes(g, m, b, cam) {
+  if (m.dead) return 0;
+  const plain = [0, 0, 1, 1];
+  const bandana = m.gang === 'kings' ? COL.kings : COL.sharks;
   let n = 0;
-  const box = (x, y, z, w, hh, d, col) => { pushBox(batch, x, y, z, w, hh, d, col); n++; };
-  const m = member;
-  box(m.x - 0.18, 0, m.z, 0.32, 0.8, 0.32, [0.15, 0.15, 0.2]);
-  box(m.x + 0.18, 0, m.z, 0.32, 0.8, 0.32, [0.15, 0.15, 0.2]);
-  box(m.x, 0.8, m.z, 0.7, 0.6, 0.4, m.colour);
-  box(m.x - 0.5, 0.85, m.z, 0.22, 0.55, 0.22, m.colour);
-  box(m.x + 0.5, 0.85, m.z, 0.22, 0.55, 0.22, m.colour);
-  box(m.x, 1.4, m.z, 0.45, 0.4, 0.4, [0.9, 0.75, 0.6]);
-  box(m.x, 1.72, m.z, 0.48, 0.14, 0.44, m.bandana);
+  const box = (x, y, z, w, h, d, col) => { pushBox(b, x, y, z, w, h, d, col, plain); n++; };
+  box(m.x - 0.14, 0.2, m.z, 0.2, 0.6, 0.2, [0.15, 0.15, 0.18]);
+  box(m.x + 0.14, 0.2, m.z, 0.2, 0.6, 0.2, [0.15, 0.15, 0.18]);
+  box(m.x, 0.8, m.z, 0.6, 0.6, 0.3, m.gang === 'kings' ? [0.3, 0.3, 0.35] : [0.2, 0.3, 0.45]);
+  box(m.x - 0.42, 0.8, m.z, 0.18, 0.55, 0.18, [0.85, 0.65, 0.5]);
+  box(m.x + 0.42, 0.8, m.z, 0.18, 0.55, 0.18, [0.85, 0.65, 0.5]);
+  box(m.x, 1.4, m.z, 0.36, 0.36, 0.36, [0.85, 0.65, 0.5]);
+  box(m.x, 1.72, m.z, 0.38, 0.14, 0.38, bandana);
   return n;
 }
