@@ -259,6 +259,17 @@ export function drawMinimap(g, hud) {
     ctx.fill();
   }
 
+  // Starter car marker — red square, distinct from the yellow mission
+  // diamond. Shown only while the player is on foot, so the map points
+  // straight at the car to steal.
+  if (g.player && !g.player.inCar && g.vehicles) {
+    const comet = g.vehicles.find((v) => v.name === 'Solmar Comet');
+    if (comet) {
+      ctx.fillStyle = '#e5322d';
+      ctx.fillRect(toX(comet.x) - 4, toY(comet.z) - 4, 8, 8);
+    }
+  }
+
   // Player.
   ctx.fillStyle = '#fff';
   ctx.beginPath();

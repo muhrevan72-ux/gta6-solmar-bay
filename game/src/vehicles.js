@@ -61,9 +61,9 @@ export function spawnVehicles(g) {
     ));
   }
 
-  // The starter car: parked in the plaza west of the spawn, facing
-  // down the avenue, ready to steal.
-  const comet = makeVehicle('car', -25, 20, 0, [0.85, 0.2, 0.25], 'Solmar Comet');
+  // The starter car: parked in the plaza just west of the spawn (13 m,
+  // visible on load), facing down the avenue, ready to steal.
+  const comet = makeVehicle('car', -13, 20, 0, [0.85, 0.2, 0.25], 'Solmar Comet');
   g.vehicles.push(comet);
   g.vehicles.push(makeVehicle('bike', 60, -40, Math.PI / 2, [0.2, 0.7, 0.9], 'Solmar Bike'));
   g.vehicles.push(makeVehicle('boat', -350, 150, 0, [0.9, 0.9, 0.9], 'Speedboat'));

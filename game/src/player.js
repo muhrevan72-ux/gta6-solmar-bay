@@ -43,8 +43,8 @@ export function stepPlayer(g, dt, input) {
   // Camera forward on the ground plane; right is 90 degrees clockwise.
   const fx = -Math.sin(yaw);
   const fz = -Math.cos(yaw);
-  const rx = -Math.cos(yaw);
-  const rz = Math.sin(yaw);
+  const rx = Math.cos(yaw);
+  const rz = -Math.sin(yaw);
 
   let mx = 0;
   let mz = 0;
