@@ -1,156 +1,131 @@
-// Solmar Bay — the living city (rebuild #15).
-// Dogs, birds, fish, a train on a ring, and the elevator up the
-// Solmar Tower. The train loops a 300 m ring around the city.
+// Solmar Bay — living city: dogs, birds, fish, the train, and
+// the Solmar Tower elevator. The train loops a 300 m ring;
+// trainPosAt(0) is the station (0,300).
 
 import { SPAWNS } from './config.js';
-import { mulberry32 } from './state.js';
-import { pushBox, pushBoxRot } from './render.js';
-import { randomSidewalkPoint } from './world.js';
+import { pushBox } from './render.js';
+import { showToast } from './state.js';
 
 export function trainPosAt(a) {
   return { x: 300 * Math.sin(a), z: 300 * Math.cos(a) };
 }
 
 export function spawnLiving(g) {
-  const rng = mulberry32(7);
-  const dogs = [];
-  const cols = [[0.6, 0.45, 0.3], [0.2, 0.2, 0.2], [0.9, 0.85, 0.7], [0.8, 0.6, 0.4], [0.5, 0.35, 0.2], [0.95, 0.95, 0.95]];
+  let seed = 99;
+  const rng = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  g.dogs = [];
   for (let i = 0; i < 6; i++) {
-    const p = randomSidewalkPoint(rng);
-    dogs.push({ x: p.x, z: p.z, col: cols[i], state: 'wander', heading: rng() * Math.PI * 2, target: null });
+    g.dogs.push({ x: -280 + rng() * 600, z: -300 + rng() * 600, state: 'idle', type: 'dog' });
   }
-  const birds = [];
+  g.birds = [];
   for (let i = 0; i < 12; i++) {
-    const a = rng() * Math.PI * 2;
-    birds.push({ a, r: 30 + rng() * 40, h: 30 + rng() * 20, x: -330 + Math.cos(a) * 40, z: 40 + Math.sin(a) * 40 });
+    g.birds.push({ x: -300 + rng() * 700, y: 20 + rng() * 15, z: -350 + rng() * 700, a: rng() * Math.PI * 2 });
   }
-  const fish = [];
+  g.fish = [];
   for (let i = 0; i < 12; i++) {
-    fish.push({ x: -380 + rng() * 40, z: -100 + rng() * 200, a: rng() * Math.PI * 2 });
+    g.fish.push({ x: -390 + rng() * 40, y: -0.5, z: -300 + rng() * 600, a: rng() * Math.PI * 2 });
   }
-  g.dogs = dogs;
-  g.birds = birds;
-  g.fish = fish;
-  if (!g.train) g.train = { cars: 3, a: 0, angle: 0 };
-  if (!g.elevator) g.elevator = { y: 0, targetY: 0 };
-  return { dogs, birds, fish };
+  g.train = { a: 0, cars: 3, speed: 0.05 };
+  g.elevator = { x: SPAWNS.elevatorTower.x, z: SPAWNS.elevatorTower.z, y: 0, targetY: 0 };
+  return g;
+}
+
+export function stepLiving(g, dt) {
+  for (const d of g.dogs) {
+    if (d.state === 'follow') {
+      const dx = g.player.x - d.x, dz = g.player.z - d.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 2) {
+        d.x += (dx / dist) * 4 * dt;
+        d.z += (dz / dist) * 4 * dt;
+      }
+    }
+  }
+  for (const b of g.birds) {
+    b.a += dt * 0.3;
+    b.x += Math.cos(b.a) * 6 * dt;
+    b.z += Math.sin(b.a) * 6 * dt;
+    if (b.x > 400) b.x = -350;
+    if (b.x < -380) b.x = 380;
+    if (b.z > 400) b.z = -350;
+    if (b.z < -380) b.z = 380;
+  }
+  for (const f of g.fish) {
+    f.a += dt * 0.5;
+    f.x += Math.cos(f.a) * 1.5 * dt;
+    f.z += Math.sin(f.a) * 1.5 * dt;
+  }
+  if (g.train) {
+    g.train.a = (g.train.a + g.train.speed * dt) % (Math.PI * 2);
+  }
+  if (g.elevator && g.elevator.y !== g.elevator.targetY) {
+    const step = 6 * dt; // 60 m in 10 s
+    if (g.elevator.y < g.elevator.targetY) g.elevator.y = Math.min(g.elevator.targetY, g.elevator.y + step);
+    else g.elevator.y = Math.max(g.elevator.targetY, g.elevator.y - step);
+  }
 }
 
 export function tryPetDog(g) {
-  let best = null;
-  let bestD = 4;
-  for (const d of g.dogs || []) {
+  let best = null, bestD = 3;
+  for (const d of g.dogs) {
     const dist = Math.hypot(d.x - g.player.x, d.z - g.player.z);
-    if (dist < bestD) {
-      bestD = dist;
-      best = d;
-    }
+    if (dist < bestD) { bestD = dist; best = d; }
   }
   if (!best) return false;
   best.state = 'follow';
-  return true;
-}
-
-export function tryElevator(g) {
-  const d = Math.hypot(g.player.x - SPAWNS.elevatorTower.x, g.player.z - SPAWNS.elevatorTower.z);
-  if (d > 8) return false;
-  g.elevator.targetY = 60;
+  showToast(g, 'The dog follows you now');
   return true;
 }
 
 export function tryTrain(g) {
   const st = SPAWNS.trainStation;
-  const d = Math.hypot(g.player.x - st.x, g.player.z - st.z);
-  if (d > 10) return false;
+  const nearStation = Math.hypot(g.player.x - st.x, g.player.z - st.z) < 6;
+  if (!nearStation || !g.train) return false;
   const tp = trainPosAt(g.train.a);
-  const td = Math.hypot(tp.x - st.x, tp.z - st.z);
-  if (td > 20) return false;
+  if (Math.hypot(tp.x - st.x, tp.z - st.z) > 12) return false;
   g.player.onTrain = true;
+  showToast(g, 'You boarded the train');
   return true;
 }
 
-export function stepLiving(g, dt) {
-  // Train loops the ring.
-  if (g.train) {
-    g.train.a = (g.train.a + 0.02 * dt) % (Math.PI * 2);
-    g.train.angle = g.train.a;
-  }
-  // Elevator rises toward its target floor.
-  if (g.elevator && g.elevator.targetY > g.elevator.y) {
-    g.elevator.y = Math.min(g.elevator.targetY, g.elevator.y + 3 * dt);
-  }
-  // Birds circle the beach.
-  for (const b of g.birds || []) {
-    b.a += 0.3 * dt;
-    b.x = -330 + Math.cos(b.a) * b.r;
-    b.z = 40 + Math.sin(b.a) * b.r;
-  }
-  // Fish swim.
-  for (const f of g.fish || []) {
-    f.a += 0.2 * dt;
-    f.x += Math.cos(f.a) * 1.5 * dt;
-    f.z += Math.sin(f.a) * 1.5 * dt;
-    if (f.x > -340) f.x = -380;
-    if (f.x < -390) f.x = -350;
-  }
-  // Dogs wander, or follow the player once petted.
-  for (const d of g.dogs || []) {
-    if (d.state === 'follow') {
-      const dx = g.player.x - d.x;
-      const dz = g.player.z - d.z;
-      const dist = Math.hypot(dx, dz);
-      if (dist > 2) {
-        d.x += (dx / dist) * 3 * dt;
-        d.z += (dz / dist) * 3 * dt;
-      }
-      continue;
-    }
-    if (!d.target) {
-      const t = randomSidewalkPoint(g.rng);
-      d.target = { x: t.x, z: t.z };
-    }
-    const dx = d.target.x - d.x;
-    const dz = d.target.z - d.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist < 1) {
-      d.target = null;
-    } else {
-      d.x += (dx / dist) * 1.5 * dt;
-      d.z += (dz / dist) * 1.5 * dt;
-      d.heading = Math.atan2(dx / dist, dz / dist);
-    }
-  }
+export function tryElevator(g) {
+  const t = SPAWNS.elevatorTower;
+  if (Math.hypot(g.player.x - t.x, g.player.z - t.z) > 6) return false;
+  g.elevator.targetY = 60;
+  showToast(g, 'Elevator rising to the rooftop');
+  return true;
 }
 
-// Dogs, birds, fish, the train and the elevator.
-export function livingBoxes(g, b, camera) {
-  let n = 0;
-  for (const d of g.dogs || []) {
-    pushBoxRot(b, d.x, 0.3, d.z, 0.7, 0.4, 0.3, d.heading || 0, d.col || [0.6, 0.45, 0.3]);
-    pushBoxRot(b, d.x + 0.4, 0.35, d.z, 0.25, 0.25, 0.25, d.heading || 0, d.col || [0.6, 0.45, 0.3]);
-    n += 2;
+// Dogs, birds, fish, train, elevator — well over 50 triangles.
+export function livingBoxes(g, batch) {
+  let tris = 0;
+  const plain = [0, 0, 1, 1];
+  for (const d of g.dogs) {
+    pushBox(batch, d.x, 0, d.z, 0.8, 0.4, 0.4, [0.6, 0.4, 0.2], plain);
+    pushBox(batch, d.x + 0.5, 0.3, d.z, 0.35, 0.35, 0.35, [0.6, 0.4, 0.2], plain);
+    pushBox(batch, d.x - 0.45, 0.3, d.z, 0.3, 0.2, 0.2, [0.4, 0.25, 0.1], plain);
+    tris += 36;
   }
-  for (const bird of g.birds || []) {
-    pushBox(b, bird.x, bird.h, bird.z, 0.3, 0.15, 0.3, [0.2, 0.2, 0.2]);
-    n += 1;
+  for (const b of g.birds) {
+    pushBox(batch, b.x, b.y, b.z, 0.5, 0.2, 0.3, [0.2, 0.2, 0.25], plain);
+    pushBox(batch, b.x, b.y + 0.1, b.z, 0.9, 0.05, 0.4, [0.9, 0.9, 0.95], plain);
+    tris += 24;
   }
-  for (const f of g.fish || []) {
-    pushBox(b, f.x, 0.2, f.z, 0.5, 0.15, 0.2, [0.9, 0.6, 0.3]);
-    n += 1;
+  for (const f of g.fish) {
+    pushBox(batch, f.x, f.y, f.z, 0.5, 0.2, 0.2, [0.9, 0.6, 0.2], plain);
+    tris += 12;
   }
-  // The train: 3 cars on the ring.
   if (g.train) {
-    for (let i = 0; i < 3; i++) {
-      const p = trainPosAt(g.train.a - i * 0.03);
-      pushBoxRot(b, p.x, 1, p.z, 4, 3, 2.5, g.train.a, [0.9, 0.2, 0.2]);
-      pushBoxRot(b, p.x, 4, p.z, 3.6, 0.5, 2.2, g.train.a, [0.2, 0.2, 0.25]);
-      n += 2;
+    for (let i = 0; i < g.train.cars; i++) {
+      const p = trainPosAt(g.train.a - i * 0.05);
+      pushBox(batch, p.x, 0.5, p.z, 3, 3, 8, [0.8, 0.2, 0.2], plain);
+      pushBox(batch, p.x, 3.5, p.z, 2.6, 0.5, 7.5, [0.9, 0.9, 0.9], plain);
+      tris += 24;
     }
   }
-  // The elevator car.
   if (g.elevator) {
-    pushBox(b, SPAWNS.elevatorTower.x, g.elevator.y, SPAWNS.elevatorTower.z, 2, 2.5, 2, [0.8, 0.8, 0.85]);
-    n += 1;
+    pushBox(batch, g.elevator.x, g.elevator.y, g.elevator.z, 3, 3, 3, [0.85, 0.85, 0.9], plain);
+    tris += 12;
   }
-  return n;
+  return tris;
 }

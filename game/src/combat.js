@@ -1,58 +1,67 @@
-// Solmar Bay — combat (rebuild #15).
-// Pistol 34 dmg / range 60, punch 12 dmg / range 2.5 m, bombs
-// blast 6 m ahead. A non-lethal hit is assault (1 star, once per
-// victim); a kill is killPed/killGang (2 stars) with a cash drop
-// and a bomb refill. Armour absorbs damage before health; 0 HP
-// shows the WASTED card.
+// Solmar Bay — combat: shooting, punching, bombs, cash drops.
+// Shooting aims at a world point and hits the nearest target on
+// the ray (within ~1.5 m of the line, inside the weapon range).
 
-import { CRIME, WEAPONS } from './config.js';
+import { TUNE } from './config.js';
 import { commitCrime } from './police.js';
-import { showToast } from './state.js';
+import { addCash, damagePlayer, showToast } from './state.js';
 
-export { WEAPONS };
+export const WEAPONS = [
+  { name: 'Pistol', damage: 34, range: 60, ammo: Infinity },
+  { name: 'SMG', damage: 18, range: 45, ammo: 120 },
+  { name: 'Shotgun', damage: 60, range: 25, ammo: 24 },
+];
 
-function weaponOf(g) {
-  return WEAPONS[g.player.weapon || 0] || WEAPONS[0];
+// Re-exported so the combat module is the single import point.
+export { damagePlayer };
+
+function targets(g) {
+  const out = [];
+  for (const p of g.peds) if (!p.dead) out.push({ t: p, type: 'ped' });
+  for (const c of g.cops) if (!c.dead) out.push({ t: c, type: 'cop' });
+  for (const m of g.gangMembers) if (!m.dead) out.push({ t: m, type: 'gang' });
+  return out;
 }
 
-function findTargetNear(g, x, z, radius) {
-  let best = null;
-  let bestD = radius;
-  const consider = (t) => {
-    if (!t || t.hp <= 0 || t.dead) return;
-    const d = Math.hypot(t.x - x, t.z - z);
-    if (d < bestD) {
-      bestD = d;
-      best = t;
-    }
-  };
-  for (const p of g.peds || []) consider(p);
-  for (const m of g.gangMembers || []) consider(m);
-  for (const c of g.cops || []) consider(c);
-  return best;
-}
-
-function assaultOnce(g, target) {
-  if (!target._assaulted) {
-    target._assaulted = true;
-    commitCrime(g, 'assault');
-  }
+// Distance from point (px,pz) to the ray from (ox,oz) toward (dx,dz)
+// (unit direction), plus the distance along the ray.
+function rayHit(ox, oz, dx, dz, px, pz) {
+  const vx = px - ox, vz = pz - oz;
+  const along = vx * dx + vz * dz;
+  if (along < 0) return null;
+  const perp = Math.abs(vx * dz - vz * dx);
+  return { along, perp };
 }
 
 export function shoot(g, aimX, aimZ) {
   const p = g.player;
   if (p.shootCooldown > 0) return null;
-  const w = weaponOf(g);
-  const dist = Math.hypot(aimX - p.x, aimZ - p.z);
-  if (dist > w.range) return null;
-  const target = findTargetNear(g, aimX, aimZ, 2);
-  p.shootCooldown = w.cooldown;
-  if (!target) return null;
+  const w = WEAPONS[p.weapon] || WEAPONS[0];
+  // Ammo: the pistol is infinite; others spend a round.
+  if (p.ammo[p.weapon] !== Infinity) {
+    if (p.ammo[p.weapon] <= 0) return null;
+    p.ammo[p.weapon]--;
+  }
+  p.shootCooldown = 0.35;
+  const dx = aimX - p.x, dz = aimZ - p.z;
+  const d = Math.hypot(dx, dz);
+  if (d < 0.001) return null;
+  const ux = dx / d, uz = dz / d;
+  let best = null, bestAlong = Infinity;
+  for (const { t, type } of targets(g)) {
+    const hit = rayHit(p.x, p.z, ux, uz, t.x, t.z);
+    if (!hit) continue;
+    if (hit.along > w.range) continue;
+    if (hit.perp > 1.5) continue;
+    if (hit.along < bestAlong) { bestAlong = hit.along; best = { t, type }; }
+  }
+  if (!best) return null;
+  const target = best.t;
   target.hp -= w.damage;
   if (target.hp <= 0) {
     killTarget(g, target);
   } else {
-    assaultOnce(g, target);
+    commitCrime(g, 'assault');
   }
   return target;
 }
@@ -60,111 +69,73 @@ export function shoot(g, aimX, aimZ) {
 export function punch(g) {
   const p = g.player;
   if (p.punchCooldown > 0) return null;
-  p.punchCooldown = 0.4;
-  const fx = Math.sin(p.heading || 0);
-  const fz = Math.cos(p.heading || 0);
-  let best = null;
-  let bestD = 2.5;
-  const consider = (t) => {
-    if (!t || t.hp <= 0 || t.dead) return;
-    const dx = t.x - p.x;
-    const dz = t.z - p.z;
+  p.punchCooldown = 0.5;
+  const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
+  let best = null, bestD = TUNE.punchRange;
+  for (const { t, type } of targets(g)) {
+    const dx = t.x - p.x, dz = t.z - p.z;
     const d = Math.hypot(dx, dz);
-    if (d > 2.5) return;
+    if (d > TUNE.punchRange) continue;
+    // Must be in front of the player.
     const dot = (dx * fx + dz * fz) / (d || 1);
-    if (dot < 0.5) return; // must be in front
-    if (d < bestD) {
-      bestD = d;
-      best = t;
-    }
-  };
-  for (const t of g.peds || []) consider(t);
-  for (const t of g.gangMembers || []) consider(t);
-  for (const t of g.cops || []) consider(t);
-  if (!best) return null;
-  best.hp -= 12;
-  if (best.hp <= 0) {
-    killTarget(g, best);
-  } else {
-    assaultOnce(g, best);
+    if (dot < 0.5) continue;
+    if (d < bestD) { bestD = d; best = { t, type }; }
   }
-  return best;
+  if (!best) return null;
+  const target = best.t;
+  target.hp -= TUNE.punchDamage;
+  if (target.hp <= 0) killTarget(g, target);
+  else {
+    commitCrime(g, 'assault');
+  }
+  return target;
 }
 
 export function throwBomb(g) {
   const p = g.player;
-  if ((g.bombs || 0) <= 0) return false;
-  if ((p.bombCooldown || 0) > 0) return false;
-  g.bombs -= 1;
-  p.bombCooldown = 1.5;
-  const fx = Math.sin(p.heading || 0);
-  const fz = Math.cos(p.heading || 0);
-  const bx = p.x + fx * 6;
-  const bz = p.z + fz * 6;
-  commitCrime(g, 'explosion');
-  const killInRadius = (list) => {
-    for (const t of list || []) {
-      if (!t || t.hp <= 0 || t.dead) continue;
-      if (Math.hypot(t.x - bx, t.z - bz) <= 5) killTarget(g, t);
+  if (g.bombs <= 0) return false;
+  if (p.bombCooldown > 0) return false;
+  g.bombs--;
+  p.bombCooldown = 1;
+  const bx = p.x + Math.sin(p.heading) * 6;
+  const bz = p.z + Math.cos(p.heading) * 6;
+  let kills = 0;
+  for (const { t, type } of targets(g)) {
+    const d = Math.hypot(t.x - bx, t.z - bz);
+    if (d < TUNE.bombRadius) {
+      t.hp = 0;
+      killTarget(g, t);
+      kills++;
     }
-  };
-  killInRadius(g.peds);
-  killInRadius(g.gangMembers);
-  killInRadius(g.cops);
+  }
+  if (kills > 0) commitCrime(g, 'explosion');
   return true;
 }
 
 export function killTarget(g, target) {
-  if (!target || target.dead) return;
+  if (target.dead) return;
   target.dead = true;
   target.hp = 0;
-  target.state = 'dead';
-  g.stats.kills = (g.stats.kills || 0) + 1;
-  g.bombs = (g.bombs || 0) + 1;
-  const amount = 10 + Math.floor((g.rng ? g.rng() : Math.random()) * 41);
-  dropCash(g, target.x, target.z, amount);
-  if (target.gang) commitCrime(g, 'killGang');
-  else if (target.isCop) commitCrime(g, 'killCop');
+  g.stats.kills++;
+  g.bombs = Math.min(9, g.bombs + 1);
+  dropCash(g, target.x, target.z, 10 + Math.floor(Math.random() * 41));
+  if (target.type === 'gang' || target.gang) commitCrime(g, 'killGang');
+  else if (target.type === 'cop' || target.isCop) commitCrime(g, 'killCop');
   else commitCrime(g, 'killPed');
 }
 
 export function dropCash(g, x, z, amount) {
-  if (!g.pickups) g.pickups = [];
   g.pickups.push({ x, z, amount });
-  return g.pickups[g.pickups.length - 1];
 }
 
 export function stepPickups(g, dt) {
-  if (!g.pickups) return;
   const p = g.player;
   for (let i = g.pickups.length - 1; i >= 0; i--) {
     const pk = g.pickups[i];
-    if (Math.hypot(pk.x - p.x, pk.z - p.z) < 2.5) {
-      g.cash += pk.amount;
+    if (Math.hypot(pk.x - p.x, pk.z - p.z) < 2) {
+      addCash(g, pk.amount, '');
       showToast(g, `+$${pk.amount}`);
       g.pickups.splice(i, 1);
     }
-  }
-}
-
-// Armour absorbs damage first. At 0 HP the WASTED card shows.
-// The spawn grace (5 s after a real game start / respawn) blocks
-// damage; a fresh state has grace 0 so tests can damage directly.
-export function damagePlayer(g, amount) {
-  const p = g.player;
-  if ((p.graceTimer || 0) > 0) return;
-  let rest = amount;
-  if (g.armour > 0) {
-    const absorbed = Math.min(g.armour, rest);
-    g.armour -= absorbed;
-    rest -= absorbed;
-  }
-  if (rest > 0) {
-    g.health = Math.max(0, g.health - rest);
-  }
-  if (g.health <= 0) {
-    g.health = 0;
-    g.mode = 'wasted';
-    g.card = { title: 'WASTED', text: 'Press Enter to wake up at the hospital.' };
   }
 }

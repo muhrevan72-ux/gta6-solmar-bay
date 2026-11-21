@@ -1,105 +1,109 @@
-// Solmar Bay — keyboard and mouse input (rebuild #15).
-// `pressed` is the edge (this frame only), `down` is the held
-// state. endFrame() clears the edge set at the end of each frame.
-// attach() binds real DOM listeners on `window` — never on the
-// canvas, which cannot take focus, so keyboard input would never
-// arrive (the round-4 bug). Tab is preventDefault()ed so the
-// browser does not steal focus to a button (fix (b)).
+// Solmar Bay — keyboard + mouse input.
+// Tap actions use a `pressed` set: a key pressed and released
+// between two animation frames still registers (polling only the
+// held set would miss it). Cooldowns are always gated with
+// `<= 0`, never with a falsy check (a decaying cooldown goes
+// slightly negative and `!negative` is false forever).
+
+const GAME_KEYS = new Set([
+  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyF', 'KeyG', 'KeyR',
+  'KeyM', 'KeyP', 'KeyQ', 'ShiftLeft', 'ShiftRight', 'Space',
+  'Enter', 'Escape', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft',
+  'ArrowRight', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5',
+  'Digit6', 'Digit7', 'Digit8', 'Digit9',
+]);
 
 export function createInput() {
   const input = {
     pressed: new Set(),
     down: new Set(),
-    mouse: { x: 0, y: 0, down: false, clicked: false, dx: 0, dy: 0 },
+    mouse: { clicked: false, down: false, x: 0, y: 0, dx: 0, dy: 0 },
     wheel: 0,
     attached: false,
     _handlers: null,
+
+    pressedKey(code) { return this.pressed.has(code); },
+    downKey(code) { return this.down.has(code); },
+
+    injectTap(code) {
+      this.pressed.add(code);
+      this.down.add(code);
+    },
+    injectRelease(code) {
+      this.down.delete(code);
+    },
+
+    endFrame() {
+      this.pressed.clear();
+      this.mouse.clicked = false;
+      this.mouse.dx = 0;
+      this.mouse.dy = 0;
+      this.wheel = 0;
+    },
+
+    attach(win) {
+      // Only attach to a real browser window. In Node there is no
+      // window, so this is a safe no-op (attached stays false).
+      if (typeof globalThis === 'undefined' || !globalThis.window) {
+        this.attached = false;
+        return;
+      }
+      const target = win || globalThis.window;
+      if (!target || typeof target.addEventListener !== 'function') {
+        this.attached = false;
+        return;
+      }
+      const h = this._handlers;
+      target.addEventListener('keydown', h.onDown);
+      target.addEventListener('keyup', h.onUp);
+      target.addEventListener('mousedown', h.onMouseDown);
+      target.addEventListener('mouseup', h.onMouseUp);
+      target.addEventListener('mousemove', h.onMove);
+      target.addEventListener('wheel', h.onWheel);
+      this.attached = true;
+    },
   };
+
   input._handlers = {
-    onDown: (e) => {
-      if (!e || !e.code) return;
-      if (e.code === 'Tab') {
-        // Keep focus in the game: Tab opens the phone, it must
-        // not move browser focus to the Pause button.
-        if (e.preventDefault) e.preventDefault();
-      }
-      if (!e.repeat) input.pressed.add(e.code);
-      input.down.add(e.code);
+    onDown(ev) {
+      // A repeat keydown is a held key, not a new tap.
+      if (!ev.repeat) input.pressed.add(ev.code);
+      input.down.add(ev.code);
+      if (GAME_KEYS.has(ev.code) && ev.preventDefault) ev.preventDefault();
     },
-    onUp: (e) => {
-      if (!e || !e.code) return;
-      input.down.delete(e.code);
+    onUp(ev) {
+      input.down.delete(ev.code);
     },
-    onMouseDown: (e) => {
-      input.mouse.down = true;
+    onMouseDown(ev) {
       input.mouse.clicked = true;
-      if (e) { input.mouse.x = e.clientX || 0; input.mouse.y = e.clientY || 0; }
+      input.mouse.down = true;
     },
-    onMove: (e) => {
-      if (!e) return;
-      input.mouse.x = e.clientX || 0;
-      input.mouse.y = e.clientY || 0;
-      if (e.movementX !== undefined) {
-        input.mouse.dx = e.movementX;
-        input.mouse.dy = e.movementY || 0;
-      }
-    },
-    onMouseUp: () => {
+    onMouseUp(ev) {
       input.mouse.down = false;
     },
+    onMove(ev) {
+      input.mouse.x = ev.clientX || 0;
+      input.mouse.y = ev.clientY || 0;
+      input.mouse.dx += ev.movementX || 0;
+      input.mouse.dy += ev.movementY || 0;
+    },
+    onWheel(ev) {
+      input.wheel += ev.deltaY || 0;
+    },
   };
-  input.attach = (target) => {
-    // Only the real global window gets listeners. A plain object
-    // with addEventListener is NOT the window (the round-9 test
-    // passes one and expects a no-op), and in Node there is no
-    // window at all, so attach is a safe no-op there.
-    const w = typeof window !== 'undefined' ? window : null;
-    if (!w || target !== w) {
-      input.attached = false;
-      return;
-    }
-    const h = input._handlers;
-    target.addEventListener('keydown', h.onDown);
-    target.addEventListener('keyup', h.onUp);
-    target.addEventListener('mousedown', h.onMouseDown);
-    target.addEventListener('mousemove', h.onMove);
-    target.addEventListener('mouseup', h.onMouseUp);
-    input.attached = true;
-  };
-  // Auto-attach to the real window when one exists (the browser).
-  // Without this, createInput() defines attach() but no DOM
-  // listener is ever registered, so the keyboard is dead even
-  // though the handlers exist (the #14 play-test regression:
-  // Enter/Tab/Escape/W/E/Space were all ignored in a real
-  // browser). In Node there is no window, so this is a safe
-  // no-op, and the round-9 test that attach(plainObject) is a
-  // no-op is unaffected (it still sets attached = false).
-  // Calling attach twice (here and in boot) is harmless: the
-  // browser deduplicates identical addEventListener calls.
-  if (typeof window !== 'undefined') input.attach(window);
-  input.injectTap = (code) => {
-    input.pressed.add(code);
-    input.down.add(code);
-  };
-  input.injectRelease = (code) => {
-    input.down.delete(code);
-  };
-  input.pressedKey = (code) => input.pressed.has(code);
-  input.downKey = (code) => input.down.has(code);
-  input.endFrame = () => {
-    input.pressed.clear();
-    input.mouse.clicked = false;
-    input.mouse.dx = 0;
-    input.mouse.dy = 0;
-    input.wheel = 0;
-  };
+
+  // Auto-attach when a real window exists (the browser). In Node
+  // this is a no-op and attached stays false.
+  if (typeof globalThis !== 'undefined' && globalThis.window && typeof globalThis.window.addEventListener === 'function') {
+    input.attach(globalThis.window);
+  }
   return input;
 }
 
-// Axis from two keys: -1 when the negative key is held, +1 when
-// the positive key is held, 0 otherwise. W = -1, S = +1.
-export function axis(input, neg, pos) {
-  const n = input.down.has(neg) ? -1 : 0;
-  const p = input.down.has(pos) ? 1 : 0;
-  return n + p;
+// Signed axis: -1 when the negative key is held, +1 when the
+// positive key is held, 0 otherwise (both held cancels out).
+export function axis(input, negKey, posKey) {
+  const neg = input.down.has(negKey) ? 1 : 0;
+  const pos = input.down.has(posKey) ? 1 : 0;
+  return pos - neg;
 }

@@ -1,62 +1,62 @@
-// Solmar Bay — the fire service (rebuild #15).
-// Fires break out on buildings on a timer. Spray water on one to
-// put it out: +$150, +15 respect, and one more fire out.
+// Solmar Bay — fires and the fire service. A fire breaks out
+// every 90–180 s at a random building; left alone it grows.
+// Spray it with the fire truck nearby to put it out ($150).
 
-import { showToast } from './state.js';
 import { pushBox } from './render.js';
+import { addCash, showToast } from './state.js';
 
 export function spawnFireService(g) {
-  if (!g.fires) g.fires = [];
-  if (g._fireTimer === undefined) g._fireTimer = 90;
-  return g.fires;
+  g.fires = [];
+  g._fireTimer = 120;
+  return g;
 }
 
 export function stepFires(g, dt) {
-  if (g._fireTimer === undefined) g._fireTimer = 90;
   g._fireTimer -= dt;
   if (g._fireTimer <= 0) {
-    // Pick a building at random, but never one that already burns.
-    const bs = g.city.buildings;
-    if (bs.length > 0) {
-      const b = bs[Math.floor(Math.random() * bs.length)];
-      const dup = g.fires.some((f) => Math.hypot(f.x - b.x, f.z - b.z) < 5);
-      if (!dup) {
-        g.fires.push({ x: b.x, z: b.z, hp: 100, spread: 0 });
-      }
+    // Pick a random building; if it is already burning, no new
+    // fire starts (no duplicate at the same building).
+    const b = g.city.buildings[Math.floor(Math.random() * g.city.buildings.length)];
+    const alreadyBurning = g.fires.some((f) => f.building === b || (f.x === b.x && f.z === b.z));
+    if (b && !alreadyBurning) {
+      g.fires.push({ building: b, x: b.x, z: b.z, hp: 100 });
     }
     g._fireTimer = 90 + Math.random() * 90;
   }
   // Unattended fires grow.
   for (const f of g.fires) {
-    f.hp += 0.5 * dt;
-    f.spread += 0.1 * dt;
+    f.hp += dt * 2;
   }
 }
 
+// Spray the nearest fire (the player must be close to it).
 export function sprayFire(g, dt) {
-  let sprayed = false;
+  let best = null, bestD = 10;
   for (const f of g.fires) {
-    const d = Math.hypot(g.player.x - f.x, g.player.z - f.z);
-    if (d > 12) continue;
-    sprayed = true;
-    f.hp -= 60 * dt;
-    if (f.hp <= 0) {
-      g.fires = g.fires.filter((x) => x !== f);
-      g.stats.firesOut = (g.stats.firesOut || 0) + 1;
-      g.cash += 150;
-      g.respect += 15;
-      showToast(g, 'Fire out! +$150');
-    }
+    const d = Math.hypot(f.x - g.player.x, f.z - g.player.z);
+    if (d < bestD) { bestD = d; best = f; }
   }
-  return sprayed;
+  if (!best) return false;
+  best.hp -= dt * 30;
+  if (best.hp <= 0) {
+    const idx = g.fires.indexOf(best);
+    if (idx >= 0) g.fires.splice(idx, 1);
+    g.stats.firesOut++;
+    addCash(g, 150, 'fire out');
+    g.respect += 15;
+    showToast(g, 'Fire out! +$150, +15 respect');
+  }
+  return true;
 }
 
-// One box per fire (flames + smoke are drawn as a tall orange box
-// with a grey box above it, counted as one fire).
-export function fireBoxes(g, b, camera) {
+// One box per fire; returns the number of fires drawn.
+export function fireBoxes(g, batch) {
+  const plain = [0, 0, 1, 1];
+  let n = 0;
   for (const f of g.fires) {
-    pushBox(b, f.x, 0, f.z, 3, 3, 3, [1, 0.4, 0.1]);
-    pushBox(b, f.x, 3, f.z, 2, 2, 2, [0.5, 0.5, 0.5]);
+    const h = Math.min(8, 2 + f.hp / 30);
+    pushBox(batch, f.x, 0.5, f.z, 3, h, 3, [1, 0.45, 0.1], plain);
+    n++;
   }
-  return g.fires.length;
+  return n;
 }

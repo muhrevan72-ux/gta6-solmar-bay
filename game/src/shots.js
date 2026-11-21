@@ -1,28 +1,36 @@
-// Solmar Bay — third-person camera + matrix maths (rebuild #15).
-// Column-major 4x4 matrices, matching WebGL's expectations.
-// The default framing (pitch 0.28, dist 14) puts the horizon in
-// the upper-middle band so the city, not the sky, dominates the
-// first view (play-test #4 lesson).
+// Solmar Bay — third-person camera + matrix maths.
+// The camera follows behind the player; mouse drag orbits it.
+// Forward on the ground is (-sin(yaw), -cos(yaw)): yaw PI looks
+// +Z into the city, yaw PI/2 looks -X (west).
 
-export const CAM_DEFAULTS = { pitch: 0.28, dist: 14 };
-// The old framing that failed: steep pitch, horizon at the top,
-// the view mostly empty foreground road.
-export const CAM_BAD = { pitch: 0.42, dist: 11 };
+export const CAM_DEFAULTS = { pitch: 0.28, dist: 14, fov: 60 };
+export const CAM_BAD = { pitch: 0.42, dist: 18, fov: 60 };
 
 export function createCamera() {
   return {
-    // Eye position and look target (world space).
-    x: 0, y: 4, z: 6,
-    tx: 0, ty: 1, tz: 20,
-    // Orbit state. yaw = PI puts the eye south of the player so the
-    // camera looks north (+Z) into the city at spawn.
+    x: 0, y: 8, z: 6,
+    tx: 0, ty: 2, tz: 20,
     yaw: Math.PI,
     pitch: CAM_DEFAULTS.pitch,
     dist: CAM_DEFAULTS.dist,
+    fov: CAM_DEFAULTS.fov,
   };
 }
 
-// ---------- matrix helpers (column-major) ----------
+// Column-major 4x4 matrix multiply: out = a * b.
+export function matMul(a, b) {
+  const out = new Array(16).fill(0);
+  for (let col = 0; col < 4; col++) {
+    for (let row = 0; row < 4; row++) {
+      let s = 0;
+      for (let k = 0; k < 4; k++) s += a[row + k * 4] * b[k + col * 4];
+      out[row + col * 4] = s;
+    }
+  }
+  return out;
+}
+
+// OpenGL-style perspective projection (column-major).
 export function perspective(fov, aspect, near, far) {
   const f = 1 / Math.tan(fov / 2);
   const nf = 1 / (near - far);
@@ -34,107 +42,84 @@ export function perspective(fov, aspect, near, far) {
   ];
 }
 
-export function matMul(a, b) {
-  const out = new Array(16).fill(0);
-  for (let c = 0; c < 4; c++) {
-    for (let r = 0; r < 4; r++) {
-      let s = 0;
-      for (let k = 0; k < 4; k++) s += a[r + k * 4] * b[k + c * 4];
-      out[r + c * 4] = s;
-    }
-  }
-  return out;
-}
-
-function norm3(x, y, z) {
-  const l = Math.hypot(x, y, z) || 1;
-  return [x / l, y / l, z / l];
-}
-function cross3(ax, ay, az, bx, by, bz) {
-  return [ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx];
-}
-
-// View matrix: eye looks at target, +Y up.
-export function lookAt(ex, ey, ez, tx, ty, tz) {
-  const [fx, fy, fz] = norm3(tx - ex, ty - ey, tz - ez);
-  const [rx, ry, rz] = norm3(...cross3(fx, fy, fz, 0, 1, 0));
-  const [ux, uy, uz] = cross3(rx, ry, rz, fx, fy, fz);
+// View matrix for a camera (eye + target), column-major.
+// The first row (elements 0, 4, 8) is the right vector (unit).
+export function cameraView(cam) {
+  const ex = cam.x, ey = cam.y, ez = cam.z;
+  let fx = cam.tx - ex, fy = cam.ty - ey, fz = cam.tz - ez;
+  const fl = Math.hypot(fx, fy, fz) || 1;
+  fx /= fl; fy /= fl; fz /= fl;
+  // right = normalize(cross(forward, up)). Straight down (or up),
+  // forward is parallel to (0,1,0), so use (0,0,1) as the up
+  // instead — otherwise right collapses to zero and the view
+  // matrix is degenerate (the top-down map shot).
+  const up = Math.abs(fy) > 0.999 ? [0, 0, 1] : [0, 1, 0];
+  let rx = fy * up[2] - fz * up[1];
+  let ry = fz * up[0] - fx * up[2];
+  let rz = fx * up[1] - fy * up[0];
+  const rl = Math.hypot(rx, ry, rz) || 1;
+  rx /= rl; ry /= rl; rz /= rl;
+  // true up = cross(right, forward)
+  const ux = ry * fz - rz * fy;
+  const uy = rz * fx - rx * fz;
+  const uz = rx * fy - ry * fx;
+  const dr = -(rx * ex + ry * ey + rz * ez);
+  const du = -(ux * ex + uy * ey + uz * ez);
+  const df = fx * ex + fy * ey + fz * ez;
   return [
     rx, ux, -fx, 0,
     ry, uy, -fy, 0,
     rz, uz, -fz, 0,
-    -(rx * ex + ry * ey + rz * ez),
-    -(ux * ex + uy * ey + uz * ez),
-    fx * ex + fy * ey + fz * ez,
-    1,
+    dr, du, df, 1,
   ];
 }
 
-export function cameraView(cam) {
-  return lookAt(cam.x, cam.y, cam.z, cam.tx, cam.ty, cam.tz);
-}
-
-// ---------- camera update ----------
-// target: {x, y, z} world position to follow (the player).
-// The look target lerps toward the player and the eye lerps
-// toward its orbit slot, so the camera glides instead of snapping.
+// Follow the target (lerp), orbit with the mouse, and place the
+// eye behind/above the target. Mouse deltas come from
+// input.mouse.dx/dy — never from a stale field — so the camera
+// stays put when the mouse does not move.
 export function updateCamera(cam, target, dt, input) {
-  const k = 1 - Math.exp(-5 * Math.max(0, dt));
+  const k = 1 - Math.exp(-dt * 8);
   cam.tx += (target.x - cam.tx) * k;
-  cam.ty += ((target.y || 0) + 1 - cam.ty) * k;
+  cam.ty += ((target.y || 0) + 1.5 - cam.ty) * k;
   cam.tz += (target.z - cam.tz) * k;
-  if (input) {
-    // Mouse drag rotates the camera. The input object carries the
-    // per-frame delta as mouse.dx/mouse.dy (set by the mousemove
-    // handler, cleared by endFrame); the old mouseDX/mouseDY
-    // names never existed on it, so the camera never rotated and
-    // the view felt like it drifted on its own. Read the real
-    // properties, falling back to the old names if a caller set
-    // those. With no mouse movement both are 0, so the camera
-    // stays put (no auto-orbit).
-    const mdx = (input.mouse && input.mouse.dx) || input.mouseDX || 0;
-    const mdy = (input.mouse && input.mouse.dy) || input.mouseDY || 0;
-    cam.yaw += mdx * 0.004;
-    cam.pitch = Math.max(0.05, Math.min(0.9, cam.pitch + mdy * 0.003));
-    if (input.wheel) cam.dist = Math.max(8, Math.min(26, cam.dist + input.wheel * 0.01));
+  if (input && input.mouse) {
+    if (input.mouse.dx) cam.yaw -= input.mouse.dx * 0.004;
+    if (input.mouse.dy) {
+      cam.pitch += input.mouse.dy * 0.004;
+      if (cam.pitch < -0.05) cam.pitch = -0.05;
+      if (cam.pitch > 1.1) cam.pitch = 1.1;
+    }
+    if (input.wheel) {
+      cam.dist += Math.sign(input.wheel) * 1.5;
+      if (cam.dist < 6) cam.dist = 6;
+      if (cam.dist > 30) cam.dist = 30;
+    }
   }
-  const cp = Math.cos(cam.pitch);
-  const sp = Math.sin(cam.pitch);
-  const ex = cam.tx + Math.sin(cam.yaw) * cp * cam.dist;
-  const ey = cam.ty + sp * cam.dist;
-  const ez = cam.tz + Math.cos(cam.yaw) * cp * cam.dist;
-  // The eye sits exactly on its orbit slot around the (lerped)
-  // target, so the framing matches the pitch/dist at once; the
-  // glide comes from the target lerp above.
-  cam.x = ex;
-  cam.y = ey;
-  cam.z = ez;
-  return cam;
+  // Forward on the ground for this yaw.
+  const fx = -Math.sin(cam.yaw), fz = -Math.cos(cam.yaw);
+  const cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  cam.x = cam.tx - fx * cam.dist * cp;
+  cam.z = cam.tz - fz * cam.dist * cp;
+  cam.y = cam.ty + cam.dist * sp + 1.2;
+  if (cam.y < 1.5) cam.y = 1.5;
 }
 
-// ---------- projection ----------
-// Project a world point to screen pixels; null when behind the camera.
+// Project a world point to screen pixels; null when behind the eye.
 export function projectPoint(cam, vp, x, y, z, w, h) {
   const px = vp[0] * x + vp[4] * y + vp[8] * z + vp[12];
   const py = vp[1] * x + vp[5] * y + vp[9] * z + vp[13];
+  const pz = vp[2] * x + vp[6] * y + vp[10] * z + vp[14];
   const pw = vp[3] * x + vp[7] * y + vp[11] * z + vp[15];
   if (pw <= 0.001) return null;
-  return {
-    x: (px / pw * 0.5 + 0.5) * w,
-    y: (0.5 - py / pw * 0.5) * h,
-  };
+  const nx = px / pw, ny = py / pw;
+  return { x: (nx * 0.5 + 0.5) * w, y: (0.5 - ny * 0.5) * h, d: pz / pw };
 }
 
-// Screen Y of the horizon (a far point at eye height, straight
-// ahead horizontally). With the default framing this lands near
-// y=181 on a 720p screen: sky above, city below.
+// Screen Y of the horizon line for this camera's pitch.
+// The horizon sits pitch radians above the look direction.
 export function horizonScreenY(cam, w, h) {
-  const view = cameraView(cam);
-  const proj = perspective((60 * Math.PI) / 180, w / h, 0.1, 1200);
-  const vp = matMul(proj, view);
-  const fx = cam.tx - cam.x;
-  const fz = cam.tz - cam.z;
-  const len = Math.hypot(fx, fz) || 1;
-  const s = projectPoint(cam, vp, cam.x + (fx / len) * 1000, cam.y, cam.z + (fz / len) * 1000, w, h);
-  return s ? s.y : null;
+  const fov = ((cam.fov || 60) * Math.PI) / 180;
+  const ndcY = Math.tan(cam.pitch) / Math.tan(fov / 2);
+  return (0.5 - ndcY / 2) * h;
 }
