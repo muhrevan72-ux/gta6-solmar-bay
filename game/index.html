@@ -24,6 +24,8 @@
   #hud-minimap { position: absolute; right: 14px; bottom: 14px; width: 200px; height: 200px; border-radius: 50%; border: 2px solid #ffd700; background: #12300f; }
   #hud-card { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; background: rgba(0,0,0,0.55); }
   #hud-card-title { font-size: 42px; font-weight: 900; color: #ffd700; text-shadow: 0 2px 8px #000; }
+  #hud-card-text { font-size: 18px; color: #eee; max-width: 600px; text-align: center; margin-top: 14px; line-height: 1.5; text-shadow: 0 1px 4px #000; }
+  #hud-card-hint { font-size: 16px; font-weight: 700; color: #ffd700; margin-top: 26px; text-shadow: 0 1px 4px #000; }
   #hud-modal { position: absolute; inset: 0; display: none; background: rgba(0,0,0,0.6); }
   #hud-modal-title { font-size: 26px; font-weight: 800; color: #ffd700; }
   #hud-pause { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; background: rgba(0,0,0,0.65); pointer-events: auto; }
@@ -61,7 +63,7 @@
   <div id="hud-toast"></div>
   <div id="hud-dialogue"></div>
   <canvas id="hud-minimap" width="200" height="200"></canvas>
-  <div id="hud-card"><div id="hud-card-title"></div></div>
+  <div id="hud-card"><div id="hud-card-title"></div><div id="hud-card-text"></div><div id="hud-card-hint">Press Enter to start</div></div>
   <div id="hud-modal"><div id="hud-modal-title"></div></div>
   <div id="hud-pause"><div style="font-size:36px;font-weight:900;color:#ffd700;">PAUSED</div><button id="btn-resume">Resume</button></div>
   <div id="hud-phone"></div>
