@@ -1,86 +1,109 @@
-// Solmar Bay — the in-game phone: contacts, messages, calls.
-// Written fresh for rebuild #18.
+// Solmar Bay — the in-game phone.
+//
+// Tab opens it; Tab or Escape closes it. Four contacts: Rico (chapter
+// tips), Maya (dates), Taxi (call a cab), and the Mechanic (repair the
+// car you are sitting in for $30). Messages live on the game object
+// (g.messages / g.unread / g.phoneTab) and are mirrored onto g.phone.
+
+import { chapterTitle } from './state.js';
 
 export const CONTACTS = [
-  { id: 'rico', name: 'Rico', role: 'Fixer' },
-  { id: 'maya', name: 'Maya', role: 'Date' },
-  { id: 'taxi', name: 'Taxi', role: 'Solmar Cab' },
-  { id: 'mechanic', name: 'Mechanic', role: 'Repairs' },
+  { id: 'rico', name: 'Rico' },
+  { id: 'maya', name: 'Maya' },
+  { id: 'taxi', name: 'Taxi' },
+  { id: 'mechanic', name: 'Mechanic' },
 ];
 
+export function ensurePhone(g) {
+  if (!Array.isArray(g.messages)) g.messages = [];
+  if (typeof g.unread !== 'number') g.unread = 0;
+  if (typeof g.phoneTab !== 'string') g.phoneTab = 'messages';
+  g.phone = { tab: g.phoneTab, unread: g.unread, messages: g.messages };
+  return g.phone;
+}
+
 export function togglePhone(g) {
-  if (g.mode === 'menu' || g.mode === 'card' || g.mode === 'passed') return false;
-  if (g.phoneOpen) {
-    g.phoneOpen = false;
-    g.mode = 'play';
+  if (g.mode === 'menu' || g.mode === 'card' || g.mode === 'passed' || g.mode === 'busted' || g.mode === 'wasted') {
     return false;
   }
-  g.phoneOpen = true;
+  ensurePhone(g);
+  if (g.mode === 'phone') {
+    g.mode = 'play';
+    g.phoneOpen = false;
+    return false;
+  }
   g.mode = 'phone';
-  if (!g.phoneTab) g.phoneTab = 'messages';
+  g.phoneOpen = true;
   return true;
 }
 
 export function phoneTab(g, tab) {
+  ensurePhone(g);
   g.phoneTab = tab;
   if (tab === 'messages') g.unread = 0;
+  g.phone.tab = tab;
+  g.phone.unread = g.unread;
+  return true;
 }
 
 export function notifyMessage(g, from, text) {
-  if (!g.messages) g.messages = [];
+  ensurePhone(g);
   g.messages.push({ from, text });
-  g.unread = (g.unread || 0) + 1;
-  return g.messages[g.messages.length - 1];
+  g.unread += 1;
+  g.phone.unread = g.unread;
+  return true;
 }
 
 export function callContact(g, id) {
+  ensurePhone(g);
+  const p = g.player;
   if (id === 'rico') {
-    const tip = 'Rico: the garage is east of downtown. Bring the Comet in one piece and the next job is yours.';
-    notifyMessage(g, 'Rico', tip);
-    return tip;
+    const tip = `Rico: ${chapterTitle(g)} — follow the marker on your map, and keep an eye on your wanted stars.`;
+    g.messages.push({ from: 'Rico', text: tip });
+    return true;
   }
   if (id === 'maya') {
-    const rel = g.maya ? (g.maya.rel || 0) : 0;
-    if (rel >= 75) {
-      const msg = 'Maya: the Sharks are moving on the harbour tonight. Stay away from the docks, okay?';
-      notifyMessage(g, 'Maya', msg);
-      return msg;
-    }
-    const msg = 'Maya: meet me at the beach when you are free. I will be by the water.';
-    notifyMessage(g, 'Maya', msg);
-    return msg;
+    const rel = (g.maya && g.maya.rel) || 0;
+    const text = rel >= 75
+      ? 'Maya: The Sharks are watching the beach tonight. Be careful out there.'
+      : 'Maya: Meet me at the beach sometime? I love the sunset there.';
+    g.messages.push({ from: 'Maya', text });
+    return true;
   }
   if (id === 'taxi') {
     g._taxiRequested = true;
-    const msg = 'Taxi: a cab is on its way to you.';
-    notifyMessage(g, 'Taxi', msg);
-    return msg;
+    g.messages.push({ from: 'Taxi', text: 'Taxi: A cab is on its way to you.' });
+    return true;
   }
   if (id === 'mechanic') {
-    const v = g.player ? g.player.inCar : null;
-    if (!v) return false;
-    if ((g.cash || 0) < 30) return false;
+    if (!p.inCar) {
+      g.messages.push({ from: 'Mechanic', text: 'Mechanic: Get in your car first, then call me.' });
+      return false;
+    }
+    if (g.cash < 30) {
+      g.messages.push({ from: 'Mechanic', text: 'Mechanic: A repair costs $30 — come back when you have it.' });
+      return false;
+    }
     g.cash -= 30;
-    v.condition = 100;
-    const msg = 'Mechanic: good as new. $30, please.';
-    notifyMessage(g, 'Mechanic', msg);
-    return msg;
+    p.inCar.condition = 100;
+    g.messages.push({ from: 'Mechanic', text: 'Mechanic: Good as new. That will be $30.' });
+    return true;
   }
   return false;
 }
 
 export function phoneText(g) {
+  ensurePhone(g);
   const lines = [];
   lines.push('PHONE');
-  lines.push('Contacts: Rico, Maya, Taxi, Mechanic');
   lines.push(`Cash: $${g.cash}`);
-  lines.push(`Day ${g.day} · ${String(Math.floor(g.clock || 8)).padStart(2, '0')}:00`);
+  lines.push('Contacts: Rico · Maya · Taxi · Mechanic');
   lines.push('Messages:');
-  const msgs = g.messages || [];
-  if (msgs.length === 0) lines.push('(no messages yet)');
-  for (const m of msgs.slice(-6)) {
+  const msgs = g.messages.slice(-6);
+  for (const m of msgs) {
     lines.push(`${m.from}: ${m.text}`);
   }
-  lines.push('Tab or Esc to close the phone.');
+  if (g.unread > 0) lines.push(`(${g.unread} unread)`);
+  lines.push('Press Tab to close');
   return lines.join('\n');
 }

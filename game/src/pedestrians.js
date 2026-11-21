@@ -1,121 +1,177 @@
-// Solmar Bay — pedestrians: walkers, sitters, chatters, queues, vendors.
-// Written fresh for rebuild #18. 76 peds total, never on a road,
-// varied hair, height and bulk.
+// Solmar Bay — pedestrians.
+//
+// 76 people fill the streets: sitters on benches, chatting pairs, a
+// queue at the taco truck, vendors at the food shops, and walkers
+// strolling the sidewalks. Walkers head for a target and pick a new
+// one when they arrive; a scared ped flees from the player. Nobody
+// spawns on a road.
 
-import { mulberry32, COL, TUNE } from './config.js';
-import { isOnRoad, isBlocked, randomSidewalkPoint } from './world.js';
+import { mulberry32 } from './state.js';
+import { isOnRoad, randomSidewalkPoint } from './world.js';
 import { pushBox, pushBoxRot } from './render.js';
 
-export function makePed(x, z, activity) {
+const BULKS = [0.8, 0.9, 1.0, 1.1, 1.2, 1.3];
+const SHIRTS = [
+  [0.9, 0.3, 0.3], [0.3, 0.6, 0.9], [0.9, 0.8, 0.2], [0.4, 0.85, 0.4],
+  [0.9, 0.5, 0.8], [0.6, 0.4, 0.9], [0.95, 0.95, 0.95], [0.2, 0.2, 0.25],
+];
+const SKINS = [[0.85, 0.65, 0.5], [0.7, 0.5, 0.35], [0.55, 0.4, 0.28]];
+
+function makePed(rng, x, z, activity) {
   return {
-    x, z, activity: activity || 'walk',
+    x,
+    z,
     hp: 100,
+    hairStyle: Math.floor(rng() * 5),
+    height: 1.7 + rng() * 0.3,
+    bulk: BULKS[Math.floor(rng() * BULKS.length)],
+    activity,
+    target: null,
+    heading: rng() * Math.PI * 2,
+    speed: 1 + rng() * 1.5,
     dead: false,
-    hair: Math.floor(Math.random() * 6),
-    hairStyle: Math.floor(Math.random() * 5),
-    style: Math.floor(Math.random() * 5),
-    height: 1.7 + Math.random() * 0.3,
-    bulk: 0.7 + Math.random() * 0.5,
-    shirt: [Math.random(), Math.random(), Math.random()],
-    pants: [Math.random() * 0.5, Math.random() * 0.5, Math.random() * 0.5],
-    tx: x, tz: z,
-    speed: 1 + Math.random() * 1.2,
-    flee: false,
-    chatPartner: null,
+    flee: 0,
+    shirt: SHIRTS[Math.floor(rng() * SHIRTS.length)],
+    skin: SKINS[Math.floor(rng() * SKINS.length)],
+    pants: [0.2 + rng() * 0.2, 0.25, 0.4 + rng() * 0.2],
   };
 }
 
-export function spawnPeds(g) {
-  const rng = mulberry32(2026);
-  const peds = [];
-  const counts = [
-    ['sit', 7], ['chat', 14], ['queue', 7], ['vendor', 6], ['walk', 42],
-  ];
-  for (const [activity, n] of counts) {
-    for (let i = 0; i < n; i++) {
-      let x = 0, z = 0;
-      let tries = 0;
-      do {
-        const p = randomSidewalkPoint(rng);
-        x = p.x; z = p.z;
-        tries++;
-      } while ((isOnRoad(x, z) || isBlocked(g.city, x, z) || Math.hypot(x, z - 20) < 8) && tries < 40);
-      const ped = makePed(x, z, activity);
-      ped.hair = Math.floor(rng() * 6);
-      ped.hairStyle = Math.floor(rng() * 5);
-      ped.style = ped.hairStyle;
-      ped.height = 1.7 + rng() * 0.3;
-      ped.bulk = 0.7 + rng() * 0.5;
-      ped.shirt = [rng(), rng(), rng()];
-      ped.pants = [rng() * 0.5, rng() * 0.5, rng() * 0.5];
-      ped.speed = 1 + rng() * 1.2;
-      if (activity === 'walk') {
-        const t = randomSidewalkPoint(rng);
-        ped.tx = t.x; ped.tz = t.z;
-      }
-      peds.push(ped);
+function sidewalkPoint(city, rng) {
+  for (let tries = 0; tries < 20; tries++) {
+    const p = randomSidewalkPoint(rng);
+    if (!isOnRoad(p.x, p.z) && !city.blockers.some((b) => Math.abs(p.x - b.x) < b.hw + 1 && Math.abs(p.z - b.z) < b.hd + 1)) {
+      return p;
     }
   }
+  return { x: 10, z: 10 };
+}
+
+export function spawnPeds(g) {
+  const rng = mulberry32(7);
+  const city = g.city;
+  const peds = [];
+
+  // 7 sitters on benches.
+  for (let i = 0; i < 7; i++) {
+    const bench = city.benches[i % city.benches.length];
+    const p = makePed(rng, bench.x, bench.z + 1, 'sit');
+    peds.push(p);
+  }
+  // 14 chatters in 7 pairs.
+  for (let i = 0; i < 7; i++) {
+    const a = sidewalkPoint(city, rng);
+    const p1 = makePed(rng, a.x, a.z, 'chat');
+    const p2 = makePed(rng, a.x + 1.2, a.z + 0.5, 'chat');
+    p1.heading = Math.atan2(p2.x - p1.x, p2.z - p1.z);
+    p2.heading = Math.atan2(p1.x - p2.x, p1.z - p2.z);
+    peds.push(p1, p2);
+  }
+  // 7 in a queue at the taco truck.
+  for (let i = 0; i < 7; i++) {
+    const p = makePed(rng, 30 + (i % 2) * 1.2, 150 + 4 + i * 1.4, 'queue');
+    peds.push(p);
+  }
+  // 6 vendors at the food shops.
+  const shops = [
+    [-40, 70], [90, -30], [30, 150], [-90, -150], [-40, -70], [90, 30],
+  ];
+  for (const [x, z] of shops) {
+    const p = makePed(rng, x + 3, z + 3, 'vendor');
+    peds.push(p);
+  }
+  // 42 walkers on the sidewalks.
+  for (let i = 0; i < 42; i++) {
+    const a = sidewalkPoint(city, rng);
+    const p = makePed(rng, a.x, a.z, 'walk');
+    p.target = sidewalkPoint(city, rng);
+    peds.push(p);
+  }
+
   g.peds = peds;
   return peds;
 }
 
-export function stepPed(g, ped, dt) {
-  if (ped.dead) return;
-  if (ped.flee) {
+export function stepPed(g, p, dt) {
+  if (p.dead) return;
+  const player = g.player;
+  if (p.flee > 0) {
     // Run away from the player.
-    const dx = ped.x - g.player.x, dz = ped.z - g.player.z;
+    const dx = p.x - player.x;
+    const dz = p.z - player.z;
     const d = Math.hypot(dx, dz) || 1;
-    ped.x += (dx / d) * 5 * dt;
-    ped.z += (dz / d) * 5 * dt;
+    const speed = 5;
+    p.x += (dx / d) * speed * dt;
+    p.z += (dz / d) * speed * dt;
+    p.heading = Math.atan2(dx, dz);
+    p.flee = Math.max(0, p.flee - dt);
     return;
   }
-  if (ped.activity === 'walk') {
-    const dx = ped.tx - ped.x, dz = ped.tz - ped.z;
-    const d = Math.hypot(dx, dz);
-    if (d < 2) {
-      const t = randomSidewalkPoint(Math.random);
-      ped.tx = t.x; ped.tz = t.z;
-      return;
-    }
-    ped.x += (dx / d) * ped.speed * dt;
-    ped.z += (dz / d) * ped.speed * dt;
+  if (p.activity !== 'walk' || !p.target) return;
+  const dx = p.target.x - p.x;
+  const dz = p.target.z - p.z;
+  const d = Math.hypot(dx, dz);
+  if (d < 1) {
+    p.target = randomSidewalkPoint(mulberry32((Math.random() * 1e9) | 0));
+    return;
   }
-  // Sitters, chatters, queuers and vendors hold their spot.
+  const step = Math.min(d, p.speed * dt);
+  p.x += (dx / d) * step;
+  p.z += (dz / d) * step;
+  p.heading = Math.atan2(dx, dz);
 }
 
 export function stepPeds(g, dt) {
-  for (const ped of g.peds) stepPed(g, ped, dt);
+  for (const p of g.peds) stepPed(g, p, dt);
 }
 
-// 8 boxes for a live ped (incl. eyes when near), 0 when dead.
-// `cam` is the camera; eyes are drawn when the camera is null or
-// the ped is within 40 m of it.
+// A ped is 8 body boxes (head, hair, torso, arms, legs, shoes) plus,
+// at near LOD, a box for the eyes. Dead peds draw nothing. Returns
+// the body-box count (8 live, 0 dead).
 export function pedBoxes(g, p, b, cam) {
   if (p.dead) return 0;
-  const h = p.height;
-  const w = p.bulk * 0.45;
-  const hairCol = COL.hair[p.hair % COL.hair.length];
-  const skin = [0.85, 0.65, 0.5];
-  const legH = h * 0.5;
-  const torsoH = h * 0.35;
-  // Legs.
-  pushBox(b, p.x - w * 0.2, 0, p.z, w * 0.25, legH, w * 0.3, p.pants, [0, 0, 1, 1]);
-  pushBox(b, p.x + w * 0.2, 0, p.z, w * 0.25, legH, w * 0.3, p.pants, [0, 0, 1, 1]);
-  // Torso.
-  pushBox(b, p.x, legH, p.z, w, torsoH, w * 0.5, p.shirt, [0, 0, 1, 1]);
-  // Arms.
-  pushBox(b, p.x - w * 0.6, legH + 0.05, p.z, w * 0.2, torsoH * 0.85, w * 0.2, p.shirt, [0, 0, 1, 1]);
-  pushBox(b, p.x + w * 0.6, legH + 0.05, p.z, w * 0.2, torsoH * 0.85, w * 0.2, p.shirt, [0, 0, 1, 1]);
-  // Head.
-  pushBox(b, p.x, legH + torsoH, p.z, w * 0.5, h * 0.18, w * 0.5, skin, [0, 0, 1, 1]);
-  // Hair.
-  pushBox(b, p.x, legH + torsoH + h * 0.18, p.z, w * 0.55, h * 0.07, w * 0.55, hairCol, [0, 0, 1, 1]);
-  // Eyes — only when near (or when no camera was passed).
-  const near = !cam || Math.hypot(p.x - cam.x, p.z - cam.z) < 40;
-  if (near) {
-    pushBox(b, p.x - w * 0.1, legH + torsoH + h * 0.08, p.z - w * 0.26, 0.04, 0.04, 0.04, [0.05, 0.05, 0.05], [0, 0, 1, 1]);
-    return 8;
+  const plain = [0, 0, 1, 1];
+  const s = p.height / 1.8;
+  const h = p.heading || 0;
+  const bulk = p.bulk || 1;
+  const w = 0.42 * bulk;
+  const legH = 0.8 * s;
+  const torsoH = 0.55 * s;
+  const headH = 0.3 * s;
+  const hairH = 0.16 * s;
+  const parts = [
+    [0, 0, 0, 0.16, legH, 0.16, p.pants],
+    [0, 0, 0, 0.16, legH, 0.16, p.pants],
+    [0, legH, 0, w, torsoH, 0.28, p.shirt],
+    [0, legH + torsoH, 0, 0.3, headH, 0.28, p.skin],
+    [0, legH + torsoH + headH, 0, 0.32, hairH, 0.3, [0.15, 0.1, 0.08]],
+    [0, legH + 0.05, 0, 0.13, torsoH - 0.05, 0.13, p.shirt],
+    [0, legH + 0.05, 0, 0.13, torsoH - 0.05, 0.13, p.shirt],
+    [0, 0, 0, w + 0.04, 0.1, 0.34, [0.2, 0.15, 0.1]],
+  ];
+  const sides = [
+    [-0.1, 0], [0.1, 0], [0, 0], [0, 0], [0, 0],
+    [-w / 2 - 0.05, 0], [w / 2 + 0.05, 0], [0, 0.05],
+  ];
+  const cos = Math.cos(h);
+  const sin = Math.sin(h);
+  for (let i = 0; i < parts.length; i++) {
+    const [dx, dy, dz, bw, bh, bd, colour] = parts[i];
+    const [sx, sz] = sides[i];
+    const lx = dx + sx;
+    const lz = dz + sz;
+    const wx = p.x + lx * cos + lz * sin;
+    const wz = p.z - lx * sin + lz * cos;
+    pushBoxRot(b, wx, dy, wz, bw, bh, bd, h, colour, plain);
   }
-  return 7;
+  // Eyes, near LOD only (within 40 m; a null camera is always near).
+  const player = g.player;
+  const dist = Math.hypot(p.x - player.x, p.z - player.z);
+  const near = !cam || dist < 40;
+  if (near) {
+    const ex = p.x + Math.sin(h) * 0.16;
+    const ez = p.z + Math.cos(h) * 0.16;
+    pushBoxRot(b, ex, legH + torsoH + headH * 0.5, ez, 0.2, 0.05, 0.05, h, [0.1, 0.1, 0.12], plain);
+  }
+  return 8;
 }

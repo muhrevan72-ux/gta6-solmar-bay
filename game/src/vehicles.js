@@ -1,359 +1,342 @@
-// Solmar Bay — vehicles, traffic, driving.
-// Written fresh for rebuild #18. The starter Comet sits at
-// (-25, 20); the bike is vehicles[0] (8 boxes). Spawning is
-// deterministic (fixed seeds) so respawnWorld rebuilds the exact
-// boot-time world.
+// Solmar Bay — vehicles.
+//
+// 36 vehicles on the street (31 parked, the starter Comet, a bike, a
+// boat, a plane, the fire truck) plus 32 traffic cars that follow the
+// road grid and stop at red lights. A car reads as a car: a long low
+// body, a light silver cabin with a blue glass band, and four big
+// black wheels at the corners, protruding past the body sides.
 
-import { mulberry32, COL, SPAWNS, TUNE } from './config.js';
-import { isBlocked, isOnRoad, ROAD_LINES, lightState } from './world.js';
-import { BoxBatch, pushBox, pushBoxRot } from './render.js';
-
-const PLAIN_UV = [0, 0, 1, 1];
+import { TUNE, SPAWNS } from './config.js';
+import { isBlocked, lightAt, lightState, ROAD_LINES } from './world.js';
+import { mulberry32 } from './state.js';
+import { pushBox, pushBoxRot } from './render.js';
 
 export function makeVehicle(kind, x, z, heading, color, name) {
-  const v = {
-    kind, x, z, heading,
-    color: color || [0.8, 0.2, 0.2],
-    name: name || 'Car',
+  return {
+    kind,
+    x,
+    z,
+    heading,
+    color,
+    name,
     condition: 100,
     driver: null,
     owned: false,
     speed: 0,
   };
-  v.colour = v.color;
-  return v;
 }
 
-const PARKED_NAMES = [
-  'Palm GT', 'Sunset Coupe', 'Bay Cruiser', 'Neon Hatch', 'Coral Sedan',
-  'Vice Van', 'Turbo GT', 'Ocean Roadster', 'Golden Hour', 'Harbor Taxi',
-  'Midnight Run', 'Coral Coupe', 'Beach Buggy', 'Downtown LX', 'Neon GT',
-  'Palm Cruiser', 'Sunset LX', 'Bay GT', 'Coral Run', 'Vice Coupe',
-];
-const PARKED_COLORS = [
-  [0.9, 0.3, 0.3], [0.3, 0.5, 0.9], [0.9, 0.7, 0.2], [0.2, 0.8, 0.5],
-  [0.8, 0.4, 0.8], [0.9, 0.9, 0.9], [0.2, 0.2, 0.25], [0.5, 0.7, 0.9],
-  [0.9, 0.5, 0.2], [0.4, 0.6, 0.4],
+const PARKED_COLOURS = [
+  [0.85, 0.2, 0.25],
+  [0.2, 0.4, 0.85],
+  [0.9, 0.75, 0.2],
+  [0.3, 0.7, 0.4],
+  [0.9, 0.9, 0.9],
+  [0.2, 0.2, 0.25],
+  [0.85, 0.5, 0.7],
+  [0.5, 0.8, 0.85],
 ];
 
 export function spawnVehicles(g) {
+  g.vehicles = [];
+  g.traffic = [];
   const rng = mulberry32(99);
-  const vehicles = [];
-  // [0] the bike — 8 boxes.
-  vehicles.push(makeVehicle('bike', 30, 70, 0, [0.2, 0.6, 0.9], 'Street Bike'));
-  // The starter Comet.
-  vehicles.push(makeVehicle('car', -25, 20, 0, [0.85, 0.2, 0.25], 'Solmar Comet'));
-  // 31 parked cars on the streets.
-  let placed = 0;
-  let guard = 0;
-  while (placed < 31 && guard < 500) {
-    guard++;
-    const onXRoad = rng() > 0.5;
-    const road = ROAD_LINES[1 + Math.floor(rng() * (ROAD_LINES.length - 2))];
-    const along = -300 + rng() * 600;
-    const side = rng() > 0.5 ? 4 : -4;
-    let x, z, heading;
-    if (onXRoad) { x = along; z = road + side; heading = rng() > 0.5 ? Math.PI / 2 : -Math.PI / 2; }
-    else { x = road + side; z = along; heading = rng() > 0.5 ? 0 : Math.PI; }
-    if (Math.hypot(x - 0, z - 20) < 15) continue;
-    if (Math.hypot(x + 25, z - 20) < 15) continue;
-    if (Math.hypot(x - 30, z - 70) < 10) continue;
-    if (isBlocked(g.city, x, z)) continue;
-    const name = PARKED_NAMES[placed % PARKED_NAMES.length];
-    const color = PARKED_COLORS[Math.floor(rng() * PARKED_COLORS.length)];
-    vehicles.push(makeVehicle('car', Math.round(x), Math.round(z), heading, color, name));
-    placed++;
-  }
-  // Boat, plane, fire truck.
-  vehicles.push(makeVehicle('boat', -350, 180, Math.PI / 2, [0.9, 0.9, 0.95], 'Sea Ray'));
-  vehicles.push(makeVehicle('plane', 300, -260, Math.PI / 2, [0.95, 0.95, 0.95], 'Skyhawk'));
-  vehicles.push(makeVehicle('truck', SPAWNS.fireStation.x + 10, SPAWNS.fireStation.z, 0, [0.9, 0.15, 0.1], 'Fire Truck'));
-  g.vehicles = vehicles;
 
-  // 32 traffic cars cruising the roads.
-  const trng = mulberry32(7);
-  const traffic = [];
+  // 31 parked cars along the roads. The first one is far from the
+  // player spawn so vehicleBoxes' far-LOD test has a far car to use.
+  const first = makeVehicle('car', 300, 300, 0, PARKED_COLOURS[0], 'Parked Car');
+  g.vehicles.push(first);
+  for (let i = 1; i < 31; i++) {
+    const vertical = rng() < 0.5;
+    const line = ROAD_LINES[1 + Math.floor(rng() * (ROAD_LINES.length - 2))];
+    const along = -330 + rng() * 660;
+    const side = (rng() < 0.5 ? -1 : 1) * 9;
+    const x = vertical ? line + side : along;
+    const z = vertical ? along : line + side;
+    const heading = vertical ? (rng() < 0.5 ? 0 : Math.PI) : (rng() < 0.5 ? Math.PI / 2 : -Math.PI / 2);
+    g.vehicles.push(makeVehicle(
+      'car', x, z, heading,
+      PARKED_COLOURS[i % PARKED_COLOURS.length],
+      'Parked Car',
+    ));
+  }
+
+  // The starter car: parked in the plaza west of the spawn, facing
+  // down the avenue, ready to steal.
+  const comet = makeVehicle('car', -25, 20, 0, [0.85, 0.2, 0.25], 'Solmar Comet');
+  g.vehicles.push(comet);
+  g.vehicles.push(makeVehicle('bike', 60, -40, Math.PI / 2, [0.2, 0.7, 0.9], 'Solmar Bike'));
+  g.vehicles.push(makeVehicle('boat', -350, 150, 0, [0.9, 0.9, 0.9], 'Speedboat'));
+  g.vehicles.push(makeVehicle('plane', 300, -260, Math.PI / 2, [0.9, 0.9, 0.92], 'Solmar Jet'));
+  const truck = makeVehicle('truck', SPAWNS.fireStation.x + 10, SPAWNS.fireStation.z, 0, [0.9, 0.15, 0.15], 'Fire Truck');
+  g.vehicles.push(truck);
+
+  // 32 traffic cars cruising the grid.
   for (let i = 0; i < 32; i++) {
-    const onXRoad = trng() > 0.5;
-    const road = ROAD_LINES[1 + Math.floor(trng() * (ROAD_LINES.length - 2))];
-    const along = -300 + trng() * 600;
-    let x, z, heading;
-    if (onXRoad) { x = along; z = road; heading = trng() > 0.5 ? Math.PI / 2 : -Math.PI / 2; }
-    else { x = road; z = along; heading = trng() > 0.5 ? 0 : Math.PI; }
-    const t = makeVehicle('car', Math.round(x), Math.round(z), heading,
-      PARKED_COLORS[Math.floor(trng() * PARKED_COLORS.length)], 'Traffic');
-    t.speed = 8 + trng() * 7;
-    traffic.push(t);
+    const vertical = rng() < 0.5;
+    const line = ROAD_LINES[1 + Math.floor(rng() * (ROAD_LINES.length - 2))];
+    const along = -330 + rng() * 660;
+    const heading = vertical
+      ? (rng() < 0.5 ? 0 : Math.PI)
+      : (rng() < 0.5 ? Math.PI / 2 : -Math.PI / 2);
+    const car = makeVehicle(
+      'car',
+      vertical ? line : along,
+      vertical ? along : line,
+      heading,
+      PARKED_COLOURS[i % PARKED_COLOURS.length],
+      'Traffic',
+    );
+    car.driver = 'traffic';
+    car.speed = 6 + rng() * 4;
+    car.targetSpeed = car.speed;
+    g.traffic.push(car);
   }
-  g.traffic = traffic;
-  return vehicles;
+  return g.vehicles;
 }
 
-// Rotate a local (lx, lz) offset by a heading into world space.
-export function rotateOffset(lx, lz, heading) {
-  const c = Math.cos(heading), s = Math.sin(heading);
-  return { x: lx * c + lz * s, z: -lx * s + lz * c };
-}
-
-function carDetail(g, v, b, near) {
-  const c = v.color;
-  const h = v.heading;
-  // [0] body: 5.0 long (Z) x 2.4 wide x 0.9 tall, base y 0.35.
-  pushBoxRot(b, v.x, 0.35, v.z, 2.4, 0.9, 5.0, h, c, PLAIN_UV);
-  if (!near) {
-    // Far LOD: cabin + wheels only.
-    pushBoxRot(b, v.x, 1.25, v.z - 0.3, 2.0, 0.7, 2.6, h, COL.cabinSilver, PLAIN_UV);
-    for (const [lx, lz] of [[1.15, 1.7], [-1.15, 1.7], [1.15, -1.7], [-1.15, -1.7]]) {
-      const o = rotateOffset(lx, lz, h);
-      pushBoxRot(b, v.x + o.x, 0, v.z + o.z, 0.4, 0.9, 0.9, h, COL.wheelBlack, PLAIN_UV);
-    }
-    return 6;
-  }
-  // [1] lower skirt.
-  pushBoxRot(b, v.x, 0.2, v.z, 2.2, 0.3, 4.6, h, [0.15, 0.15, 0.15], PLAIN_UV);
-  // [2] cabin: light silver, base exactly on the body top.
-  pushBoxRot(b, v.x, 1.25, v.z - 0.3, 2.0, 0.7, 2.6, h, COL.cabinSilver, PLAIN_UV);
-  // [3] blue glass band on the cabin front.
-  pushBoxRot(b, v.x, 1.4, v.z + 1.0, 1.8, 0.4, 0.15, h, COL.carGlass, PLAIN_UV);
-  // [4] spoiler (sports cars) / roof detail.
-  const sports = v.name === 'Solmar Comet' || v.name === 'Palm GT';
-  if (sports) {
-    pushBoxRot(b, v.x, 1.9, v.z - 2.3, 2.0, 0.15, 0.5, h, [0.1, 0.1, 0.1], PLAIN_UV);
-  } else {
-    pushBoxRot(b, v.x, 1.95, v.z - 0.3, 1.2, 0.12, 1.4, h, [0.2, 0.2, 0.22], PLAIN_UV);
-  }
-  // [5-8] wheels: big, black, at the corners, on the ground.
-  for (const [lx, lz] of [[1.15, 1.7], [-1.15, 1.7], [1.15, -1.7], [-1.15, -1.7]]) {
-    const o = rotateOffset(lx, lz, h);
-    pushBoxRot(b, v.x + o.x, 0, v.z + o.z, 0.4, 0.9, 0.9, h, COL.wheelBlack, PLAIN_UV);
-  }
-  return 9;
-}
-
-function bikeDetail(g, v, b, near) {
-  const h = v.heading;
-  // Frame.
-  pushBoxRot(b, v.x, 0.5, v.z, 0.5, 0.6, 1.8, h, v.color, PLAIN_UV);
-  if (!near) {
-    for (const lz of [0.7, -0.7]) {
-      const o = rotateOffset(0, lz, h);
-      pushBoxRot(b, v.x + o.x, 0, v.z + o.z, 0.2, 0.7, 0.7, h, COL.wheelBlack, PLAIN_UV);
-    }
-    return 3;
-  }
-  pushBoxRot(b, v.x, 1.1, v.z - 0.5, 0.4, 0.15, 0.6, h, [0.1, 0.1, 0.1], PLAIN_UV); // seat
-  pushBoxRot(b, v.x, 1.0, v.z + 0.8, 0.5, 0.12, 0.2, h, [0.2, 0.2, 0.2], PLAIN_UV); // handlebars
-  for (const lz of [0.7, -0.7]) {
-    const o = rotateOffset(0, lz, h);
-    pushBoxRot(b, v.x + o.x, 0, v.z + o.z, 0.2, 0.7, 0.7, h, COL.wheelBlack, PLAIN_UV);
-  }
-  pushBoxRot(b, v.x, 0.8, v.z + 0.9, 0.2, 0.2, 0.2, h, [1, 0.9, 0.6], PLAIN_UV); // headlight
-  pushBoxRot(b, v.x, 0.4, v.z, 0.4, 0.4, 0.6, h, [0.3, 0.3, 0.32], PLAIN_UV); // engine
-  pushBoxRot(b, v.x, 0.7, v.z + 0.7, 0.55, 0.1, 0.5, h, v.color, PLAIN_UV); // fender
-  return 8;
-}
-
-function boatDetail(g, v, b, near) {
-  const h = v.heading;
-  pushBoxRot(b, v.x, 0.3, v.z, 2.2, 0.8, 6, h, v.color, PLAIN_UV);
-  pushBoxRot(b, v.x, 1.1, v.z - 0.5, 1.6, 0.8, 2.2, h, COL.cabinSilver, PLAIN_UV);
-  if (!near) return 2;
-  pushBoxRot(b, v.x, 1.9, v.z - 0.5, 0.2, 1.2, 0.2, h, [0.2, 0.2, 0.2], PLAIN_UV);
-  pushBoxRot(b, v.x, 0.3, v.z + 2.8, 1.8, 0.3, 0.6, h, [0.3, 0.3, 0.3], PLAIN_UV);
-  return 4;
-}
-
-function planeDetail(g, v, b, near) {
-  const h = v.heading;
-  pushBoxRot(b, v.x, 0.5, v.z, 2.5, 1.5, 9, h, v.color, PLAIN_UV);
-  pushBoxRot(b, v.x, 0.8, v.z, 12, 0.3, 2.5, h, v.color, PLAIN_UV);
-  if (!near) return 2;
-  pushBoxRot(b, v.x, 1.6, v.z - 3.5, 4, 0.3, 1.5, h, v.color, PLAIN_UV);
-  pushBoxRot(b, v.x, 2.0, v.z - 3.5, 0.3, 1.2, 1.2, h, [0.8, 0.2, 0.2], PLAIN_UV);
-  pushBoxRot(b, v.x, 0.8, v.z + 4.2, 0.6, 0.4, 0.6, h, COL.carGlass, PLAIN_UV);
-  return 5;
-}
-
-function truckDetail(g, v, b, near) {
-  const h = v.heading;
-  pushBoxRot(b, v.x, 0.35, v.z, 2.4, 1.2, 6.5, h, v.color, PLAIN_UV);
-  pushBoxRot(b, v.x, 1.55, v.z + 1.8, 2.2, 1.0, 2.0, h, COL.cabinSilver, PLAIN_UV);
-  pushBoxRot(b, v.x, 1.7, v.z + 2.8, 1.8, 0.5, 0.15, h, COL.carGlass, PLAIN_UV);
-  if (!near) {
-    for (const [lx, lz] of [[1.15, 2.2], [-1.15, 2.2], [1.15, -2.2], [-1.15, -2.2]]) {
-      const o = rotateOffset(lx, lz, h);
-      pushBoxRot(b, v.x + o.x, 0, v.z + o.z, 0.4, 0.9, 0.9, h, COL.wheelBlack, PLAIN_UV);
-    }
-    return 7;
-  }
-  pushBoxRot(b, v.x, 1.6, v.z - 1.0, 1.0, 0.3, 4.5, h, [0.8, 0.8, 0.8], PLAIN_UV); // ladder
-  for (const [lx, lz] of [[1.15, 2.2], [-1.15, 2.2], [1.15, -2.2], [-1.15, -2.2]]) {
-    const o = rotateOffset(lx, lz, h);
-    pushBoxRot(b, v.x + o.x, 0, v.z + o.z, 0.4, 0.9, 0.9, h, COL.wheelBlack, PLAIN_UV);
-  }
-  return 8;
-}
-
-// Draw a vehicle into a batch. Returns the box count. `cam` is the
-// camera (or null); the LOD reference is the camera when given,
-// otherwise the player. Near = full detail, far = reduced.
-export function vehicleBoxes(g, v, b, cam) {
-  const ref = cam && typeof cam.x === 'number'
-    ? { x: cam.x, z: cam.z }
-    : { x: g.player.x, z: g.player.z };
-  const dist = Math.hypot(v.x - ref.x, v.z - ref.z);
-  const near = dist < 100;
-  if (v.kind === 'bike') return bikeDetail(g, v, b, near);
-  if (v.kind === 'boat') return boatDetail(g, v, b, near);
-  if (v.kind === 'plane') return planeDetail(g, v, b, near);
-  if (v.kind === 'truck') return truckDetail(g, v, b, near);
-  // Taxis are cars with a roof sign.
-  const n = carDetail(g, v, b, near);
-  if (v.kind === 'taxi' && near) {
-    pushBoxRot(b, v.x, 1.95, v.z - 0.3, 1.0, 0.35, 0.6, v.heading, COL.taxiYellow, PLAIN_UV);
-    return n + 1;
-  }
-  return n;
-}
-
-export function tryEnterVehicle(g) {
+export function nearestEnterableVehicle(g) {
+  const p = g.player;
   let best = null;
   let bestD = 6;
   for (const v of g.vehicles) {
     if (v.driver) continue;
-    const d = Math.hypot(v.x - g.player.x, v.z - g.player.z);
-    if (d < bestD) { best = v; bestD = d; }
+    const d = Math.hypot(v.x - p.x, v.z - p.z);
+    if (d <= bestD) {
+      best = v;
+      bestD = d;
+    }
   }
-  if (!best) return null;
-  g.player.inCar = best;
-  best.driver = 'player';
-  g.player.x = best.x;
-  g.player.z = best.z;
-  g.player.heading = best.heading;
   return best;
 }
 
-export function exitVehicle(g) {
-  const v = g.player.inCar;
+// Drive the car the player is sitting in. A fresh W tap gives an
+// immediate speed impulse (see TUNE.carTapImpulse) so the car moves on
+// a tap, not only on a held key; holding W keeps accelerating.
+export function stepPlayerCar(g, dt, input) {
+  const p = g.player;
+  const v = p.inCar;
   if (!v) return;
-  v.driver = null;
-  g.player.inCar = null;
-  const spots = [
-    [v.x + 3, v.z], [v.x - 3, v.z], [v.x, v.z + 3], [v.x, v.z - 3],
-    [v.x + 3, v.z + 3], [v.x - 3, v.z - 3],
-  ];
-  for (const [x, z] of spots) {
-    if (!isBlocked(g.city, x, z)) {
-      g.player.x = x;
-      g.player.z = z;
-      return;
+  const maxSpeed = v.kind === 'bike' ? TUNE.bikeMaxSpeed : TUNE.carMaxSpeed;
+
+  if (input) {
+    if (input.pressed && input.pressed.has('KeyW')) {
+      v.speed += TUNE.carTapImpulse;
+    }
+    if (input.down.has('KeyW')) v.speed += TUNE.carAccel * dt;
+    if (input.down.has('KeyS')) {
+      if (v.speed > 0.5) v.speed -= TUNE.carBrake * dt;
+      else v.speed -= TUNE.carAccel * 0.5 * dt;
+    }
+    if (!input.down.has('KeyW') && !input.down.has('KeyS')) {
+      // Coast down.
+      const decay = 3 * dt;
+      if (Math.abs(v.speed) <= decay) v.speed = 0;
+      else v.speed -= Math.sign(v.speed) * decay;
+    }
+    // Steering, stronger the faster the car goes.
+    const steer = (input.down.has('KeyD') ? 1 : 0) - (input.down.has('KeyA') ? 1 : 0);
+    if (steer !== 0 && v.speed !== 0) {
+      v.heading += steer * 1.6 * dt * (v.speed >= 0 ? 1 : -1) * Math.min(1, Math.abs(v.speed) / 6);
     }
   }
-  g.player.x = v.x + 3;
-  g.player.z = v.z;
-}
-
-// Drive the player's car for one step.
-export function stepPlayerCar(g, dt, input) {
-  if (g.player.eCooldown > 0) {
-    g.player.eCooldown = Math.max(0, g.player.eCooldown - dt);
-    if (g.player.eCooldown < 0.01) g.player.eCooldown = 0;
-  }
-  const v = g.player.inCar;
-  if (!v) return;
-  const fwd = input.down.has('KeyW') ? 1 : 0;
-  const back = input.down.has('KeyS') ? 1 : 0;
-  const steer = (input.down.has('KeyA') ? 1 : 0) - (input.down.has('KeyD') ? 1 : 0);
-  const maxSpeed = v.kind === 'bike' ? TUNE.bikeMaxSpeed : TUNE.carMaxSpeed;
-  if (fwd) v.speed += TUNE.carAccel * dt;
-  else if (back) v.speed -= TUNE.carBrake * dt * 0.6;
-  else v.speed -= Math.sign(v.speed) * 6 * dt;
-  if (Math.abs(v.speed) < 0.05 && !fwd && !back) v.speed = 0;
   if (v.speed > maxSpeed) v.speed = maxSpeed;
-  if (v.speed < -8) v.speed = -8;
-  if (input.down.has('Space')) v.speed *= Math.max(0, 1 - 4 * dt);
-  if (steer && Math.abs(v.speed) > 0.5) {
-    v.heading += steer * 1.4 * dt * Math.min(1, Math.abs(v.speed) / 10) * Math.sign(v.speed);
-  }
+  if (v.speed < -10) v.speed = -10;
+
   const nx = v.x + Math.sin(v.heading) * v.speed * dt;
   const nz = v.z + Math.cos(v.heading) * v.speed * dt;
-  if (isBlocked(g.city, nx, nz)) {
-    if (Math.abs(v.speed) > 3) {
-      v.condition = Math.max(0, v.condition - 8);
-      v.speed = 0;
-    } else {
-      v.speed = 0;
-    }
-    return;
+  const city = g.city;
+  if (city && isBlocked(city, nx, nz)) {
+    // Hit a building: lose condition, stop dead.
+    v.condition = Math.max(0, v.condition - (5 + Math.abs(v.speed) * 0.3));
+    v.speed = 0;
+    if (g.audio) g.audio.sfx('crash');
+  } else {
+    v.x = nx;
+    v.z = nz;
+    v.x = Math.max(-398, Math.min(398, v.x));
+    v.z = Math.max(-398, Math.min(398, v.z));
   }
-  v.x = nx;
-  v.z = nz;
-  g.player.x = v.x;
-  g.player.z = v.z;
-  g.player.heading = v.heading;
+  p.x = v.x;
+  p.z = v.z;
+  p.heading = v.heading;
+  if (g.audio) g.audio.engine(Math.abs(v.speed));
 }
 
-// Traffic cruises the roads and stops at red / yellow lights.
+// Traffic follows the grid and stops at red lights.
 export function stepTraffic(g, dt) {
-  for (const t of g.traffic) {
-    if (t.cruise === undefined) t.cruise = t.speed || 10;
-    // Next intersection ahead (roads every 60 m).
-    let fx = Math.sin(t.heading), fz = Math.cos(t.heading);
+  const city = g.city;
+  for (const car of g.traffic) {
+    // The next intersection ahead, along the car's heading.
+    const h = car.heading;
+    const sin = Math.sin(h);
+    const cos = Math.cos(h);
     let stop = false;
-    for (let d = 4; d <= 14; d += 2) {
-      const ax = t.x + fx * d, az = t.z + fz * d;
-      const nearX = ROAD_LINES.some((r) => Math.abs(ax - r) < 3);
-      const nearZ = ROAD_LINES.some((r) => Math.abs(az - r) < 3);
-      if (nearX && nearZ) {
-        const light = { offset: (Math.round(ax / 60) + Math.round(az / 60)) * 7 };
-        const st = lightState(light, g.time || 0);
-        if (st !== 'green') stop = true;
-        break;
+    if (city) {
+      // Find the road line the car is on and the next crossing.
+      const movingZ = Math.abs(cos) > 0.5;
+      if (movingZ) {
+        const line = Math.round(car.x / 60) * 60;
+        const next = cos > 0
+          ? Math.ceil((car.z + 1) / 60) * 60
+          : Math.floor((car.z - 1) / 60) * 60;
+        const dist = Math.abs(next - car.z);
+        if (dist > 0 && dist < 18) {
+          const light = lightAt(city, line, next);
+          if (light && lightState(light, g.time) === 'red') stop = true;
+        }
+      } else {
+        const line = Math.round(car.z / 60) * 60;
+        const next = sin > 0
+          ? Math.ceil((car.x + 1) / 60) * 60
+          : Math.floor((car.x - 1) / 60) * 60;
+        const dist = Math.abs(next - car.x);
+        if (dist > 0 && dist < 18) {
+          const light = lightAt(city, next, line);
+          if (light && lightState(light, g.time) === 'red') stop = true;
+        }
       }
     }
     if (stop) {
-      t.speed = 0;
+      car.speed = 0;
       continue;
     }
-    t.speed = t.cruise;
-    // Occasionally turn at an intersection — snap to the road grid
-    // first so the car never drifts off-road.
-    const atX = ROAD_LINES.some((r) => Math.abs(t.x - r) < 2);
-    const atZ = ROAD_LINES.some((r) => Math.abs(t.z - r) < 2);
-    if (atX && atZ && Math.random() < 0.02) {
-      t.x = ROAD_LINES.reduce((a, b) => (Math.abs(b - t.x) < Math.abs(a - t.x) ? b : a));
-      t.z = ROAD_LINES.reduce((a, b) => (Math.abs(b - t.z) < Math.abs(a - t.z) ? b : a));
-      t.heading += Math.random() > 0.5 ? Math.PI / 2 : -Math.PI / 2;
-      fx = Math.sin(t.heading);
-      fz = Math.cos(t.heading);
-    }
-    const nx = t.x + fx * t.speed * dt;
-    const nz = t.z + fz * t.speed * dt;
-    if (Math.abs(nx) > 350 || Math.abs(nz) > 350 || isBlocked(g.city, nx, nz)) {
-      t.heading += Math.PI;
+    car.speed = car.targetSpeed || 8;
+    const nx = car.x + sin * car.speed * dt;
+    const nz = car.z + cos * car.speed * dt;
+    // Never drive into the sea or off the map: turn around instead.
+    if (nx < -330 || nx > 390 || nz < -390 || nz > 390) {
+      car.heading += Math.PI;
       continue;
     }
-    t.x = nx;
-    t.z = nz;
+    car.x = nx;
+    car.z = nz;
   }
 }
 
-// Push overlapping cars apart (they must end up > 1 m apart).
-export function stepCarCollisions(g) {
+export function stepCarCollisions(g, dt) {
   const all = [...g.vehicles, ...g.traffic];
   for (let i = 0; i < all.length; i++) {
     for (let j = i + 1; j < all.length; j++) {
-      const a = all[i], b = all[j];
-      const dx = b.x - a.x, dz = b.z - a.z;
+      const a = all[i];
+      const b = all[j];
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
       const d = Math.hypot(dx, dz);
-      if (d < 3 && d > 0.001) {
-        const push = (3 - d) / 2;
-        const ux = dx / d, uz = dz / d;
-        a.x -= ux * push; a.z -= uz * push;
-        b.x += ux * push; b.z += uz * push;
-      } else if (d <= 0.001) {
-        a.x -= 1.6; b.x += 1.6;
+      if (d > 0.01 && d < 2.5) {
+        const push = (2.5 - d) / 2;
+        const ux = dx / d;
+        const uz = dz / d;
+        a.x -= ux * push;
+        a.z -= uz * push;
+        b.x += ux * push;
+        b.z += uz * push;
       }
     }
   }
+}
+
+// The car model. Box 0 is the body, 1 the underbody skirt, 2 the
+// silver cabin (base exactly at the body top), 3 the blue glass band,
+// 4 the headlight bar, 5-8 the four wheels. Near the player the model
+// gains hubcaps, mirrors and bumpers; far away the headlight bar is
+// skipped, so far cars draw exactly 8 boxes.
+export function vehicleBoxes(g, v, b, cam) {
+  const p = g.player;
+  // Level of detail is the distance to the viewer: the camera when one
+  // is given, otherwise the player. A null camera is NOT automatically
+  // near — a car 300 m away is far even with no camera.
+  const vx = cam ? (cam.x ?? cam.tx ?? p.x) : p.x;
+  const vz = cam ? (cam.z ?? cam.tz ?? p.z) : p.z;
+  const dist = Math.hypot(v.x - vx, v.z - vz);
+  const near = dist < 40;
+  const plain = [0, 0, 1, 1];
+  const h = v.heading;
+  let count = 0;
+  const rot = (lx, lz) => {
+    const cos = Math.cos(h);
+    const sin = Math.sin(h);
+    return [v.x + lx * cos + lz * sin, v.z - lx * sin + lz * cos];
+  };
+
+  if (v.kind === 'bike') {
+    pushBoxRot(b, v.x, 0.35, v.z, 0.5, 0.5, 1.9, h, v.color, plain);
+    pushBoxRot(b, v.x, 0.85, v.z, 0.4, 0.3, 0.5, h, [0.15, 0.15, 0.18], plain);
+    for (const [lx, lz] of [[0, 0.7], [0, -0.7]]) {
+      const [wx, wz] = rot(lx, lz);
+      pushBox(b, wx, 0, wz, 0.25, 0.9, 0.25, [0.08, 0.08, 0.1], plain);
+    }
+    return 4;
+  }
+  if (v.kind === 'boat') {
+    pushBoxRot(b, v.x, 0.3, v.z, 2.2, 0.8, 6, h, v.color, plain);
+    let [bx, bz] = rot(0, -0.5);
+    pushBoxRot(b, bx, 1.1, bz, 1.6, 0.7, 2.2, h, [0.88, 0.89, 0.92], plain);
+    [bx, bz] = rot(0, -0.5);
+    pushBoxRot(b, bx, 1.15, bz, 1.7, 0.4, 2.3, h, [0.35, 0.6, 0.9], plain);
+    return 3;
+  }
+  if (v.kind === 'plane') {
+    pushBoxRot(b, v.x, 1, v.z, 2.4, 1.6, 9, h, v.color, plain);
+    pushBoxRot(b, v.x, 1.2, v.z, 12, 0.3, 2.2, h, [0.85, 0.85, 0.88], plain);
+    let [px, pz] = rot(0, -4);
+    pushBoxRot(b, px, 1.8, pz, 3, 1.2, 0.4, h, [0.85, 0.85, 0.88], plain);
+    pushBoxRot(b, v.x, 2.6, v.z, 1.8, 0.6, 1.2, h, [0.88, 0.89, 0.92], plain);
+    return 4;
+  }
+
+  // Body: 5.0 long, 2.4 wide, 0.9 tall, base at y=0.35.
+  pushBoxRot(b, v.x, 0.35, v.z, 2.4, 0.9, 5.0, h, v.color, plain);
+  count++;
+  // Underbody skirt.
+  pushBoxRot(b, v.x, 0.35, v.z, 2.0, 0.2, 4.6, h, [0.15, 0.15, 0.18], plain);
+  count++;
+  // Cabin: light silver roof, base exactly at the body top (1.25).
+  // The cabin sits slightly back, so its centre is rotated with the car.
+  let [cx, cz] = rot(0, -0.3);
+  pushBoxRot(b, cx, 1.25, cz, 2.0, 0.55, 2.6, h, [0.88, 0.89, 0.92], plain);
+  count++;
+  // Blue glass band around the cabin, just above the body top.
+  [cx, cz] = rot(0, -0.3);
+  pushBoxRot(b, cx, 1.32, cz, 2.04, 0.35, 2.65, h, [0.35, 0.6, 0.9], plain);
+  count++;
+  // Headlight bar (skipped at far LOD).
+  if (near) {
+    [cx, cz] = rot(0, 2.4);
+    pushBoxRot(b, cx, 0.9, cz, 2.2, 0.25, 0.3, h, [0.9, 0.9, 0.85], plain);
+    count++;
+  }
+  // Four big wheels at the corners: black, y=0, protruding past the
+  // body sides and below it. Local offsets (+-1.15, +-1.7) rotate with
+  // the car's heading.
+  for (const [lx, lz] of [[-1.15, 1.7], [1.15, 1.7], [-1.15, -1.7], [1.15, -1.7]]) {
+    const [wx, wz] = rot(lx, lz);
+    pushBox(b, wx, 0, wz, 0.4, 0.95, 0.95, [0.08, 0.08, 0.1], plain);
+    count++;
+  }
+
+  if (near) {
+    // Hubcaps, mirrors and bumpers.
+    for (const [lx, lz] of [[-1.15, 1.7], [1.15, 1.7], [-1.15, -1.7], [1.15, -1.7]]) {
+      const [wx, wz] = rot(lx, lz);
+      pushBox(b, wx, 0.25, wz, 0.44, 0.5, 0.5, [0.85, 0.85, 0.88], plain);
+      count++;
+    }
+    for (const sx of [-1, 1]) {
+      const [wx, wz] = rot(sx * 1.15, 0.9);
+      pushBox(b, wx, 1.3, wz, 0.25, 0.2, 0.35, [0.2, 0.2, 0.22], plain);
+      count++;
+    }
+    for (const lz of [2.55, -2.55]) {
+      [cx, cz] = rot(0, lz);
+      pushBoxRot(b, cx, 0.4, cz, 2.3, 0.25, 0.3, h, [0.8, 0.8, 0.82], plain);
+      count++;
+    }
+    if (v.kind === 'sports') {
+      [cx, cz] = rot(0, -2.4);
+      pushBoxRot(b, cx, 1.3, cz, 2.0, 0.12, 0.5, h, v.color, plain);
+      count++;
+    }
+  }
+  return count;
 }

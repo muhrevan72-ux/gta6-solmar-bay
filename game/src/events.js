@@ -1,49 +1,86 @@
-// Solmar Bay — timed city events: beach party, street race, market day.
-// Written fresh for rebuild #18.
+// Solmar Bay — city events.
+//
+// Every few minutes something happens: a beach party, a street race,
+// or a market day. An event carries its id, its spot, and `t` — the
+// seconds left before it ends. stepEvents takes an optional random
+// source (tests pass a stub so the pick is deterministic).
 
 import { pushBox } from './render.js';
+import { showToast } from './state.js';
 
-const TYPES = ['beachParty', 'streetRace', 'marketDay'];
+const EVENT_TYPES = [
+  { id: 'beachParty', dur: 120, label: 'Beach Party', x: -330, z: 60 },
+  { id: 'streetRace', dur: 90, label: 'Street Race', x: 0, z: 0 },
+  { id: 'marketDay', dur: 180, label: 'Market Day', x: 60, z: 60 },
+];
 
-export function stepEvents(g, dt, rng) {
-  g.eventTimer = (g.eventTimer ?? 60) - dt;
-  if (g.eventTimer > 0) return;
-  const r = rng ? rng() : Math.random();
-  const id = r < 0.34 ? 'beachParty' : r < 0.67 ? 'streetRace' : 'marketDay';
-  const spot = id === 'beachParty'
-    ? { label: 'Beach party', x: -330, z: 40 }
-    : id === 'streetRace'
-      ? { label: 'Street race', x: 0, z: 0 }
-      : { label: 'Market day', x: -60, z: 90 };
-  g.event = { id, type: id, label: spot.label, x: spot.x, z: spot.z, t: 60 };
-  g.eventTimer = 120 + (rng ? rng() : Math.random()) * 120;
+export function spawnEvents(g) {
+  g.event = null;
+  g.eventTimer = 120;
+  return g;
+}
+
+function startEvent(g, rng) {
+  const roll = typeof rng === 'function' ? rng() : Math.random();
+  const pick = roll < 0.33 ? EVENT_TYPES[0] : roll < 0.66 ? EVENT_TYPES[1] : EVENT_TYPES[2];
+  g.event = { id: pick.id, t: pick.dur, x: pick.x, z: pick.z, label: pick.label };
+  g.eventTimer = 300;
+  showToast(g, `${pick.label} is on! Head over and join in.`);
+  return g.event;
 }
 
 export function stepEventActive(g, dt) {
-  if (!g.event) return;
+  if (!g.event) return false;
   g.event.t -= dt;
-  if (g.event.t <= 0) g.event = null;
+  if (g.event.t <= 0) {
+    g.event = null;
+    return true;
+  }
+  return false;
 }
 
-export function eventBoxes(g, b, gl) {
-  if (!g.event) return 0;
-  const id = g.event.id || g.event.type;
-  let n = 0;
-  if (id === 'beachParty') {
-    for (let i = 0; i < 6; i++) {
-      pushBox(b, -320 + i * 4, 3 + (i % 2), 60 + i * 3, 0.5, 0.5, 0.5, [1, 0.3 + i * 0.1, 0.6], [0, 0, 1, 1]);
-      n++;
-    }
-  } else if (id === 'streetRace') {
-    for (let i = 0; i < 4; i++) {
-      pushBox(b, -100 + i * 60, 2, 0, 0.3, 4, 0.3, [0.95, 0.75, 0.1], [0, 0, 1, 1]);
-      n++;
-    }
-  } else if (id === 'marketDay') {
-    for (let i = 0; i < 5; i++) {
-      pushBox(b, -60 + i * 30, 1, 90, 4, 2, 3, [0.9, 0.5, 0.2], [0, 0, 1, 1]);
-      n++;
-    }
+export function stepEvents(g, dt, rng) {
+  if (g.event) {
+    stepEventActive(g, dt);
+    return;
   }
-  return n;
+  g.eventTimer = (g.eventTimer === undefined ? 120 : g.eventTimer) - dt;
+  if (g.eventTimer <= 0) {
+    startEvent(g, rng);
+  }
+}
+
+// The event's props: 6 for a beach party, flags for a race, stalls
+// for a market day. No event, nothing drawn.
+export function eventBoxes(g, b, cam) {
+  const plain = [0, 0, 1, 1];
+  if (!g.event) return 0;
+  const { x, z } = g.event;
+  const id = g.event.id || g.event.type;
+  if (id === 'beachParty') {
+    pushBox(b, x, 0, z, 6, 0.6, 4, [0.9, 0.3, 0.5], plain);
+    pushBox(b, x - 4, 0, z, 1, 2, 1, [0.2, 0.2, 0.2], plain);
+    pushBox(b, x + 4, 0, z, 1, 2, 1, [0.2, 0.2, 0.2], plain);
+    pushBox(b, x, 3, z - 3, 0.3, 3, 0.3, [0.95, 0.75, 0.1], plain);
+    pushBox(b, x, 3, z + 3, 0.3, 3, 0.3, [0.95, 0.75, 0.1], plain);
+    pushBox(b, x, 0, z + 6, 2, 1, 2, [0.95, 0.6, 0.1], plain);
+    return 6;
+  }
+  if (id === 'streetRace') {
+    let n = 0;
+    for (let i = 0; i < 8; i++) {
+      pushBox(b, x - 40 + i * 12, 0, z - 6, 0.4, 3, 0.4, [0.95, 0.75, 0.1], plain);
+      n += 1;
+    }
+    return n;
+  }
+  if (id === 'marketDay') {
+    let n = 0;
+    for (let i = 0; i < 5; i++) {
+      pushBox(b, x - 20 + i * 10, 0, z, 3, 2, 2, [0.9, 0.5, 0.2], plain);
+      n += 1;
+    }
+    return n;
+  }
+  return 0;
 }

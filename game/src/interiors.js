@@ -1,89 +1,108 @@
-// Solmar Bay — interiors: walk into a shop, walk back out.
-// Written fresh for rebuild #18. Rooms live in a separate zone
-// (x ~ 2000) so they never overlap the city.
+// Solmar Bay — shop interiors.
+//
+// Three rooms — pizza, burger, outfit — each with a door in the world
+// and an interior origin far outside the city. Walk through a door to
+// step inside; press E at the counter to order (or try on clothes);
+// press E anywhere else inside to step back out. Inside, the player
+// is clamped to the room. ROOMS is a keyed map so callers can reach a
+// room by id (ROOMS.pizza.door, ROOMS.burger.origin, ...).
 
-import { FOOD_SHOPS, SPAWNS } from './config.js';
 import { pushBox } from './render.js';
+import { FOOD_SHOPS, SPAWNS } from './config.js';
 
 export const ROOMS = {
-  pizza: { door: { x: 50, z: 90 }, origin: { x: 2000, z: 0 } },
-  burger: { door: { x: -50, z: 30 }, origin: { x: 2100, z: 0 } },
-  outfit: { door: { x: 90, z: 30 }, origin: { x: 2200, z: 0 } },
+  pizza: { id: 'pizza', name: 'Pizza Palace', door: { x: FOOD_SHOPS[0].x, z: FOOD_SHOPS[0].z }, origin: { x: 500, z: 500 } },
+  burger: { id: 'burger', name: 'Burger Barn', door: { x: FOOD_SHOPS[1].x, z: FOOD_SHOPS[1].z }, origin: { x: 560, z: 500 } },
+  outfit: { id: 'outfit', name: 'Outfit Shop', door: { x: SPAWNS.outfitDoor.x, z: SPAWNS.outfitDoor.z }, origin: { x: 620, z: 500 } },
 };
 
-export function roomOrigin(name) {
-  const r = ROOMS[name];
-  return r ? { x: r.origin.x, z: r.origin.z } : null;
+export function roomOrigin(id) {
+  const room = ROOMS[id];
+  return room ? { ...room.origin } : null;
+}
+
+// Which room the player is inside, if any. The player's own field
+// is the source of truth (tests set it directly); g.inside mirrors it.
+function insideRoom(g) {
+  return (g.player && g.player.inside) || g.inside || null;
 }
 
 export function isInside(g) {
-  return g.player.inside ? true : false;
+  return !!insideRoom(g);
 }
 
+export function stepInteriors(g, dt) {
+  const id = insideRoom(g);
+  if (!id) return;
+  const origin = roomOrigin(id);
+  if (!origin) return;
+  g.player.x = Math.max(origin.x - 8, Math.min(origin.x + 8, g.player.x));
+  g.player.z = Math.max(origin.z - 6, Math.min(origin.z + 6, g.player.z));
+}
+
+// Walk through a door (or back out, when already inside).
 export function tryInteriorDoor(g) {
-  // Already inside: step back out to the door.
-  if (g.player.inside) {
-    const room = ROOMS[g.player.inside];
+  const p = g.player;
+  const inside = insideRoom(g);
+  if (inside) {
+    const room = ROOMS[inside];
     if (room) {
-      g.player.x = room.door.x;
-      g.player.z = room.door.z;
+      p.x = room.door.x;
+      p.z = room.door.z;
     }
-    g.player.inside = null;
-    return null;
+    g.inside = null;
+    p.inside = null;
+    return inside;
   }
-  for (const [name, room] of Object.entries(ROOMS)) {
-    const d = Math.hypot(g.player.x - room.door.x, g.player.z - room.door.z);
-    if (d < 6) {
-      g.player.inside = name;
-      g.player.x = room.origin.x;
-      g.player.z = room.origin.z;
-      return name;
+  for (const room of Object.values(ROOMS)) {
+    if (Math.hypot(p.x - room.door.x, p.z - room.door.z) <= 4) {
+      g.inside = room.id;
+      p.inside = room.id;
+      p.x = room.origin.x;
+      p.z = room.origin.z;
+      return room.id;
     }
   }
   return null;
 }
 
-export function tryInteriorCounter(g) {
-  if (!g.player.inside) return false;
-  const room = ROOMS[g.player.inside];
-  if (!room) return false;
-  const d = Math.hypot(g.player.x - room.origin.x, g.player.z - (room.origin.z + 3));
-  if (d > 4) return false;
-  if (g.player.inside === 'outfit') {
-    g.modal = { kind: 'outfit', title: 'Vice Threads', lines: ['Pick a style, then buy'] };
+// The counter inside a room: food in the pizza/burger rooms, the
+// outfit rack in the outfit shop.
+export function tryCounter(g) {
+  const id = insideRoom(g);
+  if (!id) return false;
+  const origin = roomOrigin(id);
+  if (!origin) return false;
+  const p = g.player;
+  const counter = { x: origin.x, z: origin.z + 3 };
+  if (Math.hypot(p.x - counter.x, p.z - counter.z) > 2) return false;
+  if (id === 'outfit') {
+    g.modal = {
+      kind: 'outfit',
+      title: 'Outfit Shop',
+      lines: ['1. Hair', '2. Shirt', '3. Pants', '4. Shoes'],
+    };
   } else {
-    const shop = g.player.inside === 'pizza' ? FOOD_SHOPS[0] : FOOD_SHOPS[1];
     g.modal = {
       kind: 'food',
-      title: shop.name,
-      lines: ['Snack — $5 (heal 10)', 'Meal — $10 (heal 30)', 'Feast — $15 (heal 100, +25 armour)'],
+      title: id === 'pizza' ? 'Pizza Palace' : 'Burger Barn',
+      lines: ['Snack $5', 'Meal $10', 'Feast $15'],
     };
   }
   return true;
 }
 
-// Keep the player inside the room bounds.
-export function stepInteriors(g, dt) {
-  if (!g.player.inside) return;
-  const room = ROOMS[g.player.inside];
-  if (!room) return;
-  const o = room.origin;
-  g.player.x = Math.max(o.x - 8, Math.min(o.x + 8, g.player.x));
-  g.player.z = Math.max(o.z - 6, Math.min(o.z + 6, g.player.z));
-}
+export const tryInteriorCounter = tryCounter;
 
-// Draw all three rooms (floor, counter, shelf each) and return 3.
-export function interiorBoxes(g, b, gl) {
-  let n = 0;
-  for (const name of Object.keys(ROOMS)) {
-    const o = ROOMS[name].origin;
-    pushBox(b, o.x, -0.1, o.z, 16, 0.2, 12, [0.7, 0.6, 0.5], [0, 0, 1, 1]);
-    pushBox(b, o.x, 0, o.z + 3, 6, 1.1, 1.2, [0.85, 0.6, 0.3], [0, 0, 1, 1]);
-    pushBox(b, o.x - 6, 0, o.z - 4, 3, 2.5, 1, [0.5, 0.4, 0.3], [0, 0, 1, 1]);
-    pushBox(b, o.x + 6, 0, o.z - 4, 3, 2.5, 1, [0.5, 0.4, 0.3], [0, 0, 1, 1]);
-    pushBox(b, o.x, 3, o.z - 5.5, 12, 3, 0.4, [0.9, 0.85, 0.75], [0, 0, 1, 1]);
-    pushBox(b, o.x, 6, o.z, 16, 0.3, 12, [0.95, 0.9, 0.8], [0, 0, 1, 1]);
-    n++;
+// All three rooms, drawn in their interior area.
+export function interiorBoxes(g, b, cam) {
+  const plain = [0, 0, 1, 1];
+  for (const room of Object.values(ROOMS)) {
+    const o = room.origin;
+    pushBox(b, o.x, 0, o.z, 16, 0.2, 12, [0.7, 0.6, 0.5], plain);
+    pushBox(b, o.x, 0, o.z - 6, 16, 3, 0.3, [0.85, 0.75, 0.65], plain);
+    pushBox(b, o.x - 8, 0, o.z, 0.3, 3, 12, [0.85, 0.75, 0.65], plain);
+    pushBox(b, o.x, 0, o.z + 3, 3, 1, 0.8, room.id === 'outfit' ? [0.6, 0.4, 0.8] : [0.9, 0.5, 0.2], plain);
   }
-  return n;
+  return 3;
 }
