@@ -1,109 +1,96 @@
-// Solmar Bay — keyboard + mouse input.
-// Tap actions use a `pressed` set: a key pressed and released
-// between two animation frames still registers (polling only the
-// held set would miss it). Cooldowns are always gated with
-// `<= 0`, never with a falsy check (a decaying cooldown goes
-// slightly negative and `!negative` is false forever).
-
-const GAME_KEYS = new Set([
-  'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyF', 'KeyG', 'KeyR',
-  'KeyM', 'KeyP', 'KeyQ', 'ShiftLeft', 'ShiftRight', 'Space',
-  'Enter', 'Escape', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft',
-  'ArrowRight', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5',
-  'Digit6', 'Digit7', 'Digit8', 'Digit9',
-]);
+// Solmar Bay — keyboard / mouse input.
+// Written fresh for rebuild #18. Tracks held keys (`down`) and
+// freshly pressed keys (`pressed`, cleared each frame by
+// endFrame). Auto-attaches to the real window when one exists;
+// in Node it is a detached stub the tests drive with injectTap.
 
 export function createInput() {
   const input = {
-    pressed: new Set(),
     down: new Set(),
-    mouse: { clicked: false, down: false, x: 0, y: 0, dx: 0, dy: 0 },
+    pressed: new Set(),
+    mouse: { dx: 0, dy: 0, clicked: false, down: false, x: 0, y: 0 },
     wheel: 0,
     attached: false,
-    _handlers: null,
-
-    pressedKey(code) { return this.pressed.has(code); },
-    downKey(code) { return this.down.has(code); },
-
-    injectTap(code) {
-      this.pressed.add(code);
-      this.down.add(code);
-    },
-    injectRelease(code) {
-      this.down.delete(code);
-    },
-
-    endFrame() {
-      this.pressed.clear();
-      this.mouse.clicked = false;
-      this.mouse.dx = 0;
-      this.mouse.dy = 0;
-      this.wheel = 0;
-    },
-
-    attach(win) {
-      // Only attach to a real browser window. In Node there is no
-      // window, so this is a safe no-op (attached stays false).
-      if (typeof globalThis === 'undefined' || !globalThis.window) {
-        this.attached = false;
-        return;
-      }
-      const target = win || globalThis.window;
-      if (!target || typeof target.addEventListener !== 'function') {
-        this.attached = false;
-        return;
-      }
-      const h = this._handlers;
-      target.addEventListener('keydown', h.onDown);
-      target.addEventListener('keyup', h.onUp);
-      target.addEventListener('mousedown', h.onMouseDown);
-      target.addEventListener('mouseup', h.onMouseUp);
-      target.addEventListener('mousemove', h.onMove);
-      target.addEventListener('wheel', h.onWheel);
-      this.attached = true;
-    },
+    _handlers: {},
   };
 
-  input._handlers = {
-    onDown(ev) {
-      // A repeat keydown is a held key, not a new tap.
-      if (!ev.repeat) input.pressed.add(ev.code);
-      input.down.add(ev.code);
-      if (GAME_KEYS.has(ev.code) && ev.preventDefault) ev.preventDefault();
-    },
-    onUp(ev) {
-      input.down.delete(ev.code);
-    },
-    onMouseDown(ev) {
-      input.mouse.clicked = true;
-      input.mouse.down = true;
-    },
-    onMouseUp(ev) {
-      input.mouse.down = false;
-    },
-    onMove(ev) {
-      input.mouse.x = ev.clientX || 0;
-      input.mouse.y = ev.clientY || 0;
-      input.mouse.dx += ev.movementX || 0;
-      input.mouse.dy += ev.movementY || 0;
-    },
-    onWheel(ev) {
-      input.wheel += ev.deltaY || 0;
-    },
-  };
-
-  // Auto-attach when a real window exists (the browser). In Node
-  // this is a no-op and attached stays false.
-  if (typeof globalThis !== 'undefined' && globalThis.window && typeof globalThis.window.addEventListener === 'function') {
-    input.attach(globalThis.window);
+  function onDown(e) {
+    if (!e || !e.code) return;
+    // A held key repeats: it stays `down` but is NOT a fresh press.
+    if (!e.repeat) input.pressed.add(e.code);
+    input.down.add(e.code);
   }
+  function onMouseDown(e) {
+    input.mouse.down = true;
+    input.mouse.clicked = true;
+    if (e) { input.mouse.x = e.clientX || 0; input.mouse.y = e.clientY || 0; }
+  }
+  function onMove(e) {
+    if (!e) return;
+    input.mouse.dx += e.movementX || 0;
+    input.mouse.dy += e.movementY || 0;
+    input.mouse.x = e.clientX || 0;
+    input.mouse.y = e.clientY || 0;
+  }
+  function onMouseUp() {
+    input.mouse.down = false;
+  }
+
+  input._handlers = { onDown, onMouseDown, onMove, onMouseUp };
+
+  // Test / game helpers, as methods on the input object.
+  input.injectTap = function (code) {
+    input.pressed.add(code);
+    input.down.add(code);
+  };
+  input.injectRelease = function (code) {
+    input.down.delete(code);
+  };
+  input.pressedKey = function (code) {
+    return input.pressed.has(code);
+  };
+  input.downKey = function (code) {
+    return input.down.has(code);
+  };
+  // Attach to the real window only (a fake target is ignored in Node).
+  input.attach = function () {
+    const w = typeof globalThis !== 'undefined' ? globalThis.window : null;
+    if (!w || typeof w.addEventListener !== 'function' || input.attached) return;
+    w.addEventListener('keydown', onDown);
+    w.addEventListener('keyup', (e) => { if (e && e.code) input.down.delete(e.code); });
+    w.addEventListener('mousedown', onMouseDown);
+    w.addEventListener('mouseup', onMouseUp);
+    w.addEventListener('mousemove', onMove);
+    w.addEventListener('wheel', (e) => { if (e) input.wheel += e.deltaY || 0; });
+    input.attached = true;
+  };
+  // End of frame: forget one-frame presses / clicks / wheel deltas.
+  // Held keys (`down`) persist.
+  input.endFrame = function () {
+    input.pressed.clear();
+    input.mouse.clicked = false;
+    input.wheel = 0;
+  };
+
+  // Attach to the real window when one exists (browser). In Node
+  // there is no window, so this stays a detached stub.
+  input.attach();
+
   return input;
 }
 
-// Signed axis: -1 when the negative key is held, +1 when the
-// positive key is held, 0 otherwise (both held cancels out).
+// -1 / +1 axis from a pair of keys (e.g. W/S, A/D).
 export function axis(input, negKey, posKey) {
-  const neg = input.down.has(negKey) ? 1 : 0;
-  const pos = input.down.has(posKey) ? 1 : 0;
-  return pos - neg;
+  let v = 0;
+  if (input.down.has(negKey)) v -= 1;
+  if (input.down.has(posKey)) v += 1;
+  return v;
+}
+
+export function pressedKey(input, code) {
+  return input.pressed.has(code);
+}
+
+export function downKey(input, code) {
+  return input.down.has(code);
 }

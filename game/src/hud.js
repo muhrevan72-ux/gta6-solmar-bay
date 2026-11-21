@@ -1,170 +1,203 @@
-// Solmar Bay — the HUD: cash, health, stars, clock, respect,
-// mission, police list, district, speed, weapon, car, radio,
-// toast, dialogue, armour, minimap, chapter card, modal, pause
-// overlay, and the phone panel. Uses textContent only — never
-// innerHTML — so no markup can be injected through game text.
+// Solmar Bay — the HUD: readouts, minimap, menus, cards, phone.
+// Written fresh for rebuild #18. Elements are looked up by id
+// (the page provides them; the fake doc creates them on demand).
+// Text is set via textContent only (no innerHTML anywhere).
 
-import { CHAPTERS, RESPECT } from './config.js';
-import { respectLevel } from './config.js';
-import { chapterTitle } from './state.js';
+import { CHAPTERS, STATIONS } from './config.js';
+import { chapterTitle, completionPercent, respectLevel } from './state.js';
 import { districtAt } from './world.js';
-import { policeList } from './police.js';
 import { stationLabel } from './audio.js';
 import { phoneText } from './phone.js';
+import { policeList } from './police.js';
 
-export { RESPECT, respectLevel };
-
-const IDS = {
-  hud: 'hud', menu: 'hud-menu', cash: 'hud-cash', health: 'hud-health',
-  wanted: 'hud-wanted', clock: 'hud-clock', respect: 'hud-respect',
-  completion: 'hud-completion', mission: 'hud-mission', police: 'hud-police',
-  district: 'hud-district', speed: 'hud-speed', weapon: 'hud-weapon',
-  car: 'hud-car', radio: 'hud-radio', toast: 'hud-toast',
-  dialogue: 'hud-dialogue', armour: 'hud-armour', minimap: 'hud-minimap',
-  card: 'hud-card', cardTitle: 'hud-card-title', cardText: 'hud-card-text', cardHint: 'hud-card-hint', modal: 'hud-modal',
-  modalTitle: 'hud-modal-title', pause: 'hud-pause', pauseBtn: 'btn-pause', phone: 'hud-phone',
-  bottom: 'hud-bottom', top: 'hud-top',
-};
+// Full id -> short name used on hud.el.
+const IDS = [
+  ['hud', 'root'],
+  ['hud-card', 'card'],
+  ['hud-card-title', 'cardTitle'],
+  ['hud-card-text', 'cardText'],
+  ['hud-card-hint', 'cardHint'],
+  ['hud-cash', 'cash'],
+  ['hud-wanted', 'wanted'],
+  ['hud-health', 'health'],
+  ['hud-car', 'car'],
+  ['hud-phone', 'phone'],
+  ['hud-pause', 'pause'],
+  ['hud-minimap', 'minimap'],
+  ['hud-bottom', 'bottom'],
+  ['btn-pause', 'btnPause'],
+  ['btn-resume', 'btnResume'],
+  ['btn-continue', 'btnContinue'],
+  ['btn-new', 'btnNew'],
+  ['hud-top', 'top'],
+  ['hud-clock', 'clock'],
+  ['hud-respect', 'respect'],
+  ['hud-completion', 'completion'],
+  ['hud-mission', 'mission'],
+  ['hud-police', 'police'],
+  ['hud-district', 'district'],
+  ['hud-speed', 'speed'],
+  ['hud-weapon', 'weapon'],
+  ['hud-radio', 'radio'],
+  ['hud-toast', 'toast'],
+  ['hud-dialogue', 'dialogue'],
+  ['hud-modal', 'modal'],
+  ['hud-modal-title', 'modalTitle'],
+  ['hud-armour', 'armour'],
+  ['hud-menu', 'menu'],
+];
 
 export function createHud(doc) {
   const el = {};
-  for (const [key, id] of Object.entries(IDS)) {
-    el[key] = doc ? doc.getElementById(id) : null;
-  }
-  return { el, doc };
-}
-
-function setText(el, text) {
-  if (el) el.textContent = text;
-}
-
-function fmtClock(g) {
-  const h = Math.floor(g.clock) % 24;
-  const m = Math.floor((g.clock % 1) * 60);
-  const hh = String(h).padStart(2, '0');
-  const mm = String(m).padStart(2, '0');
-  return `Day ${g.day} · ${hh}:${mm} · ${g._phase || 'day'} · ${g.weather}`;
-}
-
-export function updateHud(g, hud) {
-  if (!hud || !hud.el) return;
-  const el = hud.el;
-  // Visibility by mode.
-  // The #hud container must stay visible in menu mode: the menu
-  // overlay lives inside it, so hiding the container hid the
-  // menu itself and the title screen was invisible. Hide only
-  // the in-game readouts on the title screen instead.
-  const inMenu = g.mode === 'menu';
-  if (el.hud) el.hud.style.display = 'block';
-  if (el.menu) el.menu.style.display = inMenu ? 'flex' : 'none';
-  if (el.top) el.top.style.display = inMenu ? 'none' : '';
-  if (el.clock) el.clock.style.display = inMenu ? 'none' : '';
-  if (el.bottom) el.bottom.style.display = inMenu ? 'none' : '';
-  if (el.minimap) el.minimap.style.display = inMenu ? 'none' : '';
-  if (el.pauseBtn) el.pauseBtn.style.display = inMenu ? 'none' : '';
-  if (el.card) el.card.style.display = g.mode === 'card' || g.mode === 'passed' ? 'flex' : 'none';
-  if (el.cardTitle && g.card) el.cardTitle.textContent = g.card.title || '';
-  if (el.cardText && g.card) el.cardText.textContent = g.card.text || '';
-  if (el.cardHint) el.cardHint.textContent = g.mode === 'passed' ? 'Press Enter to continue' : 'Press Enter to start';
-  if (el.modal) el.modal.style.display = g.modal ? 'block' : 'none';
-  if (el.modalTitle && g.modal) el.modalTitle.textContent = g.modal.title || g.modal.kind || '';
-  if (el.pause) el.pause.style.display = g.mode === 'pause' ? 'flex' : 'none';
-  if (el.phone) {
-    el.phone.style.display = g.phoneOpen ? 'block' : 'none';
-    if (g.phoneOpen) el.phone.textContent = phoneText(g);
-  }
-  // Readouts.
-  setText(el.cash, `$${g.cash}`);
-  setText(el.health, String(Math.floor(g.health)));
-  setText(el.wanted, '★'.repeat(g.wanted) + '☆'.repeat(5 - g.wanted));
-  setText(el.clock, fmtClock(g));
-  const lvl = respectLevel(g.respect);
-  setText(el.respect, `Respect ${g.respect} · ${lvl.name}${lvl.next ? ` · Next: ${lvl.next}` : ''}`);
-  setText(el.completion, `${g.completion || 0}%`);
-  if (el.mission) {
-    if (g.chapter >= 6) {
-      el.mission.textContent = 'Free Roam';
-    } else {
-      const c = CHAPTERS[Math.max(0, Math.min(4, g.chapter - 1))];
-      el.mission.textContent = `${chapterTitle(g)}\n${c.objective}`;
-    }
-  }
-  setText(el.police, policeList(g).join('\n'));
-  setText(el.district, districtAt(g.player.x, g.player.z));
-  const speed = g.player.inCar ? Math.abs(g.player.inCar.speed) * 3.6 : Math.abs(g.player.speed || 0) * 3.6;
-  setText(el.speed, `${Math.round(speed)} km/h`);
-  const wnames = ['Pistol', 'SMG', 'Shotgun'];
-  const wname = wnames[g.player.weapon] || 'Pistol';
-  const ammo = g.player.ammo[g.player.weapon];
-  setText(el.weapon, `[${wname} ${ammo === Infinity ? '∞' : ammo}]`);
-  if (g.player.inCar) {
-    setText(el.car, `${g.player.inCar.name} · Condition ${Math.round(g.player.inCar.condition)}%`);
-  } else {
-    setText(el.car, 'On foot');
-  }
-  setText(el.radio, stationLabel(g.station, g.song));
-  setText(el.toast, g.toastTimer > 0 ? g.toast : '');
-  if (el.dialogue) {
-    if (g.dialogue && g.dialogue.t > 0) {
-      el.dialogue.style.display = 'block';
-      el.dialogue.textContent = `${g.dialogue.name}: ${g.dialogue.text}`;
-    } else {
-      el.dialogue.style.display = 'none';
-      el.dialogue.textContent = '';
-    }
-  }
-  setText(el.armour, g.armour > 0 ? `Armour ${Math.floor(g.armour)}` : '');
-}
-
-// Minimap: roads, buildings, mission marker, player, police, taxi.
-export function drawMinimap(g, hud) {
-  if (!hud || !hud.el || !hud.el.minimap) return;
-  const cv = hud.el.minimap;
-  let ctx = null;
-  try { ctx = cv.getContext('2d'); } catch (e) { return; }
-  if (!ctx) return;
-  const S = 200;
-  const toMap = (x, z) => [((x + 400) / 800) * S, ((z + 400) / 800) * S];
-  try {
-    ctx.fillStyle = '#1a2a1a';
-    ctx.fillRect(0, 0, S, S);
-    // Roads.
-    ctx.fillStyle = '#3a3a3e';
-    for (const r of [-360, -300, -240, -180, -120, -60, 0, 60, 120, 180, 240, 300, 360]) {
-      const [rx] = toMap(r, 0);
-      ctx.fillRect(rx - 1, 0, 2, S);
-      const [, rz] = toMap(0, r);
-      ctx.fillRect(0, rz - 1, S, 2);
-    }
-    // Buildings.
-    ctx.fillStyle = '#888';
-    if (g.city) {
-      for (const b of g.city.buildings) {
-        const [bx, bz] = toMap(b.x - b.w / 2, b.z - b.d / 2);
-        ctx.fillRect(bx, bz, Math.max(1, (b.w / 800) * S), Math.max(1, (b.d / 800) * S));
+  for (const [id, short] of IDS) {
+    let node = null;
+    if (doc && typeof doc.getElementById === 'function') {
+      try {
+        node = doc.getElementById(id);
+      } catch {
+        node = null;
       }
     }
-    // Mission marker.
-    if (g.missionMarker) {
-      const [mx, mz] = toMap(g.missionMarker.x, g.missionMarker.z);
-      ctx.fillStyle = '#ffd700';
-      ctx.fillRect(mx - 3, mz - 3, 6, 6);
+    el[short] = node;
+    el[id] = node;
+  }
+  return { el, doc: doc || null };
+}
+
+function setText(node, text) {
+  if (!node) return;
+  node.textContent = text;
+}
+
+function setDisplay(node, value) {
+  if (!node || !node.style) return;
+  node.style.display = value;
+}
+
+function stars(n) {
+  let s = '';
+  for (let i = 0; i < 5; i++) s += i < n ? '★' : '☆';
+  return s;
+}
+
+export function updateHud(game, hud) {
+  if (!hud || !hud.el) return;
+  const g = game;
+  const e = hud.el;
+  const inMenu = g.mode === 'menu';
+  const inCard = g.mode === 'card' || g.mode === 'passed';
+  const paused = g.mode === 'pause' || g.menu === 'pause';
+  const phoneOpen = !!g.phoneOpen && g.mode === 'phone';
+
+  setDisplay(e.root, 'block');
+  setDisplay(e.menu, inMenu ? 'flex' : 'none');
+  setDisplay(e.top, inMenu ? 'none' : 'block');
+  setDisplay(e.clock, inMenu ? 'none' : 'block');
+  setDisplay(e.bottom, inMenu ? 'none' : 'block');
+  setDisplay(e.minimap, inMenu ? 'none' : 'block');
+  setDisplay(e.card, inCard ? 'flex' : 'none');
+  setDisplay(e.pause, paused ? 'flex' : 'none');
+  setDisplay(e.phone, phoneOpen ? 'block' : 'none');
+
+  if (inCard && g.card) {
+    setText(e.cardTitle, g.card.title || '');
+    setText(e.cardText, g.card.text || '');
+    setText(e.cardHint, g.card.hint || 'Press Enter to start');
+  }
+  setText(e.cash, `$${g.cash}`);
+  setText(e.wanted, stars(g.wanted || 0));
+  setText(e.health, String(Math.round(g.health)));
+  const v = g.player ? g.player.inCar : null;
+  setText(e.car, v ? `${v.name} · Condition ${Math.round(v.condition)}%` : 'On foot');
+  const hh = Math.floor(g.clock || 8);
+  const mm = Math.floor(((g.clock || 8) - hh) * 60);
+  const phase = g._phase || 'day';
+  const wObj = g.weatherObj || null;
+  const weather = wObj && wObj.current ? wObj.current : (typeof g.weather === 'string' ? g.weather : 'clear');
+  setText(e.clock, `Day ${g.day} · ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${phase} · ${weather}`);
+  const rl = respectLevel(g.respect || 0);
+  setText(e.respect, `Respect ${g.respect || 0} · ${rl.name}${rl.next ? ` · next: ${rl.next}` : ''}`);
+  setText(e.completion, `Completion ${completionPercent(g)}%`);
+  const ch = CHAPTERS[(g.chapter || 1) - 1];
+  if (g.chapter > 5 || g.chapterDone >= 5) {
+    setText(e.mission, 'Free Roam');
+  } else if (ch) {
+    setText(e.mission, `${chapterTitle(g)} — ${ch.objective}`);
+  }
+  const plist = policeList(g);
+  setText(e.police, plist.length ? plist.join(', ') : '');
+  setText(e.district, districtAt(g.player.x, g.player.z));
+  const speed = v ? Math.abs(v.speed || 0) * 3.6 : 0;
+  setText(e.speed, v ? `${Math.round(speed)} km/h` : '0 km/h');
+  const wnames = ['Pistol', 'SMG', 'Shotgun'];
+  const pw = g.player ? g.player.weapon : 0;
+  const ammo = g.player && g.player.ammo ? g.player.ammo[pw] : Infinity;
+  setText(e.weapon, `[${wnames[pw] || 'Pistol'} ${ammo === Infinity ? '∞' : ammo}]`);
+  setText(e.radio, stationLabel(g.station, g.song));
+  if (g.toastTimer > 0 && g.toast) {
+    setText(e.toast, g.toast);
+  } else {
+    setText(e.toast, '');
+  }
+  if (g.dialogue && g.dialogue.t > 0) {
+    setText(e.dialogue, `${g.dialogue.name}: ${g.dialogue.text}`);
+  } else {
+    setText(e.dialogue, '');
+  }
+  if (g.modal) {
+    setDisplay(e.modal, 'block');
+    setText(e.modalTitle, g.modal.title || '');
+  } else {
+    setDisplay(e.modal, 'none');
+  }
+  setText(e.armour, (g.armour || 0) > 0 ? `Armour ${Math.round(g.armour)}` : '');
+  if (phoneOpen) {
+    setText(e.phone, phoneText(g));
+  }
+}
+
+export function drawMinimap(game, hud) {
+  const cv = hud && hud.el ? (hud.el.minimap || hud.el['hud-minimap']) : null;
+  if (!cv || typeof cv.getContext !== 'function') return;
+  let ctx = null;
+  try {
+    ctx = cv.getContext('2d');
+  } catch {
+    return;
+  }
+  if (!ctx) return;
+  const W = cv.width || 200;
+  const H = cv.height || 200;
+  const scale = W / 800;
+  const px = (x) => (x + 400) * scale;
+  const pz = (z) => (z + 400) * scale;
+  try {
+    ctx.fillStyle = '#0b2a1a';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#555';
+    for (let r = -360; r <= 360; r += 60) {
+      ctx.fillRect(0, pz(r) - 3, W, 6);
+      ctx.fillRect(px(r) - 3, 0, 6, H);
     }
-    // Police blips.
-    ctx.fillStyle = '#3355ff';
-    for (const c of g.cops || []) {
-      const [cx, cz] = toMap(c.x, c.z);
-      ctx.fillRect(cx - 2, cz - 2, 4, 4);
+    ctx.fillStyle = '#c9a35c';
+    if (game.city) {
+      for (const b of game.city.buildings) {
+        ctx.fillRect(px(b.x - b.w / 2), pz(b.z - b.d / 2), b.w * scale, b.d * scale);
+      }
     }
-    // Taxi cab.
-    if (g._taxiCab) {
-      const [tx, tz] = toMap(g._taxiCab.x, g._taxiCab.z);
-      ctx.fillStyle = '#ffff00';
-      ctx.fillRect(tx - 2, tz - 2, 4, 4);
+    if (game.missionMarker) {
+      ctx.fillStyle = '#ffd23f';
+      ctx.fillRect(px(game.missionMarker.x) - 4, pz(game.missionMarker.z) - 4, 8, 8);
     }
-    // Player.
-    const [px, pz] = toMap(g.player.x, g.player.z);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(px - 3, pz - 3, 6, 6);
-  } catch (e) { /* minimap is best-effort */ }
+    if (game._taxiCab) {
+      ctx.fillStyle = '#ffe600';
+      ctx.fillRect(px(game._taxiCab.x) - 3, pz(game._taxiCab.z) - 3, 6, 6);
+    }
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(px(game.player.x), pz(game.player.z), 4, 0, Math.PI * 2);
+    ctx.fill();
+  } catch {
+    // A fake 2d context must never break the frame.
+  }
 }

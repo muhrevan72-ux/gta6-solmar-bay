@@ -1,58 +1,149 @@
-// Solmar Bay — tuning, crime table, chapters, radio, spawns.
-// All values are original to this rebuild; the numbers below are
-// chosen to satisfy the game's design (see GAME-DESIGN.md).
+// Solmar Bay — shared constants, tuning and lookup tables.
+// Written fresh for rebuild #18. Everything the other modules
+// need to agree on lives here: colours, spawn points, shops,
+// radio stations, respect ladder, chapters and crime stars.
 
-// ----- movement + world tuning -----
-export const TUNE = {
-  walkSpeed: 4.5,
-  runSpeed: 8.5,
-  swimSpeed: 2.2,
-  carMaxSpeed: 32,
-  bikeMaxSpeed: 40,
-  boatMaxSpeed: 22,
-  planeMaxSpeed: 55,
-  carAccel: 14,
-  carBrake: 26,
-  carSteer: 2.4,
-  dayLengthSec: 720,
-  heliAltitude: 80,
-  batchCap: 1600,
-  staticCap: 1600,
-  sightRange: 60,
-  wantedDecaySec: 14,
-  copShootCd: 2.5,
-  copShootRange: 35,
-  interactRange: 6,
-  punchRange: 2.6,
-  punchDamage: 12,
-  bombRadius: 9,
+// Deterministic RNG (mulberry32) so the world spawns identically
+// every time — respawnWorld must rebuild the exact boot-time city.
+export function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export const COL = {
+  hair: [
+    [0.1, 0.1, 0.1],
+    [0.4, 0.25, 0.1],
+    [0.9, 0.15, 0.15],
+    [0.95, 0.8, 0.4],
+    [0.6, 0.6, 0.6],
+    [0.2, 0.2, 0.5],
+  ],
+  water: [0.2, 0.65, 0.9],
+  grass: [0.42, 0.62, 0.38],
+  road: [0.16, 0.16, 0.18],
+  roadLine: [0.95, 0.8, 0.1],
+  sidewalk: [0.68, 0.68, 0.66],
+  sand: [0.9, 0.8, 0.55],
+  glass: [0.4, 0.65, 0.85],
+  barrel: [0.85, 0.2, 0.15],
+  barrelRust: [0.75, 0.3, 0.15],
+  palmLeaf: [0.25, 0.65, 0.2],
+  palmTrunk: [0.55, 0.4, 0.25],
+  coconut: [0.5, 0.35, 0.2],
+  kingsGold: [0.95, 0.75, 0.1],
+  sharksTeal: [0.1, 0.7, 0.7],
+  copNavy: [0.1, 0.15, 0.5],
+  taxiYellow: [1, 0.85, 0.1],
+  carGlass: [0.35, 0.6, 0.9],
+  cabinSilver: [0.88, 0.89, 0.92],
+  wheelBlack: [0.08, 0.08, 0.1],
 };
 
-// ----- crime table: each crime carries a wanted level (1-5) -----
-// commitCrime raises the wanted level to AT LEAST the crime's
-// level (never stacks assaults on top of a kill).
-export const CRIME = {
-  stealCar: { stars: 1, label: 'Grand theft auto' },
-  assault: { stars: 1, label: 'Assault' },
-  killPed: { stars: 2, label: 'Manslaughter' },
-  killGang: { stars: 2, label: 'Gang killing' },
-  robbery: { stars: 2, label: 'Armed robbery' },
-  killCop: { stars: 3, label: 'Cop killing' },
-  explosion: { stars: 3, label: 'Explosion' },
-  rampage: { stars: 4, label: 'Rampage' },
-  copMassacre: { stars: 5, label: 'Cop massacre' },
+export const SPAWNS = {
+  player: { x: 0, z: 20 },
+  hospital: { x: -150, z: 100 },
+  garageDoor: { x: 150, z: -126 },
+  elevatorTower: { x: 30, z: -72 },
+  trainStation: { x: 0, z: 300 },
+  fishing: { x: -350, z: 60 },
+  beachHouse: { x: -320, z: 60 },
+  outfitDoor: { x: 90, z: 30 },
+  shootingRange: { x: -90, z: -150 },
+  slalomStart: { x: 180, z: 200 },
+  swimBuoy: { x: -380, z: 100 },
+  fireStation: { x: -150, z: -150 },
 };
 
-// ----- story chapters -----
-export const CHAPTERS = [
-  { n: 1, title: 'First Wheels', reward: 200, respect: 50, objective: 'Steal a car and drive to the garage', intro: 'Fresh off the bus in Solmar Bay. Rico needs wheels — steal a car and bring it to the garage.' },
-  { n: 2, title: 'The Package', reward: 400, respect: 50, objective: 'Pick up the package at the harbour, deliver it to the hideout', intro: 'A package is waiting at the harbour. Pick it up and deliver it to the hideout before the timer runs out.' },
-  { n: 3, title: 'Getaway', reward: 500, respect: 50, objective: 'Lose the 3-star wanted level', intro: 'The cops are all over you. Lose the heat — break line of sight and stay hidden until the stars fade.' },
-  { n: 4, title: 'Night Run', reward: 600, respect: 50, objective: 'Pick up 3 passengers across the city', intro: 'Night shift. Three passengers are waiting around the city — pick them all up.' },
-  { n: 5, title: 'The Big One', reward: 1500, respect: 50, objective: 'Grab the vault cash at the harbour, then reach the safehouse with 0 stars', intro: 'The harbour vault. Grab the cash, lose the 4-star heat, and reach the safehouse clean.' },
+export const FOOD_MENU = [
+  { name: 'Snack', price: 5, heal: 10, armour: 0 },
+  { name: 'Meal', price: 10, heal: 30, armour: 0 },
+  { name: 'Feast', price: 15, heal: 100, armour: 25 },
 ];
 
-// ----- respect ladder + unlocks -----
+export const FOOD_SHOPS = [
+  { name: 'Pizza Palace', x: 50, z: 90 },
+  { name: 'Burger Barn', x: -50, z: 30 },
+  { name: 'Cluckin Chicken', x: -40, z: 70 },
+  { name: 'Taco Truck', x: 150, z: 30 },
+  { name: 'Sushi Bar', x: -150, z: -90 },
+];
+
+export const OUTFIT = {
+  hair: [
+    { name: 'Black Buzz', price: 20, color: [0.1, 0.1, 0.1] },
+    { name: 'Brown Spikes', price: 30, color: [0.4, 0.25, 0.1] },
+    { name: 'Red Mohawk', price: 40, color: [0.9, 0.15, 0.15] },
+    { name: 'Blonde Fade', price: 50, color: [0.95, 0.8, 0.4] },
+  ],
+  shirt: [
+    { name: 'White Tee', price: 25, color: [0.95, 0.95, 0.95] },
+    { name: 'Gold Chain', price: 50, color: [0.95, 0.75, 0.1] },
+    { name: 'Neon Tank', price: 35, color: [0.2, 0.9, 0.5] },
+    { name: 'Palm Shirt', price: 45, color: [0.2, 0.6, 0.4] },
+  ],
+  pants: [
+    { name: 'Jeans', price: 20, color: [0.2, 0.3, 0.6] },
+    { name: 'Cargo', price: 30, color: [0.4, 0.45, 0.3] },
+    { name: 'Shorts', price: 25, color: [0.9, 0.9, 0.8] },
+  ],
+  shoes: [
+    { name: 'White Sneakers', price: 25, color: [0.95, 0.95, 0.95] },
+    { name: 'Gold Kicks', price: 35, color: [0.95, 0.75, 0.1] },
+    { name: 'Boots', price: 40, color: [0.3, 0.2, 0.1] },
+  ],
+};
+
+export const STATIONS = [
+  {
+    name: 'BAY FM', freq: '94.7',
+    songs: [
+      { title: 'Golden Hour Drive', notes: [0, 3, 5, 7, 10, 12, 15, 17] },
+      { title: 'Sunset Cruise', notes: [0, 2, 4, 7, 9, 12, 14, 16] },
+    ],
+  },
+  {
+    name: 'PALM', freq: '102.3',
+    songs: [
+      { title: 'Coconut Radio', notes: [0, 4, 7, 9, 12, 16, 19, 21] },
+      { title: 'Island Breeze', notes: [0, 3, 7, 10, 12, 15, 19, 22] },
+    ],
+  },
+  {
+    name: 'NEON', freq: '89.1',
+    songs: [
+      { title: 'Night Circuit', notes: [0, 1, 3, 6, 8, 11, 13, 15] },
+      { title: 'Midnight Drive', notes: [0, 2, 5, 7, 10, 12, 15, 17] },
+    ],
+  },
+  {
+    name: 'CORAL', freq: '105.5',
+    songs: [
+      { title: 'Slow Tide', notes: [0, 5, 7, 12, 14, 17, 19, 24] },
+      { title: 'Deep Blue', notes: [0, 4, 9, 11, 14, 16, 21, 23] },
+    ],
+  },
+];
+
+export const SONG_STEPS = 32;
+
+export const TUNE = {
+  walkSpeed: 4,
+  runSpeed: 8,
+  dayLengthSec: 720,
+  carMaxSpeed: 28,
+  bikeMaxSpeed: 35,
+  carAccel: 12,
+  carBrake: 30,
+  batchCap: 1600,
+  heliAltitude: 80,
+};
+
 export const RESPECT = {
   levels: [
     { min: 0, name: 'Nobody' },
@@ -62,124 +153,40 @@ export const RESPECT = {
     { min: 1000, name: 'Legend' },
   ],
   unlocks: [
-    { min: 100, flag: 'smgUnlocked', label: 'SMG unlocked' },
-    { min: 250, flag: 'shotgunUnlocked', label: 'Shotgun unlocked' },
-    { min: 500, flag: 'sportsCarSpawned', label: 'A Comet is waiting for you' },
+    { min: 100, flag: 'smgUnlocked' },
+    { min: 250, flag: 'shotgunUnlocked' },
+    { min: 500, flag: 'sportsCarSpawned' },
   ],
 };
 
-export function respectLevel(rep) {
+export function respectLevel(r) {
   let cur = RESPECT.levels[0];
-  let next = null;
+  let nxt = RESPECT.levels[1] || null;
   for (let i = 0; i < RESPECT.levels.length; i++) {
-    if (rep >= RESPECT.levels[i].min) {
+    if (r >= RESPECT.levels[i].min) {
       cur = RESPECT.levels[i];
-      next = RESPECT.levels[i + 1] || null;
+      nxt = RESPECT.levels[i + 1] || null;
     }
   }
-  return { name: cur.name, min: cur.min, next: next ? next.name : null, nextMin: next ? next.min : null };
+  return { name: cur.name, next: nxt ? nxt.name : null, min: cur.min };
 }
 
-// ----- radio stations (original synth songs) -----
-export const SONG_STEPS = 32;
-function song(title, notes) { return { title, notes }; }
-export const STATIONS = [
-  { name: 'BAY FM', freq: '94.7', songs: [song('Golden Hour Drive', [262, 330, 392, 494, 392, 330, 262, 196]), song('Sunset Boulevard', [294, 370, 440, 587, 440, 370, 294, 220])] },
-  { name: 'PALM', freq: '102.3', songs: [song('Coconut Radio', [330, 392, 494, 659, 494, 392, 330, 262]), song('Island Breeze', [262, 392, 330, 494, 392, 330, 262, 196])] },
-  { name: 'NEON', freq: '89.1', songs: [song('Night Circuit', [220, 277, 330, 440, 330, 277, 220, 165]), song('Midnight Run', [247, 311, 370, 494, 370, 311, 247, 185])] },
-  { name: 'CORAL', freq: '105.5', songs: [song('Slow Tide', [196, 262, 330, 392, 330, 262, 196, 147]), song('Ocean Waves', [220, 294, 370, 440, 370, 294, 220, 175])] },
+export const CHAPTERS = [
+  { n: 1, title: 'Chapter 1 — First Wheels', reward: 200, objective: 'Drive the Comet to the garage', text: 'Rico needs wheels, fast. Steal the red Comet parked north-west of the beach road and drive it to the garage. Rico is counting on you — do not scratch the paint.' },
+  { n: 2, title: 'Chapter 2 — Harbor Run', reward: 400, objective: 'Pick up the package at the harbour and deliver it', timeLimit: 120, text: 'Rico has a package waiting at the north docks. Pick it up and deliver it to the harbour warehouse before the clock runs out.' },
+  { n: 3, title: 'Chapter 3 — Heat Wave', reward: 500, objective: 'Lose the cops — get your wanted level to zero', text: 'The heat is on. Break line of sight, stay out of the cops\' way, and get your wanted level back to zero.' },
+  { n: 4, title: 'Chapter 4 — Four Fares', reward: 600, objective: 'Give 3 passengers a ride around town', text: 'The taxi game pays. Pick up three passengers across the city and drop them where they need to go.' },
+  { n: 5, title: 'Chapter 5 — The Big One', reward: 1500, objective: 'Rob the vault, then reach the safehouse clean', text: 'One last job. Crack the vault at the old bank, grab the cut, lose the heat, and reach the safehouse. Then Solmar Bay is yours.' },
 ];
 
-// ----- spawn points (all on open ground, clear of buildings/roads where required) -----
-export const SPAWNS = {
-  player: { x: 0, z: 20 },
-  hospital: { x: -150, z: 200 },
-  garageDoor: { x: 150, z: -126 },
-  elevatorTower: { x: 30, z: -90 },
-  trainStation: { x: 0, z: 300 },
-  fishing: { x: -350, z: 100 },
-  beachHouse: { x: -300, z: 60 },
-  outfitDoor: { x: 80, z: 38 },
-  shootingRange: { x: 200, z: -200 },
-  swimBuoy: { x: -380, z: 100 },
-  slalomStart: { x: 180, z: 200 },
-  fireStation: { x: -90, z: -150 },
-};
-
-// ----- food -----
-export const FOOD_MENU = [
-  { name: 'Snack', price: 5, heal: 10, armour: 0 },
-  { name: 'Meal', price: 10, heal: 25, armour: 0 },
-  { name: 'Feast', price: 15, heal: 100, armour: 25 },
-];
-export const FOOD_SHOPS = [
-  { name: 'Pizza Palace', x: -40, z: 38, kind: 'pizza' },
-  { name: 'Burger Barn', x: 80, z: -38, kind: 'burger' },
-  { name: "Clucky's Chicken", x: -40, z: 70, kind: 'chicken' },
-  { name: 'Donut Den', x: 120, z: 78, kind: 'donut' },
-  { name: 'Taco Truck', x: -120, z: -78, kind: 'taco' },
-];
-
-// ----- outfit catalogue -----
-// Prices are chosen so hair 2 + shirt 1 + pants 1 + shoes 1 = 155.
-export const OUTFIT = {
-  hair: [
-    { name: 'Buzz cut', colour: [0.12, 0.1, 0.08], price: 0 },
-    { name: 'Spiky', colour: [0.3, 0.2, 0.1], price: 20 },
-    { name: 'Red mohawk', colour: [0.9, 0.1, 0.1], price: 40 },
-    { name: 'Long blonde', colour: [0.9, 0.8, 0.4], price: 60 },
-  ],
-  shirt: [
-    { name: 'White tee', colour: [0.9, 0.9, 0.9], price: 0 },
-    { name: 'Blue shirt', colour: [0.2, 0.4, 0.9], price: 50 },
-    { name: 'Red jacket', colour: [0.8, 0.1, 0.1], price: 80 },
-    { name: 'Gold shirt', colour: [0.95, 0.75, 0.2], price: 120 },
-  ],
-  pants: [
-    { name: 'Jeans', colour: [0.2, 0.3, 0.6], price: 0 },
-    { name: 'Black pants', colour: [0.1, 0.1, 0.1], price: 30 },
-    { name: 'White pants', colour: [0.9, 0.9, 0.9], price: 50 },
-  ],
-  shoes: [
-    { name: 'Sneakers', colour: [0.8, 0.8, 0.8], price: 0 },
-    { name: 'Gold kicks', colour: [0.95, 0.75, 0.2], price: 35 },
-    { name: 'Boots', colour: [0.4, 0.25, 0.1], price: 60 },
-  ],
-};
-
-// ----- palette -----
-export const COL = {
-  grass: [0.42, 0.62, 0.38],
-  road: [0.16, 0.16, 0.18],
-  roadLine: [0.95, 0.8, 0.2],
-  sidewalk: [0.55, 0.55, 0.58],
-  sand: [0.9, 0.8, 0.55],
-  water: [0.2, 0.65, 0.9],
-  sea: [0.15, 0.5, 0.85],
-  sky: [0.55, 0.75, 0.95],
-  hair: [
-    [0.1, 0.08, 0.06], [0.3, 0.2, 0.1], [0.9, 0.8, 0.4],
-    [0.05, 0.05, 0.05], [0.6, 0.3, 0.1], [0.85, 0.85, 0.85],
-  ],
-  skin: [
-    [0.9, 0.75, 0.6], [0.75, 0.55, 0.4], [0.95, 0.8, 0.7],
-    [0.6, 0.45, 0.3], [0.85, 0.65, 0.5], [0.7, 0.5, 0.35],
-  ],
-  shirt: [
-    [0.9, 0.2, 0.2], [0.2, 0.4, 0.9], [0.2, 0.7, 0.3],
-    [0.95, 0.75, 0.2], [0.6, 0.3, 0.7], [0.9, 0.9, 0.9],
-  ],
-  pants: [
-    [0.2, 0.3, 0.6], [0.1, 0.1, 0.1], [0.5, 0.4, 0.3],
-    [0.3, 0.5, 0.3], [0.7, 0.7, 0.75], [0.4, 0.2, 0.5],
-  ],
-  copNavy: [0.1, 0.15, 0.5],
-  kingsGold: [0.95, 0.75, 0.2],
-  sharksTeal: [0.1, 0.65, 0.7],
-  taxiYellow: [1, 0.85, 0.1],
-  barrelRed: [0.85, 0.2, 0.15],
-  barrelRust: [0.75, 0.3, 0.15],
-  palmLeaf: [0.25, 0.65, 0.25],
-  coconut: [0.5, 0.35, 0.2],
-  glassBlue: [0.4, 0.65, 0.85],
+export const CRIME = {
+  stealCar: { stars: 1 },
+  assault: { stars: 1 },
+  killPed: { stars: 2 },
+  killGang: { stars: 2 },
+  carjacking: { stars: 2 },
+  killCop: { stars: 3 },
+  explosion: { stars: 3 },
+  rampage: { stars: 4 },
+  copMassacre: { stars: 5 },
 };

@@ -1,141 +1,154 @@
-// Solmar Bay — combat: shooting, punching, bombs, cash drops.
-// Shooting aims at a world point and hits the nearest target on
-// the ray (within ~1.5 m of the line, inside the weapon range).
+// Solmar Bay — shooting, punching, bombs, cash pickups, damage.
+// Written fresh for rebuild #18.
 
-import { TUNE } from './config.js';
-import { commitCrime } from './police.js';
-import { addCash, damagePlayer, showToast } from './state.js';
+import { commitCrime, damagePlayer as hurtPlayer } from './police.js';
+import { addCash } from './state.js';
 
+// 0 pistol, 1 SMG, 2 shotgun.
 export const WEAPONS = [
-  { name: 'Pistol', damage: 34, range: 60, ammo: Infinity },
-  { name: 'SMG', damage: 18, range: 45, ammo: 120 },
-  { name: 'Shotgun', damage: 60, range: 25, ammo: 24 },
+  { name: 'Pistol', damage: 34, range: 60, cooldown: 0.25 },
+  { name: 'SMG', damage: 20, range: 50, cooldown: 0.1 },
+  { name: 'Shotgun', damage: 60, range: 25, cooldown: 0.8 },
 ];
 
-// Re-exported so the combat module is the single import point.
-export { damagePlayer };
+export const WEAPON_NAMES = ['Pistol', 'SMG', 'Shotgun'];
 
-function targets(g) {
-  const out = [];
-  for (const p of g.peds) if (!p.dead) out.push({ t: p, type: 'ped' });
-  for (const c of g.cops) if (!c.dead) out.push({ t: c, type: 'cop' });
-  for (const m of g.gangMembers) if (!m.dead) out.push({ t: m, type: 'gang' });
-  return out;
+export function damagePlayer(g, amount) {
+  return hurtPlayer(g, amount);
 }
 
-// Distance from point (px,pz) to the ray from (ox,oz) toward (dx,dz)
-// (unit direction), plus the distance along the ray.
-function rayHit(ox, oz, dx, dz, px, pz) {
-  const vx = px - ox, vz = pz - oz;
-  const along = vx * dx + vz * dz;
-  if (along < 0) return null;
-  const perp = Math.abs(vx * dz - vz * dx);
-  return { along, perp };
+// Drop a small cash pickup at a spot.
+export function dropCash(g, x, z, amount) {
+  if (!g.pickups) g.pickups = [];
+  g.pickups.push({ x, z, amount, t: 60 });
+  return g.pickups[g.pickups.length - 1];
 }
 
-export function shoot(g, aimX, aimZ) {
-  const p = g.player;
-  if (p.shootCooldown > 0) return null;
-  const w = WEAPONS[p.weapon] || WEAPONS[0];
-  // Ammo: the pistol is infinite; others spend a round.
-  if (p.ammo[p.weapon] !== Infinity) {
-    if (p.ammo[p.weapon] <= 0) return null;
-    p.ammo[p.weapon]--;
-  }
-  p.shootCooldown = 0.35;
-  const dx = aimX - p.x, dz = aimZ - p.z;
-  const d = Math.hypot(dx, dz);
-  if (d < 0.001) return null;
-  const ux = dx / d, uz = dz / d;
-  let best = null, bestAlong = Infinity;
-  for (const { t, type } of targets(g)) {
-    const hit = rayHit(p.x, p.z, ux, uz, t.x, t.z);
-    if (!hit) continue;
-    if (hit.along > w.range) continue;
-    if (hit.perp > 1.5) continue;
-    if (hit.along < bestAlong) { bestAlong = hit.along; best = { t, type }; }
-  }
-  if (!best) return null;
-  const target = best.t;
-  target.hp -= w.damage;
-  if (target.hp <= 0) {
-    killTarget(g, target);
-  } else {
-    commitCrime(g, 'assault');
-  }
-  return target;
-}
-
-export function punch(g) {
-  const p = g.player;
-  if (p.punchCooldown > 0) return null;
-  p.punchCooldown = 0.5;
-  const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
-  let best = null, bestD = TUNE.punchRange;
-  for (const { t, type } of targets(g)) {
-    const dx = t.x - p.x, dz = t.z - p.z;
-    const d = Math.hypot(dx, dz);
-    if (d > TUNE.punchRange) continue;
-    // Must be in front of the player.
-    const dot = (dx * fx + dz * fz) / (d || 1);
-    if (dot < 0.5) continue;
-    if (d < bestD) { bestD = d; best = { t, type }; }
-  }
-  if (!best) return null;
-  const target = best.t;
-  target.hp -= TUNE.punchDamage;
-  if (target.hp <= 0) killTarget(g, target);
-  else {
-    commitCrime(g, 'assault');
-  }
-  return target;
-}
-
-export function throwBomb(g) {
-  const p = g.player;
-  if (g.bombs <= 0) return false;
-  if (p.bombCooldown > 0) return false;
-  g.bombs--;
-  p.bombCooldown = 1;
-  const bx = p.x + Math.sin(p.heading) * 6;
-  const bz = p.z + Math.cos(p.heading) * 6;
-  let kills = 0;
-  for (const { t, type } of targets(g)) {
-    const d = Math.hypot(t.x - bx, t.z - bz);
-    if (d < TUNE.bombRadius) {
-      t.hp = 0;
-      killTarget(g, t);
-      kills++;
-    }
-  }
-  if (kills > 0) commitCrime(g, 'explosion');
-  return true;
-}
-
+// Kill a target: mark it dead, count the kill, refill a bomb, drop cash,
+// and report the crime (killGang for a gang member, killPed otherwise).
 export function killTarget(g, target) {
   if (target.dead) return;
   target.dead = true;
   target.hp = 0;
-  g.stats.kills++;
-  g.bombs = Math.min(9, g.bombs + 1);
-  dropCash(g, target.x, target.z, 10 + Math.floor(Math.random() * 41));
-  if (target.type === 'gang' || target.gang) commitCrime(g, 'killGang');
-  else if (target.type === 'cop' || target.isCop) commitCrime(g, 'killCop');
-  else commitCrime(g, 'killPed');
+  g.stats.kills = (g.stats.kills || 0) + 1;
+  g.bombs = Math.min(9, (g.bombs || 0) + 1);
+  const amount = 10 + Math.floor(Math.random() * 41);
+  dropCash(g, target.x, target.z, amount);
+  const wasGang = isGangMember(g, target);
+  commitCrime(g, wasGang ? 'killGang' : 'killPed');
+  return amount;
 }
 
-export function dropCash(g, x, z, amount) {
-  g.pickups.push({ x, z, amount });
+function nearestTargetOnRay(g, tx, tz, range) {
+  // A shot is a ray from the player toward (tx, tz). A target is
+  // hit only if it lies close to that ray (within 2 m) and inside
+  // the weapon range. Returns the closest such target, or null.
+  const dx = tx - g.player.x;
+  const dz = tz - g.player.z;
+  const len = Math.hypot(dx, dz);
+  if (len < 0.001) return null;
+  const ux = dx / len, uz = dz / len;
+  let best = null;
+  let bestT = Infinity;
+  const all = [...(g.peds || []), ...(g.gangs || []), ...(g.gangMembers || []), ...(g.cops || [])];
+  const seen = new Set();
+  for (const t of all) {
+    if (seen.has(t)) continue;
+    seen.add(t);
+    if (t.dead || t.hp <= 0) continue;
+    const rx = t.x - g.player.x;
+    const rz = t.z - g.player.z;
+    const proj = rx * ux + rz * uz;
+    if (proj < 0 || proj > range) continue;
+    const perp = Math.abs(rx * uz - rz * ux);
+    if (perp > 2) continue;
+    if (proj < bestT) { best = t; bestT = proj; }
+  }
+  return best;
 }
 
-export function stepPickups(g, dt) {
-  const p = g.player;
-  for (let i = g.pickups.length - 1; i >= 0; i--) {
-    const pk = g.pickups[i];
-    if (Math.hypot(pk.x - p.x, pk.z - p.z) < 2) {
-      addCash(g, pk.amount, '');
-      showToast(g, `+$${pk.amount}`);
-      g.pickups.splice(i, 1);
+function isGangMember(g, target) {
+  return (g.gangs || []).includes(target) || (g.gangMembers || []).includes(target);
+}
+
+function applyHit(g, target, dmg, crimeKey) {
+  target.hp -= dmg;
+  if (target.hp <= 0) {
+    killTarget(g, target);
+  } else {
+    commitCrime(g, crimeKey || 'assault');
+  }
+}
+
+// Shoot toward (tx, tz). Returns the target hit, or null.
+export function shoot(g, tx, tz) {
+  if (g.player.shootCooldown > 0) return null;
+  const w = WEAPONS[g.player.weapon] || WEAPONS[0];
+  g.player.shootCooldown = w.cooldown;
+  if (g.player.ammo[g.player.weapon] !== Infinity) {
+    if (g.player.ammo[g.player.weapon] <= 0) return null;
+    g.player.ammo[g.player.weapon]--;
+  }
+  const target = nearestTargetOnRay(g, tx, tz, w.range);
+  if (!target) return null;
+  applyHit(g, target, w.damage, 'assault');
+  return target;
+}
+
+// Punch the target in front of the player (heading = facing).
+// Returns the target hit, or null.
+export function punch(g) {
+  const reach = 2.2;
+  const fx = Math.sin(g.player.heading || 0);
+  const fz = Math.cos(g.player.heading || 0);
+  const tx = g.player.x + fx * 1.5;
+  const tz = g.player.z + fz * 1.5;
+  let best = null;
+  let bestD = reach;
+  const all = [...(g.peds || []), ...(g.gangs || []), ...(g.gangMembers || []), ...(g.cops || [])];
+  const seen = new Set();
+  for (const t of all) {
+    if (seen.has(t)) continue;
+    seen.add(t);
+    if (t.dead || t.hp <= 0) continue;
+    const d = Math.hypot(t.x - tx, t.z - tz);
+    if (d < bestD) { best = t; bestD = d; }
+  }
+  if (!best) return null;
+  applyHit(g, best, 12, 'assault');
+  return best;
+}
+
+export function throwBomb(g) {
+  if ((g.bombs || 0) <= 0) return false;
+  g.bombs--;
+  const fx = Math.sin(g.player.heading || 0);
+  const fz = Math.cos(g.player.heading || 0);
+  const bx = g.player.x + fx * 6;
+  const bz = g.player.z + fz * 6;
+  const all = [...(g.peds || []), ...(g.gangs || []), ...(g.gangMembers || []), ...(g.cops || [])];
+  const seen = new Set();
+  for (const t of all) {
+    if (seen.has(t)) continue;
+    seen.add(t);
+    if (t.dead || t.hp <= 0) continue;
+    if (Math.hypot(t.x - bx, t.z - bz) < 8) {
+      killTarget(g, t);
     }
   }
+  return true;
+}
+
+// Walk over a cash pickup to collect it.
+export function stepPickups(g, dt) {
+  if (!g.pickups) return;
+  for (const p of g.pickups) p.t -= dt;
+  g.pickups = g.pickups.filter((p) => p.t > 0);
+  for (const p of g.pickups) {
+    if (Math.hypot(p.x - g.player.x, p.z - g.player.z) < 2) {
+      addCash(g, p.amount, 'cash pickup');
+      p.t = 0;
+    }
+  }
+  g.pickups = g.pickups.filter((p) => p.t > 0);
 }

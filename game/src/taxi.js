@@ -1,77 +1,75 @@
-// Solmar Bay — the taxi. Digit4 calls a cab; it drives to the
-// player, waits, and — once the player gets in — runs a fare to
-// a marker for $120.
+// Solmar Bay — the taxi call and fares.
+// Written fresh for rebuild #18.
 
+import { COL } from './config.js';
 import { makeVehicle } from './vehicles.js';
 import { addCash, showToast } from './state.js';
 
+// Spawn the called cab near the player (off-screen, on a road).
 export function stepTaxiCall(g, dt) {
-  if (!g._taxiRequested || g._taxiCab) return;
-  // Spawn a cab on a road near the player.
-  const a = Math.random() * Math.PI * 2;
-  const x = g.player.x + Math.cos(a) * 50;
-  const z = g.player.z + Math.sin(a) * 50;
-  const cab = makeVehicle('taxi', x, z, 0, [1, 0.85, 0.1], 'Solmar Cab');
+  if (!g._taxiRequested) return;
+  if (g._taxiCab) return;
+  const cab = makeVehicle('taxi', g.player.x + 60, g.player.z, Math.PI / 2, COL.taxiYellow, 'Solmar Cab');
+  cab._isTaxi = true;
   g.vehicles.push(cab);
   g._taxiCab = cab;
   g._taxiState = 'driving';
-  g._taxiWait = 0;
-  showToast(g, 'Taxi dispatched');
+  g._taxiRequested = false;
 }
 
+// Drive the cab to the player, wait, then leave if ignored.
 export function stepTaxiFare(g, dt) {
   const cab = g._taxiCab;
   if (!cab) return;
-  const d = Math.hypot(cab.x - g.player.x, cab.z - g.player.z);
   if (g._taxiState === 'driving') {
-    if (d < 2.5) {
+    const dx = g.player.x - cab.x, dz = g.player.z - cab.z;
+    const d = Math.hypot(dx, dz) || 1;
+    if (d < 6) {
       g._taxiState = 'waiting';
-      g._taxiWait = 0;
-      showToast(g, 'Your taxi is here — press E to get in');
+      g._taxiWait = 30;
       return;
     }
-    // Drive toward the player.
-    const sp = 14 * dt;
-    cab.x += ((g.player.x - cab.x) / d) * sp;
-    cab.z += ((g.player.z - cab.z) / d) * sp;
-    cab.heading = Math.atan2(g.player.x - cab.x, g.player.z - cab.z);
+    const speed = 13;
+    cab.heading = Math.atan2(dx, dz);
+    cab.x += Math.sin(cab.heading) * speed * dt;
+    cab.z += Math.cos(cab.heading) * speed * dt;
   } else if (g._taxiState === 'waiting') {
-    g._taxiWait += dt;
-    if (g._taxiWait > 30) {
-      // The cab gives up and leaves.
-      const idx = g.vehicles.indexOf(cab);
-      if (idx >= 0) g.vehicles.splice(idx, 1);
+    if (g._taxiWait === undefined || g._taxiWait === null) g._taxiWait = 30;
+    g._taxiWait -= dt;
+    if (g._taxiWait <= 0) {
+      // The player never got in — the cab leaves.
+      g.vehicles = g.vehicles.filter((v) => v !== cab);
       g._taxiCab = null;
       g._taxiState = null;
-      g._taxiRequested = false;
+      showToast(g, 'The taxi gave up waiting and left.');
     }
   } else if (g._taxiState === 'fare') {
-    if (g.missionMarker && Math.hypot(g.player.x - g.missionMarker.x, g.player.z - g.missionMarker.z) < 6) {
-      addCash(g, 120, 'taxi fare');
-      g.stats.fares++;
-      g.respect += 10;
-      g._taxiState = null;
-      g._taxiCab = null;
-      g._taxiRequested = false;
-      g.missionMarker = null;
-      showToast(g, 'Fare complete +$120');
+    // The fare pays out when the player reaches the marker.
+    if (g.missionMarker) {
+      const d = Math.hypot(g.player.x - g.missionMarker.x, g.player.z - g.missionMarker.z);
+      if (d < 8) {
+        addCash(g, 120, 'taxi fare');
+        g.respect = (g.respect || 0) + 10;
+        g.stats.fares = (g.stats.fares || 0) + 1;
+        g._taxiState = null;
+        g.missionMarker = null;
+        showToast(g, 'Fare complete — $120');
+      }
     }
   }
 }
 
-// The player got into the called cab: start the fare.
+// The player is in the cab: start a fare to a random drop-off.
 export function startTaxiFare(g) {
   const cab = g._taxiCab;
-  if (!cab || g.player.inCar !== cab) return false;
+  if (!cab) return false;
+  if (g.player.inCar !== cab) return false;
   g._taxiState = 'fare';
-  const spots = [[120, 120], [-60, -120], [200, 60], [-180, -60], [0, -180]];
-  const s = spots[Math.floor(Math.random() * spots.length)];
-  g.missionMarker = { x: s[0], z: s[1] };
-  showToast(g, 'Drive to the fare marker');
+  g.missionMarker = { x: 120, z: -180 };
   return true;
 }
 
-// Teleport a stuck cab closer to the player (< 400 m).
+// A cab that is stuck far away gets teleported near the player.
 export function unstickCalledTaxi(g) {
   const cab = g._taxiCab;
   if (!cab) return false;
@@ -79,5 +77,7 @@ export function unstickCalledTaxi(g) {
   if (d < 400) return false;
   cab.x = g.player.x + 40;
   cab.z = g.player.z + 20;
+  cab.heading = Math.PI / 2;
+  g._taxiState = 'driving';
   return true;
 }

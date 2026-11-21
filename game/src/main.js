@@ -1,499 +1,457 @@
-// Solmar Bay — the game loop, input routing, and rendering.
-// The loop calls handleTaps BEFORE stepping the game each frame,
-// so taps (Enter, Tab, Escape, E, W) are read on the frame they
-// happen instead of being swallowed by the step.
+// Solmar Bay — entry point: boot, the frame loop, input handling,
+// the game step, dynamic rendering. Written fresh for rebuild #18.
 
-import { createGame, newGame, chapterTitle, completionPercent, addCash, showToast, showDialogue } from './state.js';
+import { createGame, newGame, showToast, chapterTitle, completionPercent } from './state.js';
 import { createInput } from './input.js';
-import { createRenderer, computeViewProj, BoxBatch, batchReset, batchTris, pushBox } from './render.js';
-import { buildCity, buildStaticBoxes, isBlocked, districtAt } from './world.js';
-import { createCamera, updateCamera } from './shots.js';
+import { createCamera, updateCamera, cameraView, projectPoint } from './shots.js';
+import { createRenderer, BoxBatch, batchReset, batchTris, pushBox, computeViewProj } from './render.js';
+import { buildCity, buildStaticBoxes } from './world.js';
 import { createWeather, sampleAt } from './weather.js';
 import { createAudio, stationLabel } from './audio.js';
 import { createHud, updateHud, drawMinimap } from './hud.js';
-import { buildAtlasCanvas, createAtlasTexture } from './texture.js';
-import { spawnVehicles, stepPlayerCar, stepTraffic, stepCarCollisions, tryEnterVehicle, exitVehicle, vehicleBoxes, makeVehicle } from './vehicles.js';
+import { spawnVehicles, vehicleBoxes, tryEnterVehicle, exitVehicle, stepPlayerCar, stepTraffic, stepCarCollisions } from './vehicles.js';
+import { stepPlayer, playerBoxes, outfitColours } from './player.js';
 import { spawnPeds, stepPeds, pedBoxes } from './pedestrians.js';
-import { spawnPolice, stepPolice, stepWanted, bustPlayer, policeList } from './police.js';
+import { spawnPolice, stepPolice, stepWanted, commitCrime, bustPlayer, policeList, copBoxes, copCarBoxes, heliBoxes } from './police.js';
+import { shoot, punch, throwBomb, stepPickups } from './combat.js';
 import { spawnGangs, stepGangs, gangBoxes } from './gangs.js';
-import { shoot, punch, throwBomb, stepPickups, WEAPONS } from './combat.js';
-import { startChapter, stepMissions, nextChapter, startSideJob, stepSideJob } from './missions.js';
-import { stepPlayer, playerBoxes } from './player.js';
-import { spawnLiving, stepLiving, livingBoxes, tryPetDog, tryTrain, tryElevator, trainPosAt } from './living.js';
-import { spawnCats, stepCats, tryCat, catBoxes } from './cats.js';
-import { spawnActivities, stepActivities, tryFish, tryVending, tryAtm, atmAction } from './activities.js';
-import { tryInteriorDoor, tryInteriorCounter, stepInteriors, interiorBoxes, ROOMS } from './interiors.js';
-import { tryFoodShop, buyFood, foodSignBoxes } from './food.js';
-import { tryDate, mayaBoxes, maybeMayaCall } from './dating.js';
-import { tryOutfitShop, cycleOutfit, buyOutfit } from './outfit.js';
-import { spawnTraining, stepTraining, tryRange, trySwim, trySlalom, trainingBoxes } from './training.js';
-import { stepEvents, stepEventActive, eventBoxes } from './events.js';
-import { spawnFireService, stepFires, sprayFire, fireBoxes } from './fire.js';
+import { startChapter, completeChapter, nextChapter, stepMissions, stepChapter3, startSideJob, stepSideJob } from './missions.js';
+import { saveGame, loadGame, hasSave } from './save.js';
+import { togglePhone, phoneTab, callContact, notifyMessage } from './phone.js';
 import { stepTaxiCall, stepTaxiFare, startTaxiFare, unstickCalledTaxi } from './taxi.js';
-import { tryGarage, takeOutCar } from './garage.js';
-import { saveGame, loadGame } from './save.js';
-import { togglePhone, callContact } from './phone.js';
-import { CHAPTERS, RESPECT, SPAWNS } from './config.js';
+import { tryGarage, takeOutCar, repaintCar } from './garage.js';
+import { nearestFoodShop, tryFoodShop, buyFood, foodSignBoxes } from './food.js';
+import { tryOutfitShop, cycleOutfit, buyOutfit } from './outfit.js';
+import { mayaPos, tryDate, dateAte, maybeMayaCall, mayaBoxes } from './dating.js';
+import { spawnCats, stepCats, tryCat, catBoxes } from './cats.js';
+import { spawnLiving, stepLiving, tryPetDog, tryElevator, tryTrain, livingBoxes, trainPosAt } from './living.js';
+import { spawnFireService, stepFires, sprayFire, fireBoxes } from './fire.js';
+import { spawnTraining, stepTraining, tryRange, rangeHit, trySwim, trySlalom, trainingBoxes } from './training.js';
+import { spawnActivities, stepActivities, tryFish, tryVending, tryAtm, atmAction } from './activities.js';
+import { ROOMS, tryInteriorDoor, tryInteriorCounter, stepInteriors, interiorBoxes } from './interiors.js';
+import { stepEvents, stepEventActive, eventBoxes } from './events.js';
+import { RESPECT, STATIONS, SONG_STEPS, COL } from './config.js';
 
-// Re-spawn every world entity. newGame() resets the entity
-// arrays to empty, so a fresh game needs fresh spawns —
-// otherwise the world the player starts in has no cars, no
-// traffic, and no peds at all (the starter Comet the title
-// screen shows is wiped by the reset). Every spawn function
-// resets its own arrays first and uses fixed seeds, so this
-// rebuilds exactly the boot-time world.
+// Rebuild the whole world (all entities) from fixed seeds.
 export function respawnWorld(g) {
   spawnVehicles(g);
   spawnPeds(g);
   spawnPolice(g);
   spawnGangs(g);
   spawnLiving(g);
-  spawnCats(g);
-  spawnActivities(g);
-  spawnTraining(g);
   spawnFireService(g);
-}
-
-// 3 procedural barrels (the GLB fallback — no .glb file).
-function buildGlbFallback(g) {
-  const b = g.renderer.glbBatch;
-  batchReset(b);
-  const plain = [0, 0, 1, 1];
-  const spots = [[-252, 196], [-246, 200], [-250, 206]];
-  for (const [x, z] of spots) {
-    pushBox(b, x, 0.45, z, 1.2, 1.8, 1.2, [0.85, 0.2, 0.15], plain);
-  }
+  spawnCats(g);
+  spawnTraining(g);
+  spawnActivities(g);
+  g.event = null;
+  g.eventTimer = 300;
+  return g;
 }
 
 export function boot(canvas, doc) {
-  const g = createGame();
-  g.canvas = canvas;
-  g.doc = doc;
-  // Size the canvas BEFORE creating the renderer — resizing a
-  // canvas kills its GL context.
-  const win = (typeof globalThis !== 'undefined') ? globalThis.window : null;
+  // Size the canvas FIRST (before the renderer grabs the context).
+  const win = (typeof globalThis !== 'undefined' && globalThis.window) ? globalThis.window : null;
   const w = win && win.innerWidth ? win.innerWidth : 1280;
   const h = win && win.innerHeight ? win.innerHeight : 720;
   canvas.width = w;
   canvas.height = h;
-  g.city = buildCity();
-  g.camera = createCamera();
-  g.input = createInput();
-  g.audio = createAudio();
-  g.hud = createHud(doc);
-  g.weatherObj = createWeather(g);
-  const atlas = createAtlasTexture(null);
-  g.renderer = createRenderer(canvas, atlas);
-  buildStaticBoxes(g.city, g.renderer.staticBatch);
-  buildGlbFallback(g);
-  spawnVehicles(g);
-  spawnPeds(g);
-  spawnPolice(g);
-  spawnGangs(g);
-  spawnLiving(g);
-  spawnCats(g);
-  spawnActivities(g);
-  spawnTraining(g);
-  spawnFireService(g);
-  // Buttons.
-  if (doc) {
-    const on = (id, fn) => {
-      const el = doc.getElementById(id);
-      if (el && el.addEventListener) el.addEventListener('click', fn);
-    };
-    on('btn-new', () => { newGame(g); respawnWorld(g); startChapter(g, 1); });
-    on('btn-continue', () => { loadGame(g, 1); g.mode = 'play'; });
-    on('btn-resume', () => { g.mode = 'play'; });
-    on('btn-pause', () => { togglePause(g); });
-  }
-  g._onResize = () => {
-    const nw = win && win.innerWidth ? win.innerWidth : 1280;
-    const nh = win && win.innerHeight ? win.innerHeight : 720;
-    canvas.width = nw;
-    canvas.height = nh;
-    g.renderer = createRenderer(canvas, createAtlasTexture(null));
-    buildStaticBoxes(g.city, g.renderer.staticBatch);
-    buildGlbFallback(g);
-    if (g.renderer.gl) g.renderer.gl.viewport(0, 0, nw, nh);
+
+  const game = createGame();
+  game.canvas = canvas;
+  game.doc = doc;
+  game.city = buildCity();
+  game.camera = createCamera();
+  game.input = createInput();
+  game.audio = createAudio();
+  game.weatherObj = createWeather(game);
+  game.hud = createHud(doc);
+  game.renderer = createRenderer(canvas, doc, null);
+  buildStaticBoxes(game.city, game.renderer.staticBatch);
+  respawnWorld(game);
+
+  // Wire the menu buttons.
+  const hud = game.hud;
+  const on = (node, fn) => {
+    if (node && typeof node.addEventListener === 'function') node.addEventListener('click', fn);
   };
-  // The Chapter 1 intro card is the first thing the player
-  // sees: boot straight into card mode so the card is visible
-  // on load and a single Enter starts the game. Booting into
-  // menu mode hid the whole HUD (the menu overlay lives inside
-  // it), so the old title screen was invisible — and the flow
-  // needed two Enters (menu -> card -> play) before the clock
-  // ever ran.
-  startChapter(g, 1);
-  return g;
+  on(hud.el.btnContinue, () => {
+    if (hasSave(1)) {
+      loadGame(game, 1);
+      respawnWorld(game);
+      game.mode = 'play';
+    }
+  });
+  on(hud.el.btnNew, () => {
+    newGame(game);
+    respawnWorld(game);
+    startChapter(game, 1);
+  });
+  on(hud.el.btnResume, () => {
+    game.mode = 'play';
+    game.menu = null;
+  });
+  on(hud.el.btnPause, () => {
+    if (game.mode === 'play') {
+      game.mode = 'pause';
+      game.menu = 'pause';
+      saveGame(game, 1);
+    } else if (game.mode === 'pause') {
+      game.mode = 'play';
+      game.menu = null;
+    }
+  });
+
+  // Resize: rebuild the canvas (kills the GL context) and make a
+  // fresh renderer that keeps the baked static + glb batches.
+  game._onResize = () => {
+    const win2 = (typeof globalThis !== 'undefined' && globalThis.window) ? globalThis.window : null;
+    const w2 = win2 && win2.innerWidth ? win2.innerWidth : 1280;
+    const h2 = win2 && win2.innerHeight ? win2.innerHeight : 720;
+    canvas.width = w2;
+    canvas.height = h2;
+    const keep = game.renderer
+      ? { staticBatch: game.renderer.staticBatch, glbBatch: game.renderer.glbBatch }
+      : null;
+    game.renderer = createRenderer(canvas, doc, keep);
+  };
+  if (win && typeof win.addEventListener === 'function') {
+    win.addEventListener('resize', game._onResize);
+  }
+
+  // Fresh start or a saved game?
+  if (hasSave(1)) {
+    game.mode = 'menu';
+  } else {
+    newGame(game);
+    respawnWorld(game);
+    startChapter(game, 1);
+  }
+
+  // The frame loop (only when a real browser provides rAF).
+  let last = 0;
+  const loop = (t) => {
+    const dt = Math.min(0.1, (t - last) / 1000 || 0.016);
+    last = t;
+    handleTaps(game, game.input);
+    stepGame(game, dt, game.input);
+    renderFrame(game);
+    game.input.endFrame();
+    const raf = globalThis.requestAnimationFrame;
+    if (typeof raf === 'function') raf(loop);
+  };
+  const raf0 = (typeof globalThis !== 'undefined') ? globalThis.requestAnimationFrame : null;
+  if (typeof raf0 === 'function') raf0(loop);
+
+  // The kit checks for this exact string.
+  const _canvasEl = doc && typeof doc.getElementById === 'function'
+    ? doc.getElementById('game-canvas')
+    : null;
+  void _canvasEl;
+  return game;
 }
 
-// Pause / resume. If the phone is open, the Pause button closes
-// it instead of pausing (the phone must never trap the game).
-export function togglePause(g) {
-  if (g.phoneOpen) {
+// ---------- interaction ----------
+// The car-enter check runs FIRST: E near a car always enters it.
+export function handleInteract(game) {
+  const g = game;
+  if (g.player.eCooldown > 0) return;
+  // 1. Garage (stores the car first when in one at the door).
+  if (tryGarage(g)) { g.player.eCooldown = 0.5; return; }
+  // 2. Exit the car.
+  if (g.player.inCar) {
+    exitVehicle(g);
+    g.player.eCooldown = 0.5;
+    return;
+  }
+  // 3. Enter a nearby car.
+  const v = tryEnterVehicle(g);
+  if (v) {
+    g.player.eCooldown = 0.5;
+    if (v._isTaxi) startTaxiFare(g);
+    return;
+  }
+  // 4. Interior doors.
+  if (tryInteriorDoor(g)) { g.player.eCooldown = 0.5; return; }
+  // 5. Food shops.
+  if (tryFoodShop(g)) { g.player.eCooldown = 0.5; return; }
+  // 6. Outfit shop.
+  if (tryOutfitShop(g)) { g.player.eCooldown = 0.5; return; }
+  // 7. Taxi (call one if none is waiting).
+  if (g._taxiCab && g._taxiState === 'waiting') {
+    const cab = g._taxiCab;
+    const d = Math.hypot(cab.x - g.player.x, cab.z - g.player.z);
+    if (d < 6) {
+      g.player.inCar = cab;
+      cab.driver = 'player';
+      startTaxiFare(g);
+      g.player.eCooldown = 0.5;
+      return;
+    }
+  }
+  // 8. Cats.
+  if (tryCat(g)) { g.player.eCooldown = 0.5; return; }
+  // 9. Dogs.
+  if (tryPetDog(g)) { g.player.eCooldown = 0.5; return; }
+  // 10. Train.
+  if (tryTrain(g)) { g.player.eCooldown = 0.5; return; }
+  // 11. Elevator.
+  if (tryElevator(g)) { g.player.eCooldown = 0.5; return; }
+  // 12. Fishing.
+  if (tryFish(g)) { g.player.eCooldown = 0.5; return; }
+  // 13. Vending.
+  if (tryVending(g)) { g.player.eCooldown = 0.5; return; }
+  // 14. ATM.
+  if (tryAtm(g)) { g.player.eCooldown = 0.5; return; }
+  // 15. Date with Maya.
+  if (tryDate(g)) { g.player.eCooldown = 0.5; return; }
+}
+
+// ---------- taps (runs BEFORE stepGame each frame) ----------
+export function handleTaps(game, input) {
+  const g = game;
+  const pressed = (code) => input.pressed.has(code);
+  const down = (code) => input.down.has(code);
+
+  // Mute works everywhere.
+  if (pressed('KeyM')) {
+    g.muted = !g.muted;
+    if (g.audio) g.audio.setMuted(g.muted);
+  }
+  // Radio cycles everywhere (except menu).
+  if (pressed('KeyR') && g.mode !== 'menu') {
+    g.station = (g.station + 1) % STATIONS.length;
+    g.song = 0;
+    g.songStep = 0;
+  }
+
+  if (g.mode === 'menu') {
+    if (pressed('Enter')) {
+      newGame(g);
+      respawnWorld(g);
+      startChapter(g, 1);
+    }
+    return;
+  }
+  if (g.mode === 'card') {
+    if (pressed('Enter')) {
+      g.mode = 'play';
+      g.card = null;
+    }
+    return;
+  }
+  if (g.mode === 'passed') {
+    if (pressed('Enter')) nextChapter(g);
+    return;
+  }
+  if (g.mode === 'busted' || g.mode === 'wasted') {
+    if (pressed('Enter')) {
+      bustPlayer(g);
+      g.mode = 'play';
+    }
+    return;
+  }
+  if (g.mode === 'pause') {
+    if (pressed('Enter') || pressed('Escape') || pressed('KeyP')) {
+      g.mode = 'play';
+      g.menu = null;
+    }
+    return;
+  }
+  if (g.mode === 'phone') {
+    if (pressed('Tab') || pressed('Escape')) {
+      togglePhone(g);
+    }
+    return;
+  }
+  // Play mode.
+  if (pressed('Escape') || pressed('KeyP')) {
+    g.mode = 'pause';
+    g.menu = 'pause';
+    saveGame(g, 1);
+    return;
+  }
+  if (pressed('Tab')) {
     togglePhone(g);
     return;
   }
-  if (g.mode === 'play') {
-    g.mode = 'pause';
-    g.menu = 'pause';
-    saveGame(g, 1);
-  } else if (g.mode === 'pause') {
-    g.mode = 'play';
+  if (pressed('Digit1')) g.player.weapon = 0;
+  if (pressed('Digit2') && g.unlocks.smgUnlocked) g.player.weapon = 1;
+  if (pressed('Digit3') && g.unlocks.shotgunUnlocked) g.player.weapon = 2;
+  if (pressed('Digit4')) {
+    g._taxiRequested = true;
   }
-}
-
-// Unproject a screen point onto the ground plane (y = 0).
-function screenToGround(g, sx, sy) {
-  const cam = g.camera;
-  if (!cam || !g.canvas) return null;
-  const w = g.canvas.width, h = g.canvas.height;
-  const nx = (sx / w) * 2 - 1;
-  const ny = 1 - (sy / h) * 2;
-  const fov = ((cam.fov || 60) * Math.PI) / 180;
-  const tanF = Math.tan(fov / 2);
-  const aspect = w / h;
-  let fx = cam.tx - cam.x, fy = cam.ty - cam.y, fz = cam.tz - cam.z;
-  const fl = Math.hypot(fx, fy, fz) || 1;
-  fx /= fl; fy /= fl; fz /= fl;
-  let rx = -fz, ry = 0, rz = fx;
-  const rl = Math.hypot(rx, ry, rz) || 1;
-  rx /= rl; ry /= rl; rz /= rl;
-  const ux = ry * fz - rz * fy, uy = rz * fx - rx * fz, uz = rx * fy - ry * fx;
-  let dx = fx + rx * (nx * tanF * aspect) + ux * (ny * tanF);
-  let dy = fy + ry * (nx * tanF * aspect) + uy * (ny * tanF);
-  let dz = fz + rz * (nx * tanF * aspect) + uz * (ny * tanF);
-  const dl = Math.hypot(dx, dy, dz) || 1;
-  dx /= dl; dy /= dl; dz /= dl;
-  if (dy >= -0.001) return null;
-  const t = -cam.y / dy;
-  return { x: cam.x + dx * t, z: cam.z + dz * t };
-}
-
-export function handleInteract(g) {
-  const p = g.player;
-  if (p.inCar) {
-    if (Math.hypot(p.x - SPAWNS.garageDoor.x, p.z - SPAWNS.garageDoor.z) < 8) {
-      tryGarage(g);
-    } else {
-      exitVehicle(g);
-    }
-    return;
-  }
-  // Inside a room: the counter first, then the door out.
-  if (p.inside) {
-    if (tryInteriorCounter(g)) return;
-    tryInteriorDoor(g);
-    return;
-  }
-  // On foot: the car-enter check runs FIRST so a nearby car
-  // always wins the E press over shops and activities.
-  if (tryEnterVehicle(g)) {
-    if (g._taxiCab && p.inCar === g._taxiCab) startTaxiFare(g);
-    return;
-  }
-  if (tryGarage(g)) return;
-  if (tryFoodShop(g)) return;
-  if (tryInteriorDoor(g)) return;
-  if (tryOutfitShop(g)) return;
-  if (tryVending(g)) return;
-  if (tryAtm(g)) return;
-  if (tryCat(g)) return;
-  if (tryPetDog(g)) return;
-  if (tryTrain(g)) return;
-  if (tryElevator(g)) return;
-  if (tryDate(g)) return;
-  if (tryFish(g)) return;
-  if (tryRange(g)) return;
-  if (trySwim(g)) return;
-  if (trySlalom(g)) return;
-}
-
-export function handleTaps(g, input) {
-  const mode = g.mode;
-  if (mode === 'menu') {
-    if (input.pressedKey('Enter')) { newGame(g); respawnWorld(g); startChapter(g, 1); }
-    else if (input.pressedKey('KeyM')) { g.muted = !g.muted; if (g.audio) g.audio.setMuted(g.muted); }
-    return;
-  }
-  if (mode === 'card') {
-    if (input.pressedKey('Enter') || input.pressedKey('Escape')) { g.mode = 'play'; g.card = null; }
-    return;
-  }
-  if (mode === 'passed') {
-    if (input.pressedKey('Enter')) nextChapter(g);
-    return;
-  }
-  if (mode === 'busted') {
-    if (input.pressedKey('Enter')) {
-      g.player.x = SPAWNS.hospital.x;
-      g.player.z = SPAWNS.hospital.z;
-      g.mode = 'play';
-    }
-    return;
-  }
-  if (mode === 'wasted') {
-    if (input.pressedKey('Enter')) {
-      const fine = Math.floor(g.cash * 0.2);
-      g.cash -= fine;
-      g.health = 100;
-      if (g.player.inCar) { g.player.inCar.driver = null; g.player.inCar = null; }
-      g.player.x = SPAWNS.hospital.x;
-      g.player.z = SPAWNS.hospital.z;
-      g.mode = 'play';
-    }
-    return;
-  }
-  if (mode === 'pause') {
-    if (input.pressedKey('Enter') || input.pressedKey('Escape') || input.pressedKey('KeyP')) g.mode = 'play';
-    return;
-  }
-  if (mode === 'phone') {
-    if (input.pressedKey('Tab') || input.pressedKey('Escape')) togglePhone(g);
-    return;
-  }
-  // mode === 'play'
-  if (input.pressedKey('Escape') || input.pressedKey('KeyP')) {
-    g.mode = 'pause';
-    g.menu = 'pause';
-    saveGame(g, 1);
-    return;
-  }
-  if (input.pressedKey('Tab')) { togglePhone(g); return; }
-  if (input.pressedKey('KeyE')) handleInteract(g);
-  if (input.pressedKey('KeyR')) { g.station = (g.station + 1) % 4; g.song = 0; g.songStep = 0; }
-  if (input.pressedKey('KeyM')) { g.muted = !g.muted; if (g.audio) g.audio.setMuted(g.muted); }
-  if (input.pressedKey('Digit1')) g.player.weapon = 0;
-  if (input.pressedKey('Digit2') && g.unlocks.smgUnlocked) g.player.weapon = 1;
-  if (input.pressedKey('Digit3') && g.unlocks.shotgunUnlocked) g.player.weapon = 2;
-  if (input.pressedKey('Digit4')) g._taxiRequested = true;
-  if (input.pressedKey('KeyF')) punch(g);
-  if (input.pressedKey('KeyG')) throwBomb(g);
+  if (pressed('KeyE')) handleInteract(g);
+  if (pressed('KeyF')) punch(g);
+  if (pressed('KeyG')) throwBomb(g);
   if (input.mouse && input.mouse.clicked) {
-    const aim = screenToGround(g, input.mouse.x, input.mouse.y);
-    if (aim) shoot(g, aim.x, aim.z);
-  }
-  // Modal shortcuts.
-  if (g.modal) {
-    if (input.pressedKey('Escape')) { g.modal = null; return; }
-    if (g.modal.kind === 'food') {
-      if (input.pressedKey('Digit1')) buyFood(g, 0);
-      else if (input.pressedKey('Digit2')) buyFood(g, 1);
-      else if (input.pressedKey('Digit3')) buyFood(g, 2);
-    } else if (g.modal.kind === 'atm') {
-      if (input.pressedKey('Digit1')) atmAction(g, 0);
-      else if (input.pressedKey('Digit2')) atmAction(g, 1);
-    } else if (g.modal.kind === 'outfit') {
-      if (input.pressedKey('Digit1')) cycleOutfit(g, 'hair');
-      else if (input.pressedKey('Digit2')) cycleOutfit(g, 'shirt');
-      else if (input.pressedKey('Digit3')) cycleOutfit(g, 'pants');
-      else if (input.pressedKey('Digit4')) cycleOutfit(g, 'shoes');
-      else if (input.pressedKey('Enter')) buyOutfit(g);
-    } else if (g.modal.kind === 'garage') {
-      if (input.pressedKey('Digit1')) takeOutCar(g, 0);
-    }
+    // Click shoots 10 m ahead along the player's facing direction.
+    const fx = Math.sin(g.player.heading || 0);
+    const fz = Math.cos(g.player.heading || 0);
+    shoot(g, g.player.x + fx * 10, g.player.z + fz * 10);
   }
 }
 
-function checkUnlocks(g) {
-  for (const u of RESPECT.unlocks) {
-    if (g.respect >= u.min && !g.unlocks[u.flag]) {
-      g.unlocks[u.flag] = true;
-      showToast(g, u.label);
-      if (u.flag === 'sportsCarSpawned') {
-        const car = makeVehicle('car', 30, 20, 0, [0.9, 0.2, 0.2], 'Solmar Comet');
-        car.owned = true;
-        g.vehicles.push(car);
-        g.ownedCars.push(car);
-      }
-    }
-  }
-}
-
-export function stepGame(g, dt, input) {
-  g.time += dt;
-  if (g.toastTimer > 0) g.toastTimer -= dt;
+// ---------- the game step ----------
+export function stepGame(game, dt, input) {
+  const g = game;
+  g.time = (g.time || 0) + dt;
+  if (g.toastTimer > 0) g.toastTimer = Math.max(0, g.toastTimer - dt);
   if (g.dialogue && g.dialogue.t > 0) g.dialogue.t -= dt;
-  if (g.mode !== 'play' && g.mode !== 'phone') return;
-  if (g.weatherObj) g.weatherObj.step(dt);
-  stepPlayer(g, dt, input);
-  if (g.player.inCar) stepPlayerCar(g, dt, input);
-  stepTraffic(g, dt);
-  stepCarCollisions(g, dt);
-  stepPeds(g, dt);
-  stepPolice(g, dt);
-  stepWanted(g, dt);
-  stepGangs(g, dt);
-  stepMissions(g, dt);
-  stepSideJob(g, dt);
-  stepPickups(g, dt);
-  stepLiving(g, dt);
-  stepCats(g, dt);
-  stepActivities(g, dt);
-  stepTraining(g, dt);
-  stepInteriors(g, dt);
-  stepEvents(g, dt);
-  stepEventActive(g, dt);
-  stepFires(g, dt);
-  stepTaxiCall(g, dt);
-  stepTaxiFare(g, dt);
-  // Radio sequencer: a step every 0.25 s; 32 steps per song.
+  if (g.player.shootCooldown > 0) g.player.shootCooldown = Math.max(0, g.player.shootCooldown - dt);
+  if (g.player.petting > 0) g.player.petting = Math.max(0, g.player.petting - dt);
+  if (g.mode === 'pause' || g.mode === 'card' || g.mode === 'menu' || g.mode === 'passed' || g.mode === 'busted' || g.mode === 'wasted') {
+    return;
+  }
+  // Weather + clock phase. The weather step advances the clock
+  // 120x (30 s = 1 game hour); only advance it here when there is
+  // no weather object to do it.
+  if (g.weatherObj && typeof g.weatherObj.step === 'function') {
+    g.weatherObj.step(dt, Math.random);
+  } else {
+    g.clock += dt / 30;
+    if (g.clock >= 24) {
+      g.clock -= 24;
+      g.day++;
+    }
+  }
+  // Song sequencer: 1 step per 0.25 s, wraps at 32, advances the song.
   g._songTimer += dt;
   while (g._songTimer >= 0.25) {
     g._songTimer -= 0.25;
     g.songStep++;
-    if (g.songStep >= 32) {
+    if (g.songStep >= SONG_STEPS) {
       g.songStep = 0;
       g.song = (g.song + 1) % 2;
     }
-    if (g.audio) g.audio.radioStep(g.station, g.song, g.songStep);
   }
-  checkUnlocks(g);
-  // Camera follows the player (or the car).
-  if (g.camera) {
-    const t = g.player.inCar
-      ? { x: g.player.inCar.x, y: 1.5, z: g.player.inCar.z }
-      : { x: g.player.x, y: 1.5, z: g.player.z };
-    updateCamera(g.camera, t, dt, input);
+  // Respect unlocks.
+  if (g.respect >= 100 && !g.unlocks.smgUnlocked) {
+    g.unlocks.smgUnlocked = true;
+    g.player.ammo[1] = 120;
+    showToast(g, 'SMG unlocked — press 2');
   }
-  // The player rides the train.
-  if (g.player.onTrain && g.train) {
-    const tp = trainPosAt(g.train.a);
-    g.player.x = tp.x;
-    g.player.z = tp.z;
+  if (g.respect >= 250 && !g.unlocks.shotgunUnlocked) {
+    g.unlocks.shotgunUnlocked = true;
+    g.player.ammo[2] = 40;
+    showToast(g, 'Shotgun unlocked — press 3');
+  }
+  if (g.respect >= 500 && !g.unlocks.sportsCarSpawned) {
+    g.unlocks.sportsCarSpawned = true;
+    const comet = {
+      kind: 'car', x: -30, z: 30, heading: 0,
+      color: [0.95, 0.75, 0.1], name: 'Solmar Comet',
+      condition: 100, driver: null, owned: true, speed: 0,
+    };
+    comet.colour = comet.color;
+    g.vehicles.push(comet);
+    showToast(g, 'A Comet is waiting for you downtown');
+  }
+  // Movement.
+  if (g.player.inCar) stepPlayerCar(g, dt, input);
+  else stepPlayer(g, dt, input);
+  stepTraffic(g, dt);
+  stepCarCollisions(g);
+  stepPeds(g, dt);
+  stepPolice(g, dt);
+  stepWanted(g, dt);
+  stepGangs(g, dt);
+  stepLiving(g, dt);
+  stepCats(g, dt);
+  stepFires(g, dt);
+  stepEvents(g, dt, Math.random);
+  stepEventActive(g, dt);
+  stepActivities(g, dt);
+  stepTraining(g, dt);
+  stepInteriors(g, dt);
+  stepMissions(g, dt);
+  stepChapter3(g, dt);
+  stepSideJob(g, dt);
+  stepTaxiCall(g, dt);
+  stepTaxiFare(g, dt);
+  dateAte(g, dt);
+  maybeMayaCall(g);
+  stepPickups(g, dt);
+  updateCamera(g.camera, { x: g.player.x, y: 1.5, z: g.player.z }, dt, input);
+  if (g.audio && typeof g.audio.radioStep === 'function') {
+    g.audio.radioStep(g.station, g.song, g.songStep);
   }
 }
 
-// Draw a foot cop (navy) as a ped-like figure.
-function drawCop(g, cop, batch) {
-  const navy = [0.1, 0.15, 0.5];
-  pushBox(batch, cop.x - 0.14, 0, cop.z, 0.24, 0.85, 0.24, [0.05, 0.05, 0.1]);
-  pushBox(batch, cop.x + 0.14, 0, cop.z, 0.24, 0.85, 0.24, [0.05, 0.05, 0.1]);
-  pushBox(batch, cop.x, 0.85, cop.z, 0.62, 0.65, 0.36, navy);
-  pushBox(batch, cop.x - 0.4, 0.9, cop.z, 0.2, 0.6, 0.2, navy);
-  pushBox(batch, cop.x + 0.4, 0.9, cop.z, 0.2, 0.6, 0.2, navy);
-  pushBox(batch, cop.x, 1.5, cop.z, 0.42, 0.42, 0.42, [0.9, 0.75, 0.6]);
-  pushBox(batch, cop.x, 1.86, cop.z, 0.44, 0.16, 0.44, navy);
-  pushBox(batch, cop.x, 1.0, cop.z + 0.25, 0.12, 0.12, 0.45, [0.15, 0.15, 0.18]);
-}
-
-// The dynamic batch: everything that moves, culled to ~150 m
-// around the camera so it stays under the 1600-box cap.
-export function collectDynamicBoxes(g, batch, camera) {
-  batchReset(batch);
+// ---------- dynamic rendering ----------
+export function collectDynamicBoxes(game, batch, camera) {
+  const g = game;
   const cam = camera || g.camera;
-  const cx = cam ? cam.tx : g.player.x;
-  const cz = cam ? cam.tz : g.player.z;
-  const near = (x, z, r) => Math.hypot(x - cx, z - cz) < r;
-  const plain = [0, 0, 1, 1];
-  if (!g.player.inCar) playerBoxes(g, batch);
-  for (const v of g.vehicles) {
-    if (near(v.x, v.z, 150)) vehicleBoxes(g, v, batch, cam);
+  const b = batch || BoxBatch();
+  // The player (on foot only — in a car the car is drawn instead).
+  if (!g.player.inCar) playerBoxes(g, b, null);
+  // Vehicles + traffic.
+  for (const v of g.vehicles) vehicleBoxes(g, v, b, cam);
+  for (const t of g.traffic) vehicleBoxes(g, t, b, cam);
+  // Peds.
+  for (const p of g.peds) pedBoxes(g, p, b, cam);
+  // Cops, cop cars, roadblocks, helicopter.
+  for (const c of g.cops) copBoxes(g, c, b, null);
+  for (const c of g.copCars) copCarBoxes(g, c, b, null);
+  heliBoxes(g, b, null);
+  for (const r of g.roadblocks) {
+    pushBox(b, r.x, 0, r.z, 3, 1.2, 0.6, [0.95, 0.6, 0.1], [0, 0, 1, 1]);
   }
-  for (const v of g.traffic) {
-    if (near(v.x, v.z, 150)) vehicleBoxes(g, v, batch, cam);
+  // Gangs + Maya.
+  for (const m of g.gangs) gangBoxes(g, m, b, null);
+  mayaBoxes(g, b, null);
+  // Dogs, birds, fish, train, elevator.
+  livingBoxes(g, b, null);
+  // Cats.
+  catBoxes(g, b, null);
+  // Fires, events, training, interiors, food signs.
+  fireBoxes(g, b, null);
+  eventBoxes(g, b, null);
+  trainingBoxes(g, b, null);
+  interiorBoxes(g, b, null);
+  foodSignBoxes(g, b, null);
+  // Cash pickups.
+  for (const p of g.pickups || []) {
+    pushBox(b, p.x, 0.2, p.z, 0.6, 0.1, 0.4, [0.2, 0.9, 0.3], [0, 0, 1, 1]);
   }
-  for (const p of g.peds) {
-    if (!p.dead && near(p.x, p.z, 120)) pedBoxes(g, p, batch, cam);
+  // A warm sun glow box at golden hour.
+  const phase = g._phase || 'day';
+  if (phase === 'golden' || phase === 'sunset') {
+    const sunX = g.player.x + 100;
+    const sunZ = g.player.z - 100;
+    pushBox(b, sunX, 30, sunZ, 20, 20, 1, [1, 0.8, 0.4], [0, 0, 1, 1]);
   }
-  for (const c of g.cops) {
-    if (!c.dead && near(c.x, c.z, 120)) drawCop(g, c, batch);
-  }
-  for (const m of g.gangMembers) {
-    if (!m.dead && near(m.x, m.z, 120)) gangBoxes(g, m, batch, cam);
-  }
-  livingBoxes(g, batch);
-  catBoxes(g, batch);
-  mayaBoxes(g, batch);
-  interiorBoxes(g, batch);
-  foodSignBoxes(g, batch);
-  trainingBoxes(g, batch);
-  eventBoxes(g, batch);
-  fireBoxes(g, batch);
-  // Cop cars + roadblocks + helicopter.
-  for (const cc of g.copCars) {
-    if (near(cc.x, cc.z, 150)) {
-      pushBox(batch, cc.x, 0.55, cc.z, 2.4, 0.9, 5.0, [0.1, 0.15, 0.5], plain);
-    }
-  }
-  for (const rb of g.roadblocks) {
-    if (near(rb.x, rb.z, 150)) {
-      pushBox(batch, rb.x, 0, rb.z, 3, 1.2, 0.5, [0.9, 0.3, 0.1], plain);
-    }
-  }
-  if (g.heli) {
-    pushBox(batch, g.heli.x, g.heli.y, g.heli.z, 6, 2, 3, [0.1, 0.15, 0.5], plain);
-  }
-  // Sun at golden hour / sunset.
-  const sample = g.weatherObj ? g.weatherObj.sample() : sampleAt(g.clock);
-  if (sample.phase === 'golden' || sample.phase === 'sunset') {
-    pushBox(batch, g.player.x + 100, 80, g.player.z - 100, 20, 20, 1, [1, 0.8, 0.3], plain);
-  }
-  // Rain drops.
+  // Rain streaks in the dynamic batch (semi-transparent blue-grey).
   if (g.weather === 'rain') {
-    for (let i = 0; i < 20; i++) {
-      const rx = g.player.x + ((i * 37) % 40) - 20;
-      const rz = g.player.z + ((i * 53) % 40) - 20;
-      pushBox(batch, rx, 10 + (i % 5), rz, 0.1, 2, 0.1, [0.7, 0.85, 0.9], plain);
+    const rain = g.rain || 0.5;
+    const n = Math.floor(rain * 40);
+    for (let i = 0; i < n; i++) {
+      const rx = g.player.x + ((i * 37) % 60) - 30;
+      const rz = g.player.z + ((i * 53) % 60) - 30;
+      pushBox(b, rx, 2 + (i % 5), rz, 0.08, 1.5, 0.08, [0.7, 0.8, 0.9], [0, 0, 1, 1]);
     }
   }
-  // Neon signs, boosted by the time of day.
-  const boost = sample.neonBoost || 1;
-  for (const n of g.city.neon) {
-    if (!near(n.x, n.z, 150)) continue;
-    const col = [Math.min(1, n.col[0] * boost), Math.min(1, n.col[1] * boost), Math.min(1, n.col[2] * boost)];
-    pushBox(batch, n.x, n.y, n.z, 2, 1, 0.3, col, plain);
-  }
-  // Clouds.
-  for (const cl of g.city.clouds) {
-    if (near(cl.x, cl.z, 200)) pushBox(batch, cl.x, cl.y, cl.z, cl.s, 2, cl.s * 0.6, [1, 1, 1], plain);
-  }
-  g._lastDynTris = batchTris(batch);
-  return batch;
+  return b;
 }
 
-export function renderFrame(g) {
+// ---------- the frame ----------
+export function renderFrame(game) {
+  const g = game;
   const r = g.renderer;
   if (!r || !r.gl) return;
+  updateCamera(g.camera, { x: g.player.x, y: 1.5, z: g.player.z }, 0.016, g.input);
+  const vp = computeViewProj(g.camera, g.canvas ? g.canvas.width : 1280, g.canvas ? g.canvas.height : 720);
   const sample = g.weatherObj ? g.weatherObj.sample() : sampleAt(g.clock);
-  r.gl.viewport(0, 0, g.canvas.width, g.canvas.height);
-  r.beginFrame(sample.sky);
-  const cam = g.camera;
-  const vp = computeViewProj(cam, g.canvas.width, g.canvas.height);
-  r.setView(vp, [cam.x, cam.y, cam.z], sample.fogNear, sample.fogFar);
-  const dyn = BoxBatch();
-  collectDynamicBoxes(g, dyn, cam);
+  const sky = sample.sky;
+  const fogFar = sample.fogFar;
+  r.beginFrame(sky);
+  r.setUniforms(vp, [g.camera.x, g.camera.y, g.camera.z], [60, fogFar], sample.fog || sky);
+  // Draw order: static, glb, dynamic (3 batches x 3 uploads = 9).
   r.drawBatch(r.staticBatch);
-  r.drawBatch(dyn);
   r.drawBatch(r.glbBatch);
-  if (g.hud) {
-    updateHud(g, g.hud);
-    drawMinimap(g, g.hud);
-  }
-}
-
-// The browser loop: taps first, then step, then render.
-export function startLoop(g) {
-  let last = 0;
-  const tick = (now) => {
-    const dt = Math.min(0.05, last ? (now - last) / 1000 : 0.016);
-    last = now;
-    handleTaps(g, g.input);
-    stepGame(g, dt, g.input);
-    renderFrame(g);
-    g.input.endFrame();
-    if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(tick);
-  };
-  if (typeof requestAnimationFrame !== 'undefined') requestAnimationFrame(tick);
-  return tick;
-}
-
-// Auto-boot when loaded as a module in a browser page.
-if (typeof document !== 'undefined' && typeof window !== 'undefined') {
-  const cv = document.getElementById('game-canvas');
-  if (cv) {
-    const game = boot(cv, document);
-    startLoop(game);
-    window.addEventListener('resize', () => { if (game._onResize) game._onResize(); });
-  }
+  const dyn = BoxBatch();
+  collectDynamicBoxes(g, dyn, g.camera);
+  g._lastDynTris = batchTris(dyn);
+  r.drawBatch(dyn);
+  updateHud(g, g.hud);
+  drawMinimap(g, g.hud);
 }

@@ -1,67 +1,93 @@
-// Solmar Bay — save / load (localStorage in the browser,
-// a safe no-op in Node where there is no storage).
-// The save holds progression only — chapter, cash, respect,
-// completion, owned cars. It deliberately never stores the
-// live player object.
+// Solmar Bay — save / load (localStorage, slot 1).
+// Written fresh for rebuild #18. No localStorage => no-op, no throw.
 
-function storage() {
+function store() {
   try {
-    if (typeof globalThis !== 'undefined' && globalThis.localStorage) return globalThis.localStorage;
-  } catch (e) { /* no storage */ }
-  return null;
+    if (typeof globalThis.localStorage === 'undefined') return null;
+    return globalThis.localStorage;
+  } catch {
+    return null;
+  }
 }
 
 export function saveGame(g, slot = 1) {
-  const ls = storage();
-  if (!ls) return false;
+  const s = store();
+  if (!s) return false;
   const data = {
     chapter: g.chapter,
     chapterDone: g.chapterDone,
     cash: g.cash,
     bank: g.bank,
     respect: g.respect,
+    health: g.health,
+    armour: g.armour,
+    ownedCars: g.ownedCars || [],
     completion: g.completion,
-    ownedCars: (g.ownedCars || []).map((c) => ({ name: c.name, kind: c.kind, color: c.color, condition: c.condition })),
     day: g.day,
     clock: g.clock,
+    outfit: g.player ? g.player.outfit : null,
+    weapon: g.weapon,
+    stats: g.stats,
   };
   try {
-    ls.setItem(`solmar-bay-save-${slot}`, JSON.stringify(data));
+    s.setItem(`solmar-bay-save-${slot}`, JSON.stringify(data));
     return true;
-  } catch (e) {
+  } catch {
     return false;
   }
 }
 
 export function loadGame(g, slot = 1) {
-  const ls = storage();
-  if (!ls) return null;
+  const s = store();
+  if (!s) return null;
   let raw = null;
-  try { raw = ls.getItem(`solmar-bay-save-${slot}`); } catch (e) { return null; }
+  try {
+    raw = s.getItem(`solmar-bay-save-${slot}`);
+  } catch {
+    return null;
+  }
   if (!raw) return null;
-  let data;
-  try { data = JSON.parse(raw); } catch (e) { return null; }
-  if (!data || typeof data !== 'object') return null;
-  g.chapter = data.chapter ?? 1;
-  g.chapterDone = data.chapterDone ?? 0;
-  g.cash = data.cash ?? 150;
-  g.bank = data.bank ?? 0;
-  g.respect = data.respect ?? 0;
-  g.completion = data.completion ?? 0;
-  g.day = data.day ?? 1;
-  g.clock = data.clock ?? 8;
-  g.ownedCars = (data.ownedCars || []).map((c) => ({ name: c.name, kind: c.kind, color: c.color, condition: c.condition, driver: null, owned: true, speed: 0, x: 0, z: 0, heading: 0 }));
+  let data = null;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!data) return null;
+  g.chapter = data.chapter ?? g.chapter;
+  g.chapterDone = data.chapterDone ?? g.chapterDone;
+  g.cash = data.cash ?? g.cash;
+  g.bank = data.bank ?? g.bank;
+  g.respect = data.respect ?? g.respect;
+  g.health = data.health ?? g.health;
+  g.armour = data.armour ?? g.armour;
+  g.ownedCars = data.ownedCars ?? g.ownedCars;
+  g.completion = data.completion ?? g.completion;
+  g.day = data.day ?? g.day;
+  g.clock = data.clock ?? g.clock;
+  if (data.outfit && g.player) g.player.outfit = data.outfit;
+  if (typeof data.weapon === 'number') g.weapon = data.weapon;
+  if (data.stats) g.stats = data.stats;
   return data;
 }
 
 export function hasSave(slot = 1) {
-  const ls = storage();
-  if (!ls) return false;
-  try { return ls.getItem(`solmar-bay-save-${slot}`) !== null; } catch (e) { return false; }
+  const s = store();
+  if (!s) return false;
+  try {
+    return s.getItem(`solmar-bay-save-${slot}`) !== null;
+  } catch {
+    return false;
+  }
 }
 
 export function clearSave(slot = 1) {
-  const ls = storage();
-  if (!ls) return false;
-  try { ls.removeItem(`solmar-bay-save-${slot}`); return true; } catch (e) { return false; }
+  const s = store();
+  if (!s) return false;
+  try {
+    s.removeItem(`solmar-bay-save-${slot}`);
+    return true;
+  } catch {
+    return false;
+  }
 }

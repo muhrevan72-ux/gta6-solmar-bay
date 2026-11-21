@@ -1,19 +1,15 @@
-// Solmar Bay — the in-game phone.
-// Tab opens a visible panel (top-right, dark, gold border) with
-// contacts, messages and cash. Tab, Escape and the Pause button
-// all close it; it never traps the game.
-
-import { CHAPTERS } from './config.js';
+// Solmar Bay — the in-game phone: contacts, messages, calls.
+// Written fresh for rebuild #18.
 
 export const CONTACTS = [
   { id: 'rico', name: 'Rico', role: 'Fixer' },
-  { id: 'maya', name: 'Maya', role: 'Beach House' },
+  { id: 'maya', name: 'Maya', role: 'Date' },
   { id: 'taxi', name: 'Taxi', role: 'Solmar Cab' },
-  { id: 'mechanic', name: 'Mechanic', role: 'Garage' },
+  { id: 'mechanic', name: 'Mechanic', role: 'Repairs' },
 ];
 
 export function togglePhone(g) {
-  if (g.mode === 'menu') return false;
+  if (g.mode === 'menu' || g.mode === 'card' || g.mode === 'passed') return false;
   if (g.phoneOpen) {
     g.phoneOpen = false;
     g.mode = 'play';
@@ -21,78 +17,70 @@ export function togglePhone(g) {
   }
   g.phoneOpen = true;
   g.mode = 'phone';
+  if (!g.phoneTab) g.phoneTab = 'messages';
   return true;
 }
 
 export function phoneTab(g, tab) {
   g.phoneTab = tab;
   if (tab === 'messages') g.unread = 0;
-  return tab;
 }
 
 export function notifyMessage(g, from, text) {
+  if (!g.messages) g.messages = [];
   g.messages.push({ from, text });
-  g.unread++;
-  return g.messages.length;
+  g.unread = (g.unread || 0) + 1;
+  return g.messages[g.messages.length - 1];
 }
-
-const RICO_TIPS = [
-  'Steal a car and bring it to the garage — that is chapter 1, kid.',
-  'The package is at the harbour. Pick it up, deliver it to the hideout, and do not be slow.',
-  'The cops are on you. Break line of sight and lay low until the stars fade.',
-  'Three passengers tonight. Pick them all up and the money is yours.',
-  'The harbour vault. Grab the cash, lose the heat, reach the safehouse clean.',
-];
 
 export function callContact(g, id) {
   if (id === 'rico') {
-    const tip = RICO_TIPS[Math.max(0, Math.min(RICO_TIPS.length - 1, g.chapter - 1))];
-    g.messages.push({ from: 'Rico', text: tip });
-    g.unread++;
-    return true;
+    const tip = 'Rico: the garage is east of downtown. Bring the Comet in one piece and the next job is yours.';
+    notifyMessage(g, 'Rico', tip);
+    return tip;
   }
   if (id === 'maya') {
-    if (g.maya.rel >= 75) {
-      g.messages.push({ from: 'Maya', text: 'The Sharks are moving on the harbour tonight. Stay away from the docks after dark.' });
-    } else {
-      g.messages.push({ from: 'Maya', text: 'Come find me at the beach house when you are free. The sunset is beautiful here.' });
+    const rel = g.maya ? (g.maya.rel || 0) : 0;
+    if (rel >= 75) {
+      const msg = 'Maya: the Sharks are moving on the harbour tonight. Stay away from the docks, okay?';
+      notifyMessage(g, 'Maya', msg);
+      return msg;
     }
-    g.unread++;
-    return true;
+    const msg = 'Maya: meet me at the beach when you are free. I will be by the water.';
+    notifyMessage(g, 'Maya', msg);
+    return msg;
   }
   if (id === 'taxi') {
     g._taxiRequested = true;
-    g.messages.push({ from: 'Taxi', text: 'Cab on its way to your location.' });
-    g.unread++;
-    return true;
+    const msg = 'Taxi: a cab is on its way to you.';
+    notifyMessage(g, 'Taxi', msg);
+    return msg;
   }
   if (id === 'mechanic') {
-    const car = g.player.inCar;
-    if (!car) return false;
-    if (car.condition >= 100) return false;
-    if (g.cash < 30) return false;
+    const v = g.player ? g.player.inCar : null;
+    if (!v) return false;
+    if ((g.cash || 0) < 30) return false;
     g.cash -= 30;
-    car.condition = 100;
-    g.messages.push({ from: 'Mechanic', text: 'Car repaired to full condition. That will be $30.' });
-    g.unread++;
-    return true;
+    v.condition = 100;
+    const msg = 'Mechanic: good as new. $30, please.';
+    notifyMessage(g, 'Mechanic', msg);
+    return msg;
   }
   return false;
 }
 
 export function phoneText(g) {
   const lines = [];
-  lines.push('PHONE — Solmar Bay');
-  lines.push(`Cash $${g.cash}`);
-  lines.push('');
-  lines.push('Contacts:');
-  for (const c of CONTACTS) lines.push(`  ${c.name} — ${c.role}`);
-  lines.push('');
+  lines.push('PHONE');
+  lines.push('Contacts: Rico, Maya, Taxi, Mechanic');
+  lines.push(`Cash: $${g.cash}`);
+  lines.push(`Day ${g.day} · ${String(Math.floor(g.clock || 8)).padStart(2, '0')}:00`);
   lines.push('Messages:');
-  if (g.messages.length === 0) lines.push('  (no messages yet)');
-  for (const m of g.messages.slice(-5)) lines.push(`  ${m.from}: ${m.text}`);
-  if (g.unread > 0) lines.push(`  (${g.unread} unread)`);
-  lines.push('');
-  lines.push('Tab / Esc to close');
+  const msgs = g.messages || [];
+  if (msgs.length === 0) lines.push('(no messages yet)');
+  for (const m of msgs.slice(-6)) {
+    lines.push(`${m.from}: ${m.text}`);
+  }
+  lines.push('Tab or Esc to close the phone.');
   return lines.join('\n');
 }

@@ -1,19 +1,19 @@
-// Solmar Bay — dating Maya at the beach house.
-// A date costs $30 and raises the relationship; at 75+ she
-// shares a tip about the Sharks.
+// Solmar Bay — dating Maya at the beach.
+// Written fresh for rebuild #18.
 
-import { SPAWNS } from './config.js';
 import { pushBox } from './render.js';
 import { showDialogue, showToast } from './state.js';
+import { addCash } from './state.js';
 
 export function mayaPos(g) {
-  return { x: SPAWNS.beachHouse.x, z: SPAWNS.beachHouse.z };
+  return { x: -300, z: 60 };
 }
 
 export function tryDate(g) {
   const m = mayaPos(g);
-  if (Math.hypot(g.player.x - m.x, g.player.z - m.z) > 4) return false;
-  if (g.cash < 30) return false;
+  const d = Math.hypot(g.player.x - m.x, g.player.z - m.z);
+  if (d > 6) return false;
+  if ((g.cash || 0) < 30) return false;
   g.cash -= 30;
   g.maya.onDate = true;
   g.maya.dateT = 0;
@@ -21,37 +21,41 @@ export function tryDate(g) {
   return true;
 }
 
-// The date ends (called with the hour). Relationship +25.
-export function dateAte(g, hour) {
-  if (!g.maya.onDate) return false;
-  g.maya.onDate = false;
-  g.maya.rel = Math.min(100, g.maya.rel + 25);
-  if (g.maya.rel >= 75) {
-    showDialogue(g, 'Maya', 'Beach House', 'The Sharks are moving on the harbour tonight. Be careful out there.');
-  } else {
-    showDialogue(g, 'Maya', 'Beach House', 'That was lovely. Come back soon.');
+export function dateAte(g, dt) {
+  if (!g.maya || !g.maya.onDate) return;
+  g.maya.dateT = (g.maya.dateT || 0) + dt;
+  if (g.maya.dateT >= 20) {
+    g.maya.onDate = false;
+    g.maya.rel = Math.min(100, (g.maya.rel || 0) + 25);
+    if (g.maya.rel >= 75) {
+      showDialogue(g, 'Maya', 'Date', 'That was lovely. The Sharks are moving on the harbour tonight — stay away from the docks, okay?');
+    } else {
+      showDialogue(g, 'Maya', 'Date', 'That was nice. Let us do it again sometime.');
+    }
   }
-  return true;
 }
 
-// Maya only calls when the relationship is warm enough.
+// Maya sometimes calls when the relationship is strong.
 export function maybeMayaCall(g) {
-  if (g.maya.rel < 20) return false;
-  g.messages.push({ from: 'Maya', text: 'Thinking of you. The beach is quiet tonight.' });
-  g.unread++;
+  if (!g.maya) return false;
+  if ((g.maya.rel || 0) < 50) return false;
+  if (Math.random() > 0.02) return false;
+  showDialogue(g, 'Maya', 'Call', 'Hey, it is Maya. Come by the beach when you are free.');
   return true;
 }
 
-// Draw Maya (7 boxes).
-export function mayaBoxes(g, batch) {
+// Maya: 7 boxes (legs, torso, arms, head, hair, dress, eyes).
+export function mayaBoxes(g, b, gl) {
   const m = mayaPos(g);
-  const plain = [0, 0, 1, 1];
-  pushBox(batch, m.x - 0.14, 0, m.z, 0.24, 0.85, 0.24, [0.3, 0.4, 0.8]);
-  pushBox(batch, m.x + 0.14, 0, m.z, 0.24, 0.85, 0.24, [0.3, 0.4, 0.8]);
-  pushBox(batch, m.x, 0.85, m.z, 0.62, 0.65, 0.36, [0.95, 0.4, 0.5]);
-  pushBox(batch, m.x - 0.4, 0.9, m.z, 0.2, 0.6, 0.2, [0.95, 0.4, 0.5]);
-  pushBox(batch, m.x + 0.4, 0.9, m.z, 0.2, 0.6, 0.2, [0.95, 0.4, 0.5]);
-  pushBox(batch, m.x, 1.5, m.z, 0.42, 0.42, 0.42, [0.9, 0.75, 0.6]);
-  pushBox(batch, m.x, 1.86, m.z, 0.44, 0.35, 0.44, [0.5, 0.3, 0.1]);
+  const skin = [0.85, 0.65, 0.5];
+  const dress = [0.9, 0.3, 0.5];
+  const hair = [0.2, 0.12, 0.08];
+  pushBox(b, m.x - 0.12, 0, m.z, 0.22, 0.85, 0.22, skin, [0, 0, 1, 1]);
+  pushBox(b, m.x + 0.12, 0, m.z, 0.22, 0.85, 0.22, skin, [0, 0, 1, 1]);
+  pushBox(b, m.x, 0.85, m.z, 0.65, 0.7, 0.35, dress, [0, 0, 1, 1]);
+  pushBox(b, m.x - 0.42, 0.9, m.z, 0.18, 0.55, 0.18, skin, [0, 0, 1, 1]);
+  pushBox(b, m.x + 0.42, 0.9, m.z, 0.18, 0.55, 0.18, skin, [0, 0, 1, 1]);
+  pushBox(b, m.x, 1.55, m.z, 0.34, 0.34, 0.34, skin, [0, 0, 1, 1]);
+  pushBox(b, m.x, 1.87, m.z, 0.38, 0.12, 0.38, hair, [0, 0, 1, 1]);
   return 7;
 }

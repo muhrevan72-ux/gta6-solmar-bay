@@ -1,127 +1,121 @@
-// Solmar Bay — pedestrians: walkers, sitters, chatters, queues,
-// vendors. 76 total. They walk the sidewalks, flee when shot
-// at, and give the city its life.
+// Solmar Bay — pedestrians: walkers, sitters, chatters, queues, vendors.
+// Written fresh for rebuild #18. 76 peds total, never on a road,
+// varied hair, height and bulk.
 
-import { COL } from './config.js';
-import { isBlocked, isOnRoad, randomSidewalkPoint } from './world.js';
-import { pushBox } from './render.js';
+import { mulberry32, COL, TUNE } from './config.js';
+import { isOnRoad, isBlocked, randomSidewalkPoint } from './world.js';
+import { pushBox, pushBoxRot } from './render.js';
 
-function makePed(rng, x, z, activity) {
+export function makePed(x, z, activity) {
   return {
-    x, z,
-    type: 'ped',
+    x, z, activity: activity || 'walk',
     hp: 100,
     dead: false,
-    activity,
-    target: null,
-    speed: 1 + rng() * 1.2,
-    height: 1.7 + rng() * 0.3,
-    bulk: 0.8 + rng() * 0.5,
-    hairStyle: Math.floor(rng() * 5),
-    hairColor: COL.hair[Math.floor(rng() * COL.hair.length)],
-    skinColor: COL.skin[Math.floor(rng() * COL.skin.length)],
-    shirtColor: COL.shirt[Math.floor(rng() * COL.shirt.length)],
-    pantsColor: COL.pants[Math.floor(rng() * COL.pants.length)],
-    flee: 0,
-    walkPhase: rng() * Math.PI * 2,
+    hair: Math.floor(Math.random() * 6),
+    hairStyle: Math.floor(Math.random() * 5),
+    style: Math.floor(Math.random() * 5),
+    height: 1.7 + Math.random() * 0.3,
+    bulk: 0.7 + Math.random() * 0.5,
+    shirt: [Math.random(), Math.random(), Math.random()],
+    pants: [Math.random() * 0.5, Math.random() * 0.5, Math.random() * 0.5],
+    tx: x, tz: z,
+    speed: 1 + Math.random() * 1.2,
+    flee: false,
+    chatPartner: null,
   };
 }
 
 export function spawnPeds(g) {
-  let seed = 777;
-  const rng = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
-  g.peds = [];
-  const spot = () => {
-    for (let i = 0; i < 20; i++) {
-      const p = randomSidewalkPoint(rng);
-      if (!isOnRoad(p.x, p.z) && !isBlocked(g.city, p.x, p.z)) return p;
+  const rng = mulberry32(2026);
+  const peds = [];
+  const counts = [
+    ['sit', 7], ['chat', 14], ['queue', 7], ['vendor', 6], ['walk', 42],
+  ];
+  for (const [activity, n] of counts) {
+    for (let i = 0; i < n; i++) {
+      let x = 0, z = 0;
+      let tries = 0;
+      do {
+        const p = randomSidewalkPoint(rng);
+        x = p.x; z = p.z;
+        tries++;
+      } while ((isOnRoad(x, z) || isBlocked(g.city, x, z) || Math.hypot(x, z - 20) < 8) && tries < 40);
+      const ped = makePed(x, z, activity);
+      ped.hair = Math.floor(rng() * 6);
+      ped.hairStyle = Math.floor(rng() * 5);
+      ped.style = ped.hairStyle;
+      ped.height = 1.7 + rng() * 0.3;
+      ped.bulk = 0.7 + rng() * 0.5;
+      ped.shirt = [rng(), rng(), rng()];
+      ped.pants = [rng() * 0.5, rng() * 0.5, rng() * 0.5];
+      ped.speed = 1 + rng() * 1.2;
+      if (activity === 'walk') {
+        const t = randomSidewalkPoint(rng);
+        ped.tx = t.x; ped.tz = t.z;
+      }
+      peds.push(ped);
     }
-    return { x: 0, z: 40 };
-  };
-  // 7 sitters (on benches).
-  for (let i = 0; i < 7; i++) {
-    const b = g.city.benches[i % g.city.benches.length];
-    g.peds.push(makePed(rng, b.x, b.z + 1, 'sit'));
   }
-  // 14 chatters (7 pairs).
-  for (let i = 0; i < 7; i++) {
-    const p = spot();
-    g.peds.push(makePed(rng, p.x, p.z, 'chat'));
-    g.peds.push(makePed(rng, p.x + 1.2, p.z + 0.5, 'chat'));
-  }
-  // 7 in a queue (at the burger joint).
-  for (let i = 0; i < 7; i++) {
-    g.peds.push(makePed(rng, 80 + i * 1.2, -30, 'queue'));
-  }
-  // 6 vendors (at the market stalls, off the road grid).
-  for (let i = 0; i < 6; i++) {
-    g.peds.push(makePed(rng, -210, 194 + i * 6, 'vendor'));
-  }
-  // 42 walkers.
-  for (let i = 0; i < 42; i++) {
-    const p = spot();
-    const ped = makePed(rng, p.x, p.z, 'walk');
-    ped.target = spot();
-    g.peds.push(ped);
-  }
-  return g.peds;
+  g.peds = peds;
+  return peds;
 }
 
-export function stepPed(g, p, dt) {
-  if (p.dead) return;
-  if (p.flee > 0) {
-    p.flee -= dt;
-    const dx = p.x - g.player.x, dz = p.z - g.player.z;
+export function stepPed(g, ped, dt) {
+  if (ped.dead) return;
+  if (ped.flee) {
+    // Run away from the player.
+    const dx = ped.x - g.player.x, dz = ped.z - g.player.z;
     const d = Math.hypot(dx, dz) || 1;
-    const nx = p.x + (dx / d) * 4 * dt;
-    const nz = p.z + (dz / d) * 4 * dt;
-    if (!isBlocked(g.city, nx, p.z)) p.x = nx;
-    if (!isBlocked(g.city, p.x, nz)) p.z = nz;
+    ped.x += (dx / d) * 5 * dt;
+    ped.z += (dz / d) * 5 * dt;
     return;
   }
-  if (p.activity === 'walk') {
-    if (!p.target) p.target = randomSidewalkPoint(Math.random);
-    const dx = p.target.x - p.x, dz = p.target.z - p.z;
+  if (ped.activity === 'walk') {
+    const dx = ped.tx - ped.x, dz = ped.tz - ped.z;
     const d = Math.hypot(dx, dz);
-    if (d < 1.5) {
-      p.target = randomSidewalkPoint(Math.random);
+    if (d < 2) {
+      const t = randomSidewalkPoint(Math.random);
+      ped.tx = t.x; ped.tz = t.z;
       return;
     }
-    const nx = p.x + (dx / d) * p.speed * dt;
-    const nz = p.z + (dz / d) * p.speed * dt;
-    if (!isBlocked(g.city, nx, p.z)) p.x = nx;
-    if (!isBlocked(g.city, p.x, nz)) p.z = nz;
-    p.walkPhase += dt * p.speed * 3;
+    ped.x += (dx / d) * ped.speed * dt;
+    ped.z += (dz / d) * ped.speed * dt;
   }
-  // Sitters, chatters, queuers and vendors stay put.
+  // Sitters, chatters, queuers and vendors hold their spot.
 }
 
 export function stepPeds(g, dt) {
-  for (const p of g.peds) stepPed(g, p, dt);
+  for (const ped of g.peds) stepPed(g, ped, dt);
 }
 
-// Draw a pedestrian (8 boxes near, 7 far — no eyes at distance).
-export function pedBoxes(g, p, batch, camera) {
+// 8 boxes for a live ped (incl. eyes when near), 0 when dead.
+// `cam` is the camera; eyes are drawn when the camera is null or
+// the ped is within 40 m of it.
+export function pedBoxes(g, p, b, cam) {
   if (p.dead) return 0;
   const h = p.height;
-  const legH = h * 0.45, torsoH = h * 0.32, headH = h * 0.22;
-  const w = 0.35 * p.bulk;
-  const near = !camera || Math.hypot((camera.x || 0) - p.x, (camera.z || 0) - p.z) < 40;
-  const bob = Math.sin(p.walkPhase || 0) * 0.06;
+  const w = p.bulk * 0.45;
+  const hairCol = COL.hair[p.hair % COL.hair.length];
+  const skin = [0.85, 0.65, 0.5];
+  const legH = h * 0.5;
+  const torsoH = h * 0.35;
   // Legs.
-  pushBox(batch, p.x - w * 0.25, 0, p.z, w * 0.4, legH, w * 0.4, p.pantsColor);
-  pushBox(batch, p.x + w * 0.25, 0, p.z, w * 0.4, legH, w * 0.4, p.pantsColor);
+  pushBox(b, p.x - w * 0.2, 0, p.z, w * 0.25, legH, w * 0.3, p.pants, [0, 0, 1, 1]);
+  pushBox(b, p.x + w * 0.2, 0, p.z, w * 0.25, legH, w * 0.3, p.pants, [0, 0, 1, 1]);
   // Torso.
-  pushBox(batch, p.x, legH, p.z, w, torsoH, w * 0.6, p.shirtColor);
+  pushBox(b, p.x, legH, p.z, w, torsoH, w * 0.5, p.shirt, [0, 0, 1, 1]);
   // Arms.
-  pushBox(batch, p.x - w * 0.65, legH + 0.05 + bob, p.z, w * 0.25, torsoH * 0.9, w * 0.25, p.shirtColor);
-  pushBox(batch, p.x + w * 0.65, legH + 0.05 - bob, p.z, w * 0.25, torsoH * 0.9, w * 0.25, p.shirtColor);
-  // Head + hair.
-  pushBox(batch, p.x, legH + torsoH, p.z, w * 0.7, headH, w * 0.7, p.skinColor);
-  pushBox(batch, p.x, legH + torsoH + headH * 0.75, p.z, w * 0.72, headH * 0.3, w * 0.72, p.hairColor);
+  pushBox(b, p.x - w * 0.6, legH + 0.05, p.z, w * 0.2, torsoH * 0.85, w * 0.2, p.shirt, [0, 0, 1, 1]);
+  pushBox(b, p.x + w * 0.6, legH + 0.05, p.z, w * 0.2, torsoH * 0.85, w * 0.2, p.shirt, [0, 0, 1, 1]);
+  // Head.
+  pushBox(b, p.x, legH + torsoH, p.z, w * 0.5, h * 0.18, w * 0.5, skin, [0, 0, 1, 1]);
+  // Hair.
+  pushBox(b, p.x, legH + torsoH + h * 0.18, p.z, w * 0.55, h * 0.07, w * 0.55, hairCol, [0, 0, 1, 1]);
+  // Eyes — only when near (or when no camera was passed).
+  const near = !cam || Math.hypot(p.x - cam.x, p.z - cam.z) < 40;
   if (near) {
-    // Eyes (a single thin box across the face).
-    pushBox(batch, p.x, legH + torsoH + headH * 0.4, p.z + w * 0.36, w * 0.5, headH * 0.12, 0.05, [0.05, 0.05, 0.08]);
+    pushBox(b, p.x - w * 0.1, legH + torsoH + h * 0.08, p.z - w * 0.26, 0.04, 0.04, 0.04, [0.05, 0.05, 0.05], [0, 0, 1, 1]);
+    return 8;
   }
-  return 8;
+  return 7;
 }

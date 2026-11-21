@@ -1,94 +1,104 @@
-// Solmar Bay — sound: Web Audio beeps in the browser, a safe
-// no-op in Node (no AudioContext). The radio is a tiny synth
-// sequencer: each song is 8 notes, stepped at 4 Hz.
+// Solmar Bay — procedural audio (Web Audio synth, safe no-op in Node).
+// Written fresh for rebuild #18. Radio stations are defined in
+// config.js; this module labels them and plays the sequencer.
 
-import { STATIONS, SONG_STEPS } from './config.js';
-
-export { STATIONS, SONG_STEPS };
+import { STATIONS } from './config.js';
 
 export function stationLabel(station, song) {
-  const st = STATIONS[station];
-  if (!st) return 'Radio off';
-  const s = st.songs[song] || st.songs[0];
-  return `${st.name} ${st.freq} — ${s.title}`;
+  const s = STATIONS[station];
+  if (!s) return 'Radio off';
+  const sg = s.songs[song] || s.songs[0];
+  return `${s.name} ${s.freq} — ${sg.title}`;
 }
 
 export function createAudio() {
-  let ctx = null;
-  try {
-    if (typeof globalThis !== 'undefined' && globalThis.AudioContext) {
-      ctx = new globalThis.AudioContext();
-    } else if (typeof globalThis !== 'undefined' && globalThis.webkitAudioContext) {
-      ctx = new globalThis.webkitAudioContext();
-    }
-  } catch (e) {
-    ctx = null;
-  }
   const audio = {
-    ctx,
+    ctx: null,
     muted: false,
-    _engineOsc: null,
-
+    _osc: null,
+    _ensure() {
+      if (audio.ctx) return audio.ctx;
+      try {
+        const AC = (typeof globalThis !== 'undefined' && (globalThis.AudioContext || globalThis.webkitAudioContext)) || null;
+        if (!AC) return null;
+        audio.ctx = new AC();
+      } catch (e) {
+        audio.ctx = null;
+      }
+      return audio.ctx;
+    },
     setMuted(m) {
-      this.muted = !!m;
-      if (this._engineOsc) {
-        try { this._engineOsc.disconnect(); } catch (e) { /* already stopped */ }
-        this._engineOsc = null;
+      audio.muted = !!m;
+      if (audio.ctx && audio.ctx.suspend && audio.ctx.resume) {
+        if (audio.muted) audio.ctx.suspend();
+        else audio.ctx.resume();
       }
     },
-
     beep(freq, dur, type, vol) {
-      if (this.muted || !this.ctx) return;
+      if (audio.muted) return;
+      const ctx = audio._ensure();
+      if (!ctx) return;
       try {
-        const osc = this.ctx.createOscillator();
-        const gain = this.ctx.createGain();
-        osc.type = type || 'sine';
-        osc.frequency.value = freq || 440;
-        gain.gain.value = vol || 0.15;
-        osc.connect(gain);
-        gain.connect(this.ctx.destination);
-        osc.start();
-        osc.stop(this.ctx.currentTime + (dur || 0.1));
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = type || 'sine';
+        o.frequency.value = freq || 440;
+        g.gain.value = vol || 0.08;
+        o.connect(g);
+        g.connect(ctx.destination);
+        o.start();
+        o.stop(ctx.currentTime + (dur || 0.1));
       } catch (e) { /* audio is best-effort */ }
     },
-
     sfx(name) {
-      if (this.muted || !this.ctx) return;
+      if (audio.muted) return;
       const map = {
-        shoot: [880, 0.08, 'square', 0.2],
-        punch: [160, 0.1, 'square', 0.25],
-        pickup: [660, 0.12, 'sine', 0.2],
-        explosion: [60, 0.4, 'sawtooth', 0.3],
-        engine: [120, 0.2, 'sawtooth', 0.1],
-        click: [440, 0.05, 'sine', 0.15],
+        shoot: [880, 0.08, 'square', 0.12],
+        punch: [160, 0.1, 'sawtooth', 0.12],
+        cash: [1320, 0.12, 'sine', 0.1],
+        pickup: [660, 0.1, 'sine', 0.1],
+        bust: [220, 0.4, 'sawtooth', 0.12],
+        click: [440, 0.05, 'sine', 0.06],
+        horn: [330, 0.25, 'square', 0.1],
       };
-      const spec = map[name];
-      if (spec) this.beep(spec[0], spec[1], spec[2], spec[3]);
+      const p = map[name] || map.click;
+      audio.beep(p[0], p[1], p[2], p[3]);
     },
-
+    // One sequencer step: play the note for this station/song/step.
     radioStep(station, song, step) {
-      if (this.muted || !this.ctx) return;
-      const st = STATIONS[station];
-      if (!st) return;
-      const s = st.songs[song] || st.songs[0];
-      const note = s.notes[step % s.notes.length];
-      if (note) this.beep(note, 0.22, 'triangle', 0.08);
+      if (audio.muted) return;
+      const s = STATIONS[station];
+      if (!s) return;
+      const sg = s.songs[song] || s.songs[0];
+      if (!sg || !sg.notes) return;
+      const note = sg.notes[step % sg.notes.length];
+      const freq = 220 * Math.pow(2, note / 12);
+      audio.beep(freq, 0.22, 'triangle', 0.05);
     },
-
-    engine(speed) {
-      if (this.muted || !this.ctx) return;
+    engine(on, speed) {
+      if (audio.muted) return;
+      const ctx = audio._ensure();
+      if (!ctx) return;
       try {
-        if (!this._engineOsc) {
-          this._engineOsc = this.ctx.createOscillator();
-          const gain = this.ctx.createGain();
-          gain.gain.value = 0.04;
-          this._engineOsc.type = 'sawtooth';
-          this._engineOsc.connect(gain);
-          gain.connect(this.ctx.destination);
-          this._engineOsc.start();
+        if (on && !audio._osc) {
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = 'sawtooth';
+          o.frequency.value = 60;
+          g.gain.value = 0.03;
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.start();
+          audio._osc = o;
+          audio._oscGain = g;
+        } else if (!on && audio._osc) {
+          audio._osc.stop();
+          audio._osc = null;
         }
-        this._engineOsc.frequency.value = 60 + Math.abs(speed) * 4;
-      } catch (e) { /* audio is best-effort */ }
+        if (audio._osc) {
+          audio._osc.frequency.value = 60 + (speed || 0) * 4;
+        }
+      } catch (e) { /* best-effort */ }
     },
   };
   return audio;
