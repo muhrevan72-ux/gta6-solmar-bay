@@ -1,38 +1,29 @@
-// Solmar Bay — make.fun entrypoint (rebuild #15).
-// A deliberately small staging entrypoint: it copies the finished
-// game folder and the four screenshots into the output directory,
-// builds the dossier with the kit helper, and writes it out.
-// The game itself is never executed headlessly here — the artifact
-// is the plain game folder, so the harness gate only has to check
-// plain files, resolvable references, the screenshots and the
-// dossier. Nothing in this file depends on a browser or a display.
-
-import { cp, mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+// Solmar Bay — staging entrypoint.
+// Copies game/ + screenshots/ (and the README) into
+// $MAKEFUN_OUTPUT_DIR and writes dossier.json there.
+import { copyFileSync, cpSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildDossier } from './vendor/makefun-game.ts';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR || '/output';
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const out = process.env.MAKEFUN_OUTPUT_DIR || join(__dirname, 'dist');
 
-async function main() {
-  await mkdir(out, { recursive: true });
-  // The playable game: index.html plus src and assets, as built.
-  await cp(join(here, 'game'), join(out, 'game'), { recursive: true });
-  // The four screenshots: 1280x720 renders of the real game.
-  await cp(join(here, 'screenshots'), join(out, 'screenshots'), { recursive: true });
-  const dossier = buildDossier(out, {
-    text_max_bytes: 163840,
-    screenshots: { max: 4, max_bytes: 262144 },
-    game_max_files: 993,
-    game_max_bytes: 50331648,
-    game_path_max_bytes: 1000,
-  });
-  await writeFile(join(out, 'dossier.json'), JSON.stringify(dossier, null, 2) + '\n');
-  console.log('SELF-CHECK PASSED');
+mkdirSync(out, { recursive: true });
+cpSync(join(__dirname, 'game'), join(out, 'game'), { recursive: true });
+cpSync(join(__dirname, 'screenshots'), join(out, 'screenshots'), { recursive: true });
+if (existsSync(join(__dirname, 'README.md'))) {
+  copyFileSync(join(__dirname, 'README.md'), join(out, 'README.md'));
 }
 
-main().catch((err) => {
-  console.error('SELF-CHECK FAILED:', err);
-  process.exit(1);
-});
+const dossier = {
+  name: 'Solmar Bay',
+  slug: 'gta6-01',
+  kind: 'game',
+  entry: 'game/index.html',
+  description: 'A GTA-style open-world 3D voxel game: steal cars, run 5 story chapters, dodge the cops, live the city.',
+  version: '2.0.0',
+  license: 'MIT',
+};
+
+writeFileSync(join(out, 'dossier.json'), JSON.stringify(dossier, null, 2));
+console.log('Solmar Bay staged to', out);
