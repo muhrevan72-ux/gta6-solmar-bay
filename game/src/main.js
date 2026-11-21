@@ -35,6 +35,25 @@ import { saveGame, loadGame } from './save.js';
 import { togglePhone, callContact } from './phone.js';
 import { CHAPTERS, RESPECT, SPAWNS } from './config.js';
 
+// Re-spawn every world entity. newGame() resets the entity
+// arrays to empty, so a fresh game needs fresh spawns —
+// otherwise the world the player starts in has no cars, no
+// traffic, and no peds at all (the starter Comet the title
+// screen shows is wiped by the reset). Every spawn function
+// resets its own arrays first and uses fixed seeds, so this
+// rebuilds exactly the boot-time world.
+export function respawnWorld(g) {
+  spawnVehicles(g);
+  spawnPeds(g);
+  spawnPolice(g);
+  spawnGangs(g);
+  spawnLiving(g);
+  spawnCats(g);
+  spawnActivities(g);
+  spawnTraining(g);
+  spawnFireService(g);
+}
+
 // 3 procedural barrels (the GLB fallback — no .glb file).
 function buildGlbFallback(g) {
   const b = g.renderer.glbBatch;
@@ -82,7 +101,7 @@ export function boot(canvas, doc) {
       const el = doc.getElementById(id);
       if (el && el.addEventListener) el.addEventListener('click', fn);
     };
-    on('btn-new', () => { newGame(g); startChapter(g, 1); });
+    on('btn-new', () => { newGame(g); respawnWorld(g); startChapter(g, 1); });
     on('btn-continue', () => { loadGame(g, 1); g.mode = 'play'; });
     on('btn-resume', () => { g.mode = 'play'; });
     on('btn-pause', () => { togglePause(g); });
@@ -97,7 +116,14 @@ export function boot(canvas, doc) {
     buildGlbFallback(g);
     if (g.renderer.gl) g.renderer.gl.viewport(0, 0, nw, nh);
   };
-  g.mode = 'menu';
+  // The Chapter 1 intro card is the first thing the player
+  // sees: boot straight into card mode so the card is visible
+  // on load and a single Enter starts the game. Booting into
+  // menu mode hid the whole HUD (the menu overlay lives inside
+  // it), so the old title screen was invisible — and the flow
+  // needed two Enters (menu -> card -> play) before the clock
+  // ever ran.
+  startChapter(g, 1);
   return g;
 }
 
@@ -186,7 +212,7 @@ export function handleInteract(g) {
 export function handleTaps(g, input) {
   const mode = g.mode;
   if (mode === 'menu') {
-    if (input.pressedKey('Enter')) { newGame(g); startChapter(g, 1); }
+    if (input.pressedKey('Enter')) { newGame(g); respawnWorld(g); startChapter(g, 1); }
     else if (input.pressedKey('KeyM')) { g.muted = !g.muted; if (g.audio) g.audio.setMuted(g.muted); }
     return;
   }

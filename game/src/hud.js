@@ -21,8 +21,8 @@ const IDS = {
   district: 'hud-district', speed: 'hud-speed', weapon: 'hud-weapon',
   car: 'hud-car', radio: 'hud-radio', toast: 'hud-toast',
   dialogue: 'hud-dialogue', armour: 'hud-armour', minimap: 'hud-minimap',
-  card: 'hud-card', cardTitle: 'hud-card-title', modal: 'hud-modal',
-  modalTitle: 'hud-modal-title', pause: 'hud-pause', phone: 'hud-phone',
+  card: 'hud-card', cardTitle: 'hud-card-title', cardText: 'hud-card-text', cardHint: 'hud-card-hint', modal: 'hud-modal',
+  modalTitle: 'hud-modal-title', pause: 'hud-pause', pauseBtn: 'btn-pause', phone: 'hud-phone',
   bottom: 'hud-bottom', top: 'hud-top',
 };
 
@@ -50,10 +50,22 @@ export function updateHud(g, hud) {
   if (!hud || !hud.el) return;
   const el = hud.el;
   // Visibility by mode.
-  if (el.hud) el.hud.style.display = g.mode === 'menu' ? 'none' : 'block';
-  if (el.menu) el.menu.style.display = g.mode === 'menu' ? 'flex' : 'none';
+  // The #hud container must stay visible in menu mode: the menu
+  // overlay lives inside it, so hiding the container hid the
+  // menu itself and the title screen was invisible. Hide only
+  // the in-game readouts on the title screen instead.
+  const inMenu = g.mode === 'menu';
+  if (el.hud) el.hud.style.display = 'block';
+  if (el.menu) el.menu.style.display = inMenu ? 'flex' : 'none';
+  if (el.top) el.top.style.display = inMenu ? 'none' : '';
+  if (el.clock) el.clock.style.display = inMenu ? 'none' : '';
+  if (el.bottom) el.bottom.style.display = inMenu ? 'none' : '';
+  if (el.minimap) el.minimap.style.display = inMenu ? 'none' : '';
+  if (el.pauseBtn) el.pauseBtn.style.display = inMenu ? 'none' : '';
   if (el.card) el.card.style.display = g.mode === 'card' || g.mode === 'passed' ? 'flex' : 'none';
   if (el.cardTitle && g.card) el.cardTitle.textContent = g.card.title || '';
+  if (el.cardText && g.card) el.cardText.textContent = g.card.text || '';
+  if (el.cardHint) el.cardHint.textContent = g.mode === 'passed' ? 'Press Enter to continue' : 'Press Enter to start';
   if (el.modal) el.modal.style.display = g.modal ? 'block' : 'none';
   if (el.modalTitle && g.modal) el.modalTitle.textContent = g.modal.title || g.modal.kind || '';
   if (el.pause) el.pause.style.display = g.mode === 'pause' ? 'flex' : 'none';
