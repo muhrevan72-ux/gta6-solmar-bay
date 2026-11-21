@@ -1,53 +1,34 @@
 # Solmar Bay
 
-[![make.fun](https://make.fun/badge/gta6-01)](https://make.fun/bounty/gta6-01)
-[![rank](https://make.fun/badge/gta6-01/rank)](https://make.fun/bounty/gta6-01)
-[![reward](https://make.fun/badge/gta6-01/reward)](https://make.fun/bounty/gta6-01)
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/muhrevan72-ux/gta6-solmar-bay/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
 
-A GTA-style open-world 3D voxel game, built for the **make.fun "Make GTA 6" bounty** (`gta6-01`).
+A GTA-style open-world 3D voxel game built for the [make.fun](https://make.fun/bounty/gta6-01) "Make GTA 6" bounty (gta6-01). Steal cars, run 5 story chapters, dodge the cops, and live the city — all in a sun-soaked coastal voxel town rendered with raw WebGL, no libraries, no build step.
 
-## Play it
+## Play
 
-Open `game/index.html` in a browser (or serve the `game/` folder). No build step, no dependencies — raw WebGL1 + plain ES modules.
+Open `game/index.html` in a desktop browser (keyboard + mouse), or play it live at https://muhrevan72-ux.github.io/gta6-solmar-bay/game/
 
-## The game
+- **WASD / arrows** — walk (Shift to run). **Mouse drag** — orbit the camera. **Wheel** — zoom.
+- **E** — enter / exit the nearest car (or interact with shops, cats, dogs, the train).
+- **W/S** — accelerate / brake while driving. **A/D** — steer. **Space** — handbrake.
+- **F** — punch. **1 / 2 / 3** — switch weapon. **G** — throw a bomb.
+- **Tab** — open the phone (contacts, messages, taxi). **Esc** — pause.
+- **M** — mute.
 
-Solmar Bay is an 800×800 m voxel city with a beach and sea to the west, an airport to the north-east, and a harbour to the south-west. Roads run on a 60 m grid; the buildings are colourful low-poly blocks with balconies, roof props, and neon signs.
+## The city
 
-- **On foot:** walk, run, punch, shoot, throw bombs. Steal any parked car with **E**.
-- **Driving:** W/S accelerate and brake, A/D steer. Watch the condition — crashes hurt.
-- **5 story chapters:** First Wheels, The Package, Getaway, Night Run, The Big One. Each pays cash and respect.
-- **Wanted stars:** crimes raise the heat. Foot cops, interceptors, roadblocks, and a helicopter respond. Break line of sight for 14 s to lose a star.
-- **Two gangs:** Bay Kings (gold, downtown) and Harbour Sharks (teal, harbour). Their turf is not safe.
-- **Phone (Tab):** contacts (Rico, Maya, Taxi, Mechanic), messages, and a cab on demand (4).
-- **Radio (R):** four synth stations. Mute with **M**.
-- **Side life:** fishing, vending machines, ATMs, food shops, the outfit shop, the shooting range, the swim trial, the slalom course, stray cats to rescue, dogs to befriend, the train, the Solmar Tower elevator, and city events (beach parties, street races, market days).
-- **Save / load:** progress autosaves on pause; Continue on the menu resumes it.
+Solmar Bay is an 800×800 m voxel city: a downtown grid with neon towers, a beach road with palms, a harbour with docks and containers, suburbs, an airport with a runway, and a highway loop. Two rival gangs hold turf (gold Bay Kings downtown, teal Harbour Sharks at the harbour). Police chase you from 1 to 5 wanted stars. A train loops the city, fish swim in the harbour, dogs and cats wander the streets, and birds circle overhead.
 
-## Controls
+## Story
 
-| Key | Action |
-| --- | --- |
-| WASD | Move / drive |
-| Shift | Run |
-| E | Interact (enter car, shop, door…) |
-| F | Punch |
-| G | Throw bomb |
-| Click | Shoot |
-| Esc / P | Pause |
-| Tab | Phone |
-| R | Radio station |
-| M | Mute |
-| 1 / 2 / 3 | Pistol / SMG / Shotgun |
-| 4 | Call a taxi |
+Five chapters, sequential: **First Wheels** (steal a car, drive to the garage), **The Package**, **Getaway**, **Night Run**, and **The Big One** (harbour heist). Side jobs pay cash too: taxi fares, courier deliveries, time trials, firefighting, fishing, and more. Earn respect, unlock cars and weapons, and buy outfits at the clothing shop.
 
-## Tech
+## Run it
 
-- Raw WebGL1, one draw call per batch (static / dynamic / props).
-- Software-rasterizer-friendly geometry: the ground, roads, and sea are tiled in ~100 m segments so no triangle spans the map.
-- Deterministic city (seeded RNG) — the same seed always builds the same Solmar Bay.
-- No assets, no .glb files: every prop (including the barrels) is built procedurally from boxes.
+No build step. Serve the `game/` folder with any static server and open `index.html`. Sound is synthesized with WebAudio — no audio files.
 
 ## License
 
-MIT — see `LICENSE`.
+MIT.

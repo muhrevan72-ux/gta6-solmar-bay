@@ -1,29 +1,23 @@
-// Solmar Bay — staging entrypoint.
-// Copies game/ + screenshots/ (and the README) into
-// $MAKEFUN_OUTPUT_DIR and writes dossier.json there.
-import { copyFileSync, cpSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+// Solmar Bay — staging entrypoint (gta6-01).
+// Copies game/ + screenshots/ into $MAKEFUN_OUTPUT_DIR (default
+// /output) and writes the dossier with the kit's own library.
+// Nothing else: no self-check, no headless render, no network.
+import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildDossier } from './vendor/makefun-game.ts';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const out = process.env.MAKEFUN_OUTPUT_DIR || join(__dirname, 'dist');
-
+const here = dirname(fileURLToPath(import.meta.url));
+const out = resolve(process.env.MAKEFUN_OUTPUT_DIR || '/output');
 mkdirSync(out, { recursive: true });
-cpSync(join(__dirname, 'game'), join(out, 'game'), { recursive: true });
-cpSync(join(__dirname, 'screenshots'), join(out, 'screenshots'), { recursive: true });
-if (existsSync(join(__dirname, 'README.md'))) {
-  copyFileSync(join(__dirname, 'README.md'), join(out, 'README.md'));
+for (const dir of ['game', 'screenshots']) {
+  const src = join(here, dir);
+  if (existsSync(src)) cpSync(src, join(out, dir), { recursive: true });
 }
-
-const dossier = {
-  name: 'Solmar Bay',
-  slug: 'gta6-01',
-  kind: 'game',
-  entry: 'game/index.html',
-  description: 'A GTA-style open-world 3D voxel game: steal cars, run 5 story chapters, dodge the cops, live the city.',
-  version: '2.0.0',
-  license: 'MIT',
-};
-
-writeFileSync(join(out, 'dossier.json'), JSON.stringify(dossier, null, 2));
-console.log('Solmar Bay staged to', out);
+writeFileSync(join(out, 'dossier.json'), buildDossier(out, {
+  text_max_bytes: 163840,
+  screenshots: { max: 4, max_bytes: 262144 },
+  game_max_files: 993,
+  game_max_bytes: 50331648,
+}));
+console.log(`Solmar Bay staged to ${out}`);
